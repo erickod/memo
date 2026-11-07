@@ -1,0 +1,12 @@
+---
+source: crates/memo-cli/tests/query.rs
+assertion_line: 127
+expression: stdout(&out)
+---
+type Invoice  idx=ok
+produz:
+  nenhum
+consome:
+  M AnticipateInvoiceUseCase.__init__   app/billing/application/usecases/anticipate_invoice_usecase.py:L5-L6 invoice :L5
+  M CancelInvoiceUseCase.__init__   app/billing/application/usecases/cancel_invoice_usecase.py:L5-L6 invoice :L5
+cobertura: 21 resolvidas, 0 aprox, 0 não resolvidas, 0 arquivos com erro

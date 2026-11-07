@@ -309,3 +309,54 @@ pub fn word_info(store: &SqliteStore, word: &str) -> Result<WordInfo, CoreError>
         neighbors,
     })
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChainItem {
+    /// Símbolo do repo; `None` para chamada a destino externo (`ext`).
+    pub addr: Option<SymbolAddr>,
+    pub ext: Option<String>,
+    pub depth: i64,
+    pub line: Option<i64>,
+    pub approx: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Chain {
+    pub target: SymbolAddr,
+    pub items: Vec<ChainItem>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct TestsInfo {
+    /// Testes com chamada exata ao símbolo.
+    pub exact: Vec<RelItem>,
+    /// Testes por chamada aproximada ou sobreposição de palavras.
+    pub approx: Vec<RelItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Impact {
+    pub target: SymbolAddr,
+    pub callers: Vec<ChainItem>,
+    pub consumers: Vec<RelItem>,
+    pub protocol: Vec<RelItem>,
+    pub tests: TestsInfo,
+}
+
+/// Quem chama o símbolo, até `depth` níveis (1 a 3).
+pub fn callers(_store: &SqliteStore, _target: &str, _depth: i64) -> Result<Chain, CoreError> {
+    todo!("spec §8.2 query callers")
+}
+
+/// O que o símbolo chama, até `depth` níveis (1 a 3).
+pub fn callees(_store: &SqliteStore, _target: &str, _depth: i64) -> Result<Chain, CoreError> {
+    todo!("spec §8.2 query callees")
+}
+
+pub fn impact(_store: &SqliteStore, _target: &str) -> Result<Impact, CoreError> {
+    todo!("spec §8.2 query impact")
+}
+
+pub fn tests_for(_store: &SqliteStore, _target: &str) -> Result<TestsInfo, CoreError> {
+    todo!("spec §8.2 query tests")
+}

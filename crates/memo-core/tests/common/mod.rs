@@ -1,3 +1,6 @@
+// Helpers compartilhados: cada binário de teste usa só parte deles.
+#![allow(dead_code)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,13 +28,25 @@ fn copy_dir(from: &Path, to: &Path) {
 
 impl Repo {
     pub fn fixture() -> Self {
+        Self::create(true)
+    }
+
+    /// Repositório git vazio, para testes com poucos arquivos.
+    pub fn empty() -> Self {
+        Self::create(false)
+    }
+
+    fn create(with_fixture: bool) -> Self {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let root = std::env::temp_dir().join(format!("memo-test-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
-        copy_dir(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures"),
-            &root,
-        );
+        fs::create_dir_all(&root).unwrap();
+        if with_fixture {
+            copy_dir(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures"),
+                &root,
+            );
+        }
         let status = Command::new("git")
             .args(["init", "-q"])
             .current_dir(&root)

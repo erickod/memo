@@ -27,9 +27,9 @@ fn test_given_unique_suffix_when_query_symbol_then_prints_address_and_signature(
     insta::assert_snapshot!(stdout(&out));
 }
 
-/// GIVEN the fixture repository where 'execute' exists in four use cases
+/// GIVEN the fixture repository where 'execute' exists in five use cases
 /// WHEN  'memo query symbol execute' runs
-/// THEN  exit code is 2 and stdout lists the four candidate qnames
+/// THEN  exit code is 2 and stdout lists the five candidate qnames
 #[test]
 fn test_given_ambiguous_suffix_when_query_symbol_then_candidates_and_exit_2() {
     let repo = Repo::fixture();
@@ -125,4 +125,79 @@ fn test_given_typed_param_when_query_type_then_consumers_listed() {
     let out = memo(&repo, &["query", "type", "Invoice"]);
     assert_eq!(out.status.code(), Some(0));
     insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN the fixture where execute calls 'save' through Protocol LimitRepository
+/// WHEN  'memo query callers SqlLimitRepository.save --depth 2' runs
+/// THEN  the golden output lists execute (approximate, depth 1) and its callers at depth 2 with coverage
+#[test]
+fn test_given_callee_when_query_callers_then_lists_callers_with_depth() {
+    let repo = Repo::fixture();
+    let out = memo(
+        &repo,
+        &[
+            "query",
+            "callers",
+            "SqlLimitRepository.save",
+            "--depth",
+            "2",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN the fixture where CalculateLimitUseCase.execute calls Protocol and external names
+/// WHEN  'memo query callees CalculateLimitUseCase.execute' runs
+/// THEN  the golden output lists the Protocol method, the implementation (~) and external calls
+#[test]
+fn test_given_caller_when_query_callees_then_lists_internal_and_external() {
+    let repo = Repo::fixture();
+    let out = memo(
+        &repo,
+        &["query", "callees", "CalculateLimitUseCase.execute"],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN the fixture and the target SqlLimitRepository.save
+/// WHEN  'memo query impact SqlLimitRepository.save' runs
+/// THEN  the golden output has callers, protocol counterpart, tests and notes sections
+#[test]
+fn test_given_method_when_query_impact_then_sections_callers_consumers_protocol_tests() {
+    let repo = Repo::fixture();
+    let out = memo(&repo, &["query", "impact", "SqlLimitRepository.save"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN the fixture where a test calls execute through a constructed local
+/// WHEN  'memo query tests CalculateLimitUseCase.execute' runs
+/// THEN  the golden output lists the test under the approximate group
+#[test]
+fn test_given_method_when_query_tests_then_exact_and_word_overlap_approx() {
+    let repo = Repo::fixture();
+    let out = memo(&repo, &["query", "tests", "CalculateLimitUseCase.execute"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN the fixture
+/// WHEN  'memo query callers SqlLimitRepository.save --depth 4' runs
+/// THEN  exit code is 1 because depth is limited to 3
+#[test]
+fn test_given_depth_over_three_when_query_callers_then_usage_error_exit_1() {
+    let repo = Repo::fixture();
+    let out = memo(
+        &repo,
+        &[
+            "query",
+            "callers",
+            "SqlLimitRepository.save",
+            "--depth",
+            "4",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1));
 }

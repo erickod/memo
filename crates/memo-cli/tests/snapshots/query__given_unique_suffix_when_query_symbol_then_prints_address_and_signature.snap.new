@@ -1,0 +1,15 @@
+---
+source: crates/memo-cli/tests/query.rs
+assertion_line: 27
+expression: stdout(&out)
+---
+symbol app.billing.application.usecases.calculate_limit_usecase.CalculateLimitUseCase.execute  idx=ok
+  M CalculateLimitUseCase.execute   app/billing/application/usecases/calculate_limit_usecase.py:L8-L13
+assinatura: sig=ce9c89
+arestas:
+  LE -> CalculateLimitUseCase._repo :L12
+  RECEBE -> ? amount :L8
+  RECEBE -> int rate :L8
+  RETORNA -> int :L8
+notas: nenhuma
+cobertura: 21 resolvidas, 0 aprox, 0 não resolvidas, 0 arquivos com erro
