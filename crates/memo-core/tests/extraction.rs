@@ -107,3 +107,12 @@ fn test_given_unannotated_param_when_extracted_then_recebe_with_null_dst() {
     assert_eq!(get("amount"), Some(None));
     assert_eq!(get("rate"), Some(Some("int".to_string())));
 }
+
+/// GIVEN 'execute' of CalculateLimitUseCase and a copy where 'amount * rate' is 'amount + rate'
+/// WHEN  both are hashed
+/// THEN  the body_hash values differ
+#[test]
+fn test_given_changed_expression_when_hashed_then_body_hash_differs() {
+    let changed = USECASE_SRC.replace("amount * rate", "amount + rate");
+    assert_ne!(body_hash(USECASE_SRC), body_hash(&changed));
+}
