@@ -150,7 +150,7 @@ impl From<CoreError> for Failure {
         match e {
             CoreError::Config(_) => Failure::Usage(e.to_string()),
             CoreError::Validation { .. } => Failure::Validation(e.to_string()),
-            CoreError::Note(_) => Failure::Index(e.to_string()),
+            CoreError::Note(_) | CoreError::Locked(_) => Failure::Index(e.to_string()),
             CoreError::NotFound(_) | CoreError::Ambiguous { .. } => {
                 Failure::NotFound(e.to_string())
             }

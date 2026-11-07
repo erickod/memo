@@ -73,3 +73,32 @@ impl SourceTree for WorkTree {
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 }
+
+/// Uma ref git lida sem checkout: `git ls-tree` e `git cat-file --batch` (spec §6.2).
+pub struct GitRef {
+    root: PathBuf,
+    git_ref: String,
+}
+
+impl GitRef {
+    pub fn new(root: &Path, git_ref: &str) -> Result<Self, CoreError> {
+        let _ = (root, git_ref);
+        todo!("spec §6.2 ref git")
+    }
+
+    /// Hash do commit a que a ref aponta.
+    pub fn commit(&self) -> Result<String, CoreError> {
+        let _ = (&self.root, &self.git_ref);
+        todo!("spec §6.2 ref git")
+    }
+}
+
+impl SourceTree for GitRef {
+    fn list(&self) -> Result<Vec<SourceFile>, CoreError> {
+        todo!("spec §6.2 ref git")
+    }
+
+    fn read(&self, _path: &str) -> Result<String, CoreError> {
+        todo!("spec §6.2 ref git")
+    }
+}

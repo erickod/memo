@@ -371,6 +371,12 @@ fn valid_id(id: &str) -> bool {
         .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric()))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromoteReport {
+    pub promoted: Vec<Note>,
+    pub orphaned: Vec<Note>,
+}
+
 pub struct NoteDir {
     dir: PathBuf,
 }
@@ -591,6 +597,17 @@ impl NoteDir {
             .unwrap_or_else(|| "proposta".to_string());
         self.write(&note)?;
         Ok(note)
+    }
+
+    /// Troca `task:<id>` por `repo` nas notas da task e confere cada âncora na `base`;
+    /// âncora ausente vira `orfa` (spec §7.5).
+    pub fn promote(&self, _base: &SqliteStore, _task: &str) -> Result<PromoteReport, CoreError> {
+        todo!("spec §7.5")
+    }
+
+    /// Apaga as notas com escopo `task:<id>`; devolve quantas.
+    pub fn drop_task(&self, _task: &str) -> Result<usize, CoreError> {
+        todo!("spec §6.4 drop")
     }
 
     /// Notas de escopo `repo` e, com `task`, as de `task:<id>`; em qualquer estado.

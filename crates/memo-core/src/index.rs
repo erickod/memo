@@ -281,6 +281,17 @@ pub fn index_with_notes(
     config: &Config,
     notes: &crate::notes::NoteDir,
 ) -> Result<IndexReport, CoreError> {
+    index_with_notes_scoped(tree, store, config, notes, "repo")
+}
+
+/// Como `index_with_notes`, só para as notas do `escopo` (`repo` ou `task:<id>`).
+pub fn index_with_notes_scoped(
+    tree: &dyn SourceTree,
+    store: &mut SqliteStore,
+    config: &Config,
+    notes: &crate::notes::NoteDir,
+    _scope: &str,
+) -> Result<IndexReport, CoreError> {
     let (mut report, delta) = run_index(tree, store, config)?;
     if crate::notes::apply_transitions(store, config, notes, &delta, &mut report.events)? {
         report.wrote = true;

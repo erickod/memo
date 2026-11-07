@@ -109,6 +109,29 @@ impl SqliteStore {
         )?)
     }
 
+    pub fn set_meta(&self, _key: &str, _value: &str) -> Result<(), CoreError> {
+        todo!("spec §4 meta")
+    }
+
+    pub fn get_meta(&self, _key: &str) -> Result<Option<String>, CoreError> {
+        todo!("spec §4 meta")
+    }
+
+    /// Copia o banco inteiro para `path` pela API de backup do SQLite (spec §6.4).
+    pub fn backup_to(&self, _path: &Path) -> Result<(), CoreError> {
+        todo!("spec §6.4 derive")
+    }
+
+    /// `(arquivos, símbolos)` do grafo.
+    pub fn counts(&self) -> Result<(i64, i64), CoreError> {
+        todo!("spec §8.2 status")
+    }
+
+    /// Marca todos os arquivos como desatualizados, para reextrair na próxima indexação.
+    pub fn invalidate_files(&self) -> Result<(), CoreError> {
+        todo!("spec §8.2 index --full")
+    }
+
     /// Todos os eventos, na ordem em que foram gravados.
     pub fn events(&self) -> Result<Vec<EventRow>, CoreError> {
         let mut stmt = self

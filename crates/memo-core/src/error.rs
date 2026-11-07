@@ -14,6 +14,8 @@ pub enum CoreError {
     Validation { code: &'static str, message: String },
     #[error("note store error: {0}")]
     Note(String),
+    #[error("lock timeout: {0}")]
+    Locked(String),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("ambiguous target {target}: {} candidates", .candidates.len())]

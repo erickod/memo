@@ -1,3 +1,6 @@
+// Helpers compartilhados: cada binário de teste usa só parte deles.
+#![allow(dead_code)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -43,6 +46,22 @@ impl Repo {
 
     pub fn path(&self) -> &Path {
         &self.root
+    }
+
+    /// Commita tudo numa branch `main`, com identidade fixa.
+    pub fn commit_all(&self) {
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(&self.root)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "init"]);
+        git(&["branch", "-M", "main"]);
     }
 
     pub fn write(&self, rel: &str, content: &str) {

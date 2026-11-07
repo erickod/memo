@@ -60,6 +60,22 @@ impl Repo {
         &self.root
     }
 
+    /// Commita tudo numa branch `main`, com identidade fixa.
+    pub fn commit_all(&self) {
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(&self.root)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "init"]);
+        git(&["branch", "-M", "main"]);
+    }
+
     pub fn write(&self, rel: &str, content: &str) {
         let file = self.root.join(rel);
         fs::create_dir_all(file.parent().unwrap()).unwrap();
