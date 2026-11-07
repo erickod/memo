@@ -393,6 +393,9 @@ dependencies = [
 [[package]]
 name = "memo-mcp"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "once_cell"
