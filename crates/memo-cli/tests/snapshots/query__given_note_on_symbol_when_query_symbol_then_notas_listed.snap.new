@@ -1,0 +1,20 @@
+---
+source: crates/memo-cli/tests/query.rs
+assertion_line: 421
+expression: stdout(&out)
+---
+symbol app.billing.application.usecases.calculate_limit_usecase.CalculateLimitUseCase.execute  idx=ok
+  M CalculateLimitUseCase.execute   app/billing/application/usecases/calculate_limit_usecase.py:L8-L13
+assinatura: sig=ce9c89
+arestas:
+  CHAMA -> LimitRepository.save :L12
+  CHAMA -> SqlLimitRepository.save ~ :L12
+  ESCREVE -> LimitRepository.save ~ :L12
+  LE -> CalculateLimitUseCase._repo :L12
+  RECEBE -> ? amount :L8
+  RECEBE -> int rate :L8
+  RETORNA -> int :L8
+  CHAMA <- test_given_amount_when_calculate_then_returns_limit ~ :L7
+  CHAMA <- CheckoutUseCase.execute :L9
+notas: nenhuma
+cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro

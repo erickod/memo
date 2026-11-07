@@ -24,6 +24,8 @@ pub struct SymbolInfo {
     pub addr: SymbolAddr,
     pub sig_hash: String,
     pub edges: Vec<EdgeView>,
+    /// Notas visíveis ancoradas no símbolo; preenchidas por quem conhece o diretório de notas.
+    pub notes: Vec<crate::notes::Note>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -157,6 +159,7 @@ pub fn symbol_info(store: &SqliteStore, target: &str) -> Result<SymbolInfo, Core
             addr: addr_from_row(r)?,
             sig_hash: r.get(6)?,
             edges: Vec::new(),
+            notes: Vec::new(),
         })
     })?;
     info.edges = direct_edges(store, &qname)?;
@@ -365,6 +368,7 @@ pub struct Impact {
     pub consumers: Vec<RelItem>,
     pub protocol: Vec<RelItem>,
     pub tests: TestsInfo,
+    pub notes: Vec<crate::notes::Note>,
     /// Itens omitidos por já terem sido entregues nesta task (spec §8.4).
     pub unchanged: Option<usize>,
 }
@@ -578,6 +582,7 @@ pub fn impact(store: &SqliteStore, target: &str) -> Result<Impact, CoreError> {
         consumers,
         protocol: protocol_counterparts(store, id)?,
         tests: tests_for(store, &qname)?,
+        notes: Vec::new(),
         unchanged: None,
         target: addr,
     })

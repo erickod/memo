@@ -264,7 +264,18 @@ fn writers_of_touched(store: &SqliteStore, ids: &[i64]) -> Result<Vec<WriterLine
     Ok(lines)
 }
 
+/// `brief` sem notas.
 pub fn brief(store: &SqliteStore, request: &str) -> Result<Brief, CoreError> {
+    brief_with(store, request, &[])
+}
+
+/// `brief` com as notas visíveis: o alias de nota `glossario` casa tokens e as notas dos nós
+/// listados entram na seção `notas`.
+pub fn brief_with(
+    store: &SqliteStore,
+    request: &str,
+    _notes: &[crate::notes::Note],
+) -> Result<Brief, CoreError> {
     let tokens = tokenize(request);
     let matched = match_words(store, &tokens)?;
     let mut ignored: Vec<String> = Vec::new();

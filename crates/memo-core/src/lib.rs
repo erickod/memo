@@ -6,6 +6,7 @@ pub mod delta;
 pub mod error;
 pub mod extract;
 pub mod index;
+pub mod notes;
 pub mod query;
 pub mod resolve;
 pub mod source;

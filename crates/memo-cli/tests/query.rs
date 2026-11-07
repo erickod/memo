@@ -5,6 +5,7 @@ use std::process::{Command, Output};
 
 fn memo(repo: &Repo, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_memo"))
+        .env("MEMO_NOW", "2026-11-07T14:05:00Z")
         .arg("--repo")
         .arg(repo.path())
         .args(args)
@@ -335,4 +336,139 @@ fn test_given_task_flag_when_impact_twice_then_second_prints_inalterados() {
         !second.contains("CalculateLimitUseCase.execute"),
         "{second}"
     );
+}
+
+const ADD: [&str; 8] = [
+    "note",
+    "add",
+    "--tipo",
+    "regra",
+    "--ancora",
+    "sym:CalculateLimitUseCase.execute",
+    "--origem",
+    "humano",
+];
+
+fn add_note(repo: &Repo, extra: &[&str], text: &str) -> Output {
+    let mut args: Vec<&str> = extra.to_vec();
+    args.extend(ADD);
+    args.push(text);
+    memo(repo, &args)
+}
+
+/// GIVEN the fixture and a fixed clock
+/// WHEN  'memo note add' runs for CalculateLimitUseCase.execute
+/// THEN  exit code is 0 and the golden output shows the new proposta note
+#[test]
+fn test_given_note_add_when_run_then_golden_proposta_and_exit_0() {
+    let out = add_note(&Repo::fixture(), &[], "Limite é inteiro.");
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN a missing symbol anchor and, separately, a skeleton word anchor
+/// WHEN  'memo note add' runs for each
+/// THEN  the exit codes are 2 and 4 (A12)
+#[test]
+fn test_given_bad_anchors_when_note_add_then_exit_2_and_exit_4() {
+    let repo = open_repo();
+    repo.write(".git/memo/memo.toml", "skeleton = [\"usecase\"]\n");
+    let missing = memo(
+        &repo,
+        &[
+            "note",
+            "add",
+            "--tipo",
+            "regra",
+            "--ancora",
+            "sym:NoSuchSymbol",
+            "--origem",
+            "humano",
+            "x",
+        ],
+    );
+    assert_eq!(missing.status.code(), Some(2));
+    let generic = memo(
+        &repo,
+        &[
+            "note",
+            "add",
+            "--tipo",
+            "regra",
+            "--ancora",
+            "word:usecase",
+            "--origem",
+            "humano",
+            "x",
+        ],
+    );
+    assert_eq!(generic.status.code(), Some(4));
+    assert!(
+        stdout(&generic).contains("ancora_generica"),
+        "{}",
+        stdout(&generic)
+    );
+}
+
+/// GIVEN a note added on CalculateLimitUseCase.execute
+/// WHEN  'memo query symbol CalculateLimitUseCase.execute' runs
+/// THEN  the golden output has the note line instead of 'notas: nenhuma'
+#[test]
+fn test_given_note_on_symbol_when_query_symbol_then_notas_listed() {
+    let repo = Repo::fixture();
+    add_note(&repo, &["--confirm"], "Limite é inteiro.");
+    let out = memo(&repo, &["query", "symbol", "CalculateLimitUseCase.execute"]);
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN a confirmed note on CalculateLimitUseCase.execute
+/// WHEN  'memo brief calculate limit' runs
+/// THEN  the notes line holds the note id, 'regra confirmada' and its text
+#[test]
+fn test_given_note_when_brief_then_notes_line_present() {
+    let repo = open_repo();
+    add_note(&repo, &["--confirm"], "Limite é inteiro.");
+    let out = stdout(&memo(&repo, &["brief", "calculate limit"]));
+    assert!(
+        out.contains("regra confirmada") && out.contains("Limite é inteiro."),
+        "{out}"
+    );
+}
+
+/// GIVEN a proposta note
+/// WHEN  'note list', 'note confirm <id>' and 'note show <id>' run in sequence
+/// THEN  list shows 'proposta', confirm exits 0, and show prints the state 'confirmada' and the text
+#[test]
+fn test_given_note_when_list_confirm_show_then_state_flow_visible() {
+    let repo = Repo::fixture();
+    let added = stdout(&add_note(&repo, &[], "Limite é inteiro."));
+    let id = added.split_whitespace().nth(1).unwrap().to_string();
+    assert!(stdout(&memo(&repo, &["note", "list"])).contains("proposta"));
+    assert_eq!(
+        memo(&repo, &["note", "confirm", &id]).status.code(),
+        Some(0)
+    );
+    let shown = stdout(&memo(&repo, &["note", "show", &id]));
+    assert!(
+        shown.contains("confirmada") && shown.contains("Limite é inteiro."),
+        "{shown}"
+    );
+    assert_eq!(
+        memo(&repo, &["note", "show", "n-nonexist"]).status.code(),
+        Some(2)
+    );
+}
+
+/// GIVEN a note added with '--task lend-1'
+/// WHEN  'memo query symbol' runs without a task and with '--task lend-1'
+/// THEN  the note appears only in the second output
+#[test]
+fn test_given_task_scoped_note_when_queried_without_task_then_hidden() {
+    let repo = Repo::fixture();
+    add_note(&repo, &["--task", "lend-1"], "Só desta task.");
+    let q = ["query", "symbol", "CalculateLimitUseCase.execute"];
+    assert!(!stdout(&memo(&repo, &q)).contains("Só desta task."));
+    let mut with_task = vec!["--task", "lend-1"];
+    with_task.extend(q);
+    assert!(stdout(&memo(&repo, &with_task)).contains("Só desta task."));
 }

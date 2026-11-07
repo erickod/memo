@@ -10,6 +10,10 @@ pub enum CoreError {
     Source(String),
     #[error("config error: {0}")]
     Config(String),
+    #[error("{code}: {message}")]
+    Validation { code: &'static str, message: String },
+    #[error("note store error: {0}")]
+    Note(String),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("ambiguous target {target}: {} candidates", .candidates.len())]

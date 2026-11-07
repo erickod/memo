@@ -18,6 +18,7 @@ use std::process::{Command, ExitCode};
 const EXIT_USAGE: u8 = 1;
 const EXIT_NOT_FOUND: u8 = 2;
 const EXIT_INDEX: u8 = 3;
+const EXIT_VALIDATION: u8 = 4;
 const EXIT_INTERNAL: u8 = 10;
 
 #[derive(Parser)]
@@ -95,6 +96,7 @@ enum Query {
 
 enum Failure {
     Usage(String),
+    Validation(String),
     NotFound(String),
     Index(String),
     Internal(String),
@@ -104,6 +106,8 @@ impl From<CoreError> for Failure {
     fn from(e: CoreError) -> Self {
         match e {
             CoreError::Config(_) => Failure::Usage(e.to_string()),
+            CoreError::Validation { .. } => Failure::Validation(e.to_string()),
+            CoreError::Note(_) => Failure::Index(e.to_string()),
             CoreError::NotFound(_) | CoreError::Ambiguous { .. } => {
                 Failure::NotFound(e.to_string())
             }
@@ -290,6 +294,10 @@ fn main() -> ExitCode {
         Err(Failure::Usage(msg)) => {
             eprintln!("uso inválido: {msg}");
             ExitCode::from(EXIT_USAGE)
+        }
+        Err(Failure::Validation(msg)) => {
+            println!("erro: {msg}");
+            ExitCode::from(EXIT_VALIDATION)
         }
         Err(Failure::NotFound(text)) => {
             print!("{text}");
