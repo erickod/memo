@@ -27,9 +27,9 @@ fn test_given_unique_suffix_when_query_symbol_then_prints_address_and_signature(
     insta::assert_snapshot!(stdout(&out));
 }
 
-/// GIVEN the fixture repository where 'execute' exists in three use cases
+/// GIVEN the fixture repository where 'execute' exists in four use cases
 /// WHEN  'memo query symbol execute' runs
-/// THEN  exit code is 2 and stdout lists the three candidate qnames
+/// THEN  exit code is 2 and stdout lists the four candidate qnames
 #[test]
 fn test_given_ambiguous_suffix_when_query_symbol_then_candidates_and_exit_2() {
     let repo = Repo::fixture();
@@ -78,15 +78,15 @@ fn test_given_json_flag_when_query_symbol_then_schema_1_envelope() {
     );
 }
 
-/// GIVEN the fixture repository and '--max-chars 120'
+/// GIVEN the fixture repository and '--max-chars 600'
 /// WHEN  'memo query word limit' runs
-/// THEN  stdout has at most 120 chars and its last line starts with '+' and ends with 'omitidos'
+/// THEN  stdout has at most 600 chars and its last line starts with '+' and ends with 'omitidos'
 #[test]
 fn test_given_small_max_chars_when_query_word_then_last_line_omitidos() {
     let repo = Repo::fixture();
-    let out = memo(&repo, &["--max-chars", "120", "query", "word", "limit"]);
+    let out = memo(&repo, &["--max-chars", "600", "query", "word", "limit"]);
     let text = stdout(&out);
-    assert!(text.chars().count() <= 120, "{text}");
+    assert!(text.chars().count() <= 600, "{text}");
     let last = text.lines().last().unwrap();
     assert!(
         last.starts_with('+') && last.ends_with("omitidos"),

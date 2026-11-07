@@ -1,0 +1,10 @@
+---
+source: crates/memo-cli/tests/query.rs
+expression: stdout(&out)
+---
+ambíguo: execute
+candidatas:
+  app.billing.application.usecases.anticipate_invoice_usecase.AnticipateInvoiceUseCase.execute
+  app.billing.application.usecases.calculate_limit_usecase.CalculateLimitUseCase.execute
+  app.billing.application.usecases.cancel_invoice_usecase.CancelInvoiceUseCase.execute
+  app.collections.application.usecases.charge_usecase.ChargeUseCase.execute

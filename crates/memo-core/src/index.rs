@@ -32,7 +32,7 @@ struct Pending {
 }
 
 /// Caminho do arquivo para módulo pontuado (`app/a/b.py` → `app.a.b`; `__init__` vira o pacote).
-fn module_of(path: &str) -> String {
+pub fn module_of(path: &str) -> String {
     let stem = path.strip_suffix(".py").unwrap_or(path);
     let stem = stem.strip_suffix("/__init__").unwrap_or(stem);
     stem.replace('/', ".")
