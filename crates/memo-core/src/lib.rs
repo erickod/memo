@@ -1,6 +1,8 @@
 //! Núcleo: extração, grafo, consultas, notas e eventos.
 
+pub mod brief;
 pub mod config;
+pub mod delta;
 pub mod error;
 pub mod extract;
 pub mod index;

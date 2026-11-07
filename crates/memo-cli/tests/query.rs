@@ -235,3 +235,104 @@ fn test_given_invalid_memo_toml_when_query_then_exit_1() {
     let out = memo(&repo, &["query", "word", "limit"]);
     assert_eq!(out.status.code(), Some(1));
 }
+
+const OPEN_TOML: &str = "min_specificity = 0.0\nskeleton = []\n";
+
+fn open_repo() -> Repo {
+    let repo = Repo::fixture();
+    repo.write(".git/memo/memo.toml", OPEN_TOML);
+    repo
+}
+
+/// GIVEN the fixture with min_specificity 0 and the request 'calculate limit'
+/// WHEN  'memo brief' runs
+/// THEN  the golden output has anchors, symbols, outline, pattern, writers, notes and coverage
+#[test]
+fn test_given_request_when_brief_then_golden_sections() {
+    let out = memo(&open_repo(), &["brief", "calculate limit"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN the same fixture and request
+/// WHEN  'memo brief' runs twice
+/// THEN  both stdout outputs are byte-identical
+#[test]
+fn test_given_same_brief_twice_when_run_then_stdout_bytes_identical() {
+    let repo = open_repo();
+    let a = memo(&repo, &["brief", "calculate limit"]);
+    let b = memo(&repo, &["brief", "calculate limit"]);
+    assert_eq!(a.stdout, b.stdout);
+}
+
+/// GIVEN the fixture and '--max-chars 700'
+/// WHEN  'memo brief calculate limit' runs
+/// THEN  stdout has at most 700 chars and its last line is '+N omitidos'
+#[test]
+fn test_given_small_max_chars_when_brief_then_last_line_omitidos() {
+    let out = memo(
+        &open_repo(),
+        &["--max-chars", "700", "brief", "calculate limit"],
+    );
+    let text = stdout(&out);
+    assert!(text.chars().count() <= 700, "{text}");
+    let last = text.lines().last().unwrap();
+    assert!(
+        last.starts_with('+') && last.ends_with("omitidos"),
+        "{last}"
+    );
+}
+
+/// GIVEN '--task lend-1' and a first brief already delivered
+/// WHEN  the same brief runs again, then with '--full'
+/// THEN  the second prints 'inalterados:' and no symbol lines; the third prints the symbols again
+#[test]
+fn test_given_task_flag_when_brief_twice_then_second_prints_inalterados() {
+    let repo = open_repo();
+    let args = ["--task", "lend-1", "brief", "calculate limit"];
+    let first = stdout(&memo(&repo, &args));
+    assert!(first.contains("símbolos:\n  "), "{first}");
+    let second = stdout(&memo(&repo, &args));
+    assert!(second.contains("inalterados: "), "{second}");
+    assert!(!second.contains("calculate_limit_usecase.py"), "{second}");
+    let full = stdout(&memo(
+        &repo,
+        &["--task", "lend-1", "--full", "brief", "calculate limit"],
+    ));
+    assert!(full.contains("calculate_limit_usecase.py"), "{full}");
+}
+
+/// GIVEN '--since-last' without '--task' and a first brief already delivered
+/// WHEN  the same brief runs again
+/// THEN  the second prints 'inalterados:' instead of the symbols
+#[test]
+fn test_given_since_last_without_task_when_brief_twice_then_delta_applies() {
+    let repo = open_repo();
+    let args = ["--since-last", "brief", "calculate limit"];
+    memo(&repo, &args);
+    let second = stdout(&memo(&repo, &args));
+    assert!(second.contains("inalterados: "), "{second}");
+}
+
+/// GIVEN '--task lend-1' and a first 'query impact' already delivered
+/// WHEN  the same impact query runs again
+/// THEN  the second prints 'inalterados:' and no caller lines
+#[test]
+fn test_given_task_flag_when_impact_twice_then_second_prints_inalterados() {
+    let repo = open_repo();
+    let args = [
+        "--task",
+        "lend-1",
+        "query",
+        "impact",
+        "SqlLimitRepository.save",
+    ];
+    let first = stdout(&memo(&repo, &args));
+    assert!(first.contains("CalculateLimitUseCase.execute"), "{first}");
+    let second = stdout(&memo(&repo, &args));
+    assert!(second.contains("inalterados: "), "{second}");
+    assert!(
+        !second.contains("CalculateLimitUseCase.execute"),
+        "{second}"
+    );
+}
