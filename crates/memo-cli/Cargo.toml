@@ -6,3 +6,7 @@ edition.workspace = true
 [[bin]]
 name = "memo"
 path = "src/main.rs"
+
+[dev-dependencies]
+insta = "1.49.0"
+serde_json = "1.0.154"
