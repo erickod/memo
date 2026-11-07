@@ -334,19 +334,20 @@ fn write_node(ctx: &Ctx, node: Node, out: &mut String, first_in_block: bool) {
     }
     out.push('(');
     out.push_str(node.kind());
-    if node.named_child_count() == 0 {
+    if node.child_count() == 0 {
         out.push(' ');
         out.push_str(ctx.text(node));
     } else {
+        // Inclui tokens anônimos (operadores, palavras-chave): `a * b` difere de `a + b`.
         let is_block = matches!(node.kind(), "block" | "module");
         let mut cursor = node.walk();
-        let mut first = true;
-        for child in node.named_children(&mut cursor) {
-            if child.kind() == "comment" {
-                continue;
+        let mut first_named = true;
+        for child in node.children(&mut cursor) {
+            let leading = is_block && child.is_named() && first_named;
+            write_node(ctx, child, out, leading);
+            if child.is_named() && child.kind() != "comment" {
+                first_named = false;
             }
-            write_node(ctx, child, out, is_block && first);
-            first = false;
         }
     }
     out.push(')');

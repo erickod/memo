@@ -1,34 +1,161 @@
 //! Persistência do grafo em SQLite (spec §4).
 
 use crate::error::CoreError;
+use rusqlite::Connection;
+use std::fmt::Write;
 use std::path::Path;
 
-pub struct SqliteStore;
+const SCHEMA_VERSION: &str = "1";
+
+const SCHEMA: &str = "
+CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE file(
+  id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, hash TEXT NOT NULL,
+  mtime_ns INTEGER, size INTEGER, context TEXT, layer TEXT, parse_error TEXT);
+CREATE TABLE symbol(
+  id INTEGER PRIMARY KEY, qname TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  nivel INTEGER NOT NULL,
+  parent_id INTEGER REFERENCES symbol(id), file_id INTEGER REFERENCES file(id),
+  line_start INTEGER, line_end INTEGER,
+  sig_hash TEXT, body_hash TEXT, decorators TEXT,
+  is_test INTEGER DEFAULT 0, is_entrypoint INTEGER DEFAULT 0, is_protocol INTEGER DEFAULT 0);
+CREATE TABLE word(id INTEGER PRIMARY KEY, text TEXT UNIQUE NOT NULL);
+CREATE TABLE occurrence(
+  symbol_id INTEGER NOT NULL, word_id INTEGER NOT NULL, pos INTEGER NOT NULL,
+  slot TEXT NOT NULL,
+  segment TEXT,
+  PRIMARY KEY(symbol_id, pos));
+CREATE TABLE edge(
+  id INTEGER PRIMARY KEY, kind TEXT NOT NULL,
+  src INTEGER NOT NULL REFERENCES symbol(id), dst INTEGER REFERENCES symbol(id),
+  dst_text TEXT,
+  line INTEGER, attr TEXT, pos INTEGER,
+  approx INTEGER DEFAULT 0, count INTEGER DEFAULT 1);
+CREATE TABLE raw_ref(file_id INTEGER, src INTEGER, kind TEXT, callee_text TEXT, receiver TEXT, line INTEGER);
+CREATE TABLE import(file_id INTEGER, local_name TEXT, target TEXT, line INTEGER, type_checking INTEGER DEFAULT 0);
+CREATE TABLE word_stats(
+  word_id INTEGER PRIMARY KEY, uso INTEGER, alcance INTEGER, grau INTEGER,
+  idf REAL, especificidade REAL, centralidade REAL, esqueleto INTEGER);
+CREATE TABLE event(id INTEGER PRIMARY KEY, batch TEXT NOT NULL, seq INTEGER, kind TEXT NOT NULL, subject TEXT, payload TEXT);
+CREATE TABLE session_seen(task TEXT, cmd TEXT, key TEXT, PRIMARY KEY(task, cmd, key));
+CREATE INDEX edge_src_kind ON edge(src, kind);
+CREATE INDEX edge_dst_kind ON edge(dst, kind);
+CREATE INDEX occurrence_word ON occurrence(word_id);
+CREATE INDEX symbol_file ON symbol(file_id);
+CREATE INDEX symbol_parent ON symbol(parent_id);
+";
+
+pub struct SqliteStore {
+    pub(crate) conn: Connection,
+}
 
 impl SqliteStore {
-    pub fn open(_path: &Path) -> Result<Self, CoreError> {
-        todo!("spec §4")
+    pub fn open(path: &Path) -> Result<Self, CoreError> {
+        Self::init(Connection::open(path)?)
     }
 
     pub fn open_in_memory() -> Result<Self, CoreError> {
-        todo!("spec §4")
+        Self::init(Connection::open_in_memory()?)
+    }
+
+    fn init(conn: Connection) -> Result<Self, CoreError> {
+        let has_schema: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'meta')",
+            [],
+            |r| r.get(0),
+        )?;
+        if !has_schema {
+            conn.execute_batch(SCHEMA)?;
+            conn.execute(
+                "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)",
+                [SCHEMA_VERSION],
+            )?;
+        }
+        Ok(Self { conn })
     }
 
     /// Total de linhas alteradas na conexão; não muda quando nada é escrito.
     pub fn total_changes(&self) -> u64 {
-        todo!("spec §4")
+        self.conn.total_changes()
     }
 
     pub fn event_count(&self) -> Result<u64, CoreError> {
-        todo!("spec §4")
+        let n: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM event", [], |r| r.get(0))?;
+        Ok(u64::try_from(n).unwrap_or(0))
     }
 
-    pub fn symbol_exists(&self, _qname: &str) -> Result<bool, CoreError> {
-        todo!("spec §4")
+    pub fn symbol_exists(&self, qname: &str) -> Result<bool, CoreError> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM symbol WHERE qname = ?1)",
+            [qname],
+            |r| r.get(0),
+        )?)
     }
 
-    /// Texto canônico do grafo (sem ids), usado para comparar bytes entre execuções.
+    /// Arquivos que não parsearam, em ordem de caminho (spec §2, regra 7).
+    pub fn files_with_error(&self) -> Result<Vec<String>, CoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM file WHERE parse_error IS NOT NULL ORDER BY path")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Texto canônico do grafo (sem ids nem mtime), usado para comparar bytes entre execuções.
     pub fn dump(&self) -> Result<String, CoreError> {
-        todo!("spec §4")
+        let mut out = String::new();
+        let mut files = self.conn.prepare(
+            "SELECT path, hash, COALESCE(context,''), COALESCE(layer,''), COALESCE(parse_error,'')
+             FROM file ORDER BY path",
+        )?;
+        let rows = files.query_map([], |r| {
+            Ok([r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?])
+        })?;
+        for row in rows {
+            let [path, hash, ctx, layer, err]: [String; 5] = row?;
+            let _ = writeln!(out, "file|{path}|{hash}|{ctx}|{layer}|{err}");
+        }
+        let mut symbols = self.conn.prepare(
+            "SELECT s.id, s.qname, s.kind, s.nivel, COALESCE(f.path,''), s.line_start, s.line_end,
+                    COALESCE(s.sig_hash,''), COALESCE(s.body_hash,''), COALESCE(p.qname,''), s.is_test
+             FROM symbol s LEFT JOIN file f ON f.id = s.file_id LEFT JOIN symbol p ON p.id = s.parent_id
+             ORDER BY s.qname",
+        )?;
+        let mut words = self.conn.prepare(
+            "SELECT w.text, o.slot, COALESCE(o.segment,'') FROM occurrence o
+             JOIN word w ON w.id = o.word_id WHERE o.symbol_id = ?1 ORDER BY o.pos",
+        )?;
+        let mut rows = symbols.query([])?;
+        while let Some(r) = rows.next()? {
+            let id: i64 = r.get(0)?;
+            let _ = write!(
+                out,
+                "symbol|{}|{}|{}|{}|{}-{}|{}|{}|{}|{}|",
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, String>(7)?,
+                r.get::<_, String>(8)?,
+                r.get::<_, String>(9)?,
+                r.get::<_, i64>(10)?,
+            );
+            let occ = words.query_map([id], |w| {
+                Ok(format!(
+                    "{}:{}:{}",
+                    w.get::<_, String>(0)?,
+                    w.get::<_, String>(1)?,
+                    w.get::<_, String>(2)?
+                ))
+            })?;
+            let occ: Vec<String> = occ.collect::<Result<_, _>>()?;
+            let _ = writeln!(out, "{}", occ.join(","));
+        }
+        Ok(out)
     }
 }
