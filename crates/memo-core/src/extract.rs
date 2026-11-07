@@ -160,6 +160,15 @@ pub fn extract_python_file(
     Ok(ctx.facts)
 }
 
+/// Python permite redefinir um nome (`@property` e `@x.setter`, `@overload`, atributo e método
+/// com o mesmo nome). O `qname` é identidade, então vale a primeira definição; os efeitos e
+/// referências das redefinições seguem atribuídos a ela.
+fn add_symbol(ctx: &mut Ctx, fact: SymbolFact) {
+    if ctx.facts.symbols.iter().all(|s| s.qname != fact.qname) {
+        ctx.facts.symbols.push(fact);
+    }
+}
+
 fn visit_block(ctx: &mut Ctx, block: Node, prefix: &str, in_class: bool) {
     let mut cursor = block.walk();
     for child in block.named_children(&mut cursor) {
@@ -227,16 +236,19 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
     }
     let body = def.child_by_field_name("body");
     let body_hash = body.map(|b| serialize(ctx, b)).unwrap_or_default();
-    ctx.facts.symbols.push(SymbolFact {
-        qname: qname.clone(),
-        kind: SymbolKind::Class,
-        line_start: outer.start_position().row + 1,
-        line_end: outer.end_position().row + 1,
-        sig_hash: hash_of(&sig),
-        body_hash: hash_of(&body_hash),
-        is_protocol,
-        type_text: None,
-    });
+    add_symbol(
+        ctx,
+        SymbolFact {
+            qname: qname.clone(),
+            kind: SymbolKind::Class,
+            line_start: outer.start_position().row + 1,
+            line_end: outer.end_position().row + 1,
+            sig_hash: hash_of(&sig),
+            body_hash: hash_of(&body_hash),
+            is_protocol,
+            type_text: None,
+        },
+    );
     if let Some(b) = body {
         visit_block(ctx, b, &qname, true);
     }
@@ -287,20 +299,23 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
     );
     let body = def.child_by_field_name("body");
     let body_hash = body.map(|b| serialize(ctx, b)).unwrap_or_default();
-    ctx.facts.symbols.push(SymbolFact {
-        qname: qname.clone(),
-        kind: if in_class {
-            SymbolKind::Method
-        } else {
-            SymbolKind::Function
+    add_symbol(
+        ctx,
+        SymbolFact {
+            qname: qname.clone(),
+            kind: if in_class {
+                SymbolKind::Method
+            } else {
+                SymbolKind::Function
+            },
+            line_start: outer.start_position().row + 1,
+            line_end: outer.end_position().row + 1,
+            sig_hash: hash_of(&sig),
+            body_hash: hash_of(&body_hash),
+            is_protocol: false,
+            type_text: None,
         },
-        line_start: outer.start_position().row + 1,
-        line_end: outer.end_position().row + 1,
-        sig_hash: hash_of(&sig),
-        body_hash: hash_of(&body_hash),
-        is_protocol: false,
-        type_text: None,
-    });
+    );
     if let Some(b) = body {
         if in_class {
             self_attributes(ctx, b, prefix, &param_types);
@@ -404,16 +419,19 @@ fn push_attribute(
         .child_by_field_name("type")
         .map(|t| ctx.text(t).split_whitespace().collect::<String>())
         .unwrap_or_default();
-    ctx.facts.symbols.push(SymbolFact {
-        qname,
-        kind: SymbolKind::Attribute,
-        line_start: node.start_position().row + 1,
-        line_end: node.end_position().row + 1,
-        sig_hash: hash_of(&rhs),
-        body_hash: hash_of(""),
-        is_protocol: false,
-        type_text,
-    });
+    add_symbol(
+        ctx,
+        SymbolFact {
+            qname,
+            kind: SymbolKind::Attribute,
+            line_start: node.start_position().row + 1,
+            line_end: node.end_position().row + 1,
+            sig_hash: hash_of(&rhs),
+            body_hash: hash_of(""),
+            is_protocol: false,
+            type_text,
+        },
+    );
 }
 
 /// Atributo anotado no corpo da classe (`x: int = 0`).

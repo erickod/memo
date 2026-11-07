@@ -139,6 +139,16 @@ fn insert_symbols(
     let test_file = is_test_file(path);
     let mut ids: HashMap<&str, i64> = HashMap::new();
     for sym in &facts.symbols {
+        // `pkg/__init__.py` e `pkg.py`, ou uma função `foo` em `pkg/__init__.py` e o módulo
+        // `pkg/foo.py`, geram o mesmo `qname` em arquivos diferentes: vale o que já está no grafo.
+        let taken: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM symbol WHERE qname = ?1)",
+            [&sym.qname],
+            |r| r.get(0),
+        )?;
+        if taken {
+            continue;
+        }
         let (kind, nivel) = kind_label(sym.kind);
         let name = sym.qname.rsplit('.').next().unwrap_or(&sym.qname);
         let callable = matches!(sym.kind, SymbolKind::Function | SymbolKind::Method);
