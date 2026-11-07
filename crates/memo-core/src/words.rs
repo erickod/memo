@@ -143,13 +143,13 @@ pub fn split_name(name: &str) -> Vec<String> {
 }
 
 /// Junta tokens vizinhos quando a forma unida é um papel (`use`, `case` vira `usecase`).
-fn join_roles(tokens: Vec<String>) -> Vec<String> {
+fn join_roles(tokens: Vec<String>, vocab: &Vocabulary) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(tokens.len());
     let mut iter = tokens.into_iter().peekable();
     while let Some(tok) = iter.next() {
         if let Some(next) = iter.peek() {
             let joined = format!("{tok}{next}");
-            if ROLES.contains(&joined.as_str()) {
+            if vocab.roles.contains(&joined) {
                 out.push(joined);
                 iter.next();
                 continue;
@@ -160,10 +160,11 @@ fn join_roles(tokens: Vec<String>) -> Vec<String> {
     out
 }
 
-fn slot_of(word: &str, kind: NameKind) -> Slot {
-    if ROLES.contains(&word) {
+fn slot_of(word: &str, kind: NameKind, vocab: &Vocabulary) -> Slot {
+    let has = |list: &[String]| list.iter().any(|w| w == word);
+    if has(&vocab.roles) {
         Slot::Role
-    } else if kind != NameKind::Attribute && VERBS.contains(&word) {
+    } else if kind != NameKind::Attribute && has(&vocab.verbs) {
         Slot::Action
     } else {
         Slot::Object
@@ -181,13 +182,18 @@ fn segment_marker(word: &str) -> Option<Segment> {
 
 /// Palavras de um nome com slot (vocabulário semente) e `segment` em testes.
 pub fn classify_name(name: &str, kind: NameKind) -> Vec<WordOcc> {
+    classify_name_with(name, kind, &Vocabulary::default())
+}
+
+/// Como `classify_name`, com o vocabulário do repositório (`memo.toml`).
+pub fn classify_name_with(name: &str, kind: NameKind, vocab: &Vocabulary) -> Vec<WordOcc> {
     let mut tokens = split_name(name);
     if kind == NameKind::Test && tokens.first().is_some_and(|t| t == "test") {
         tokens.remove(0);
     }
     let mut segment = None;
     let mut out = Vec::new();
-    for word in join_roles(tokens) {
+    for word in join_roles(tokens, vocab) {
         if kind == NameKind::Test
             && let Some(marker) = segment_marker(&word)
         {
@@ -195,7 +201,7 @@ pub fn classify_name(name: &str, kind: NameKind) -> Vec<WordOcc> {
             continue;
         }
         out.push(WordOcc {
-            slot: slot_of(&word, kind),
+            slot: slot_of(&word, kind, vocab),
             text: word,
             segment,
         });

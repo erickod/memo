@@ -160,6 +160,25 @@ impl SqliteStore {
             let occ: Vec<String> = occ.collect::<Result<_, _>>()?;
             let _ = writeln!(out, "{}", occ.join(","));
         }
+        let mut stats = self.conn.prepare(
+            "SELECT w.text, ws.uso, ws.alcance, ws.grau, ws.idf, ws.especificidade, ws.centralidade, ws.esqueleto
+             FROM word_stats ws JOIN word w ON w.id = ws.word_id ORDER BY w.text",
+        )?;
+        let mut rows = stats.query([])?;
+        while let Some(r) = rows.next()? {
+            let _ = writeln!(
+                out,
+                "stats|{}|{}|{}|{}|{:.6}|{:.6}|{:.6}|{}",
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, f64>(4)?,
+                r.get::<_, f64>(5)?,
+                r.get::<_, f64>(6)?,
+                r.get::<_, i64>(7)?,
+            );
+        }
         let mut edges = self.conn.prepare(
             "SELECT e.kind, s.qname, COALESCE(d.qname, ''), COALESCE(e.dst_text, ''),
                     COALESCE(e.line, 0), COALESCE(e.attr, ''), e.approx

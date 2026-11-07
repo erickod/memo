@@ -1,8 +1,9 @@
 mod render;
 
 use clap::{Parser, Subcommand};
+use memo_core::config::Config;
 use memo_core::error::CoreError;
-use memo_core::index::index;
+use memo_core::index::index_with;
 use memo_core::query::{
     callees, callers, coverage, impact, readers, symbol_info, tests_for, type_info, word_info,
     writers,
@@ -127,9 +128,10 @@ fn open_indexed(cli: &Cli) -> Result<SqliteStore, Failure> {
     )?);
     let dir = common.join("memo");
     std::fs::create_dir_all(&dir).map_err(|e| Failure::Internal(e.to_string()))?;
+    let config = Config::load(&dir)?;
     let mut store = SqliteStore::open(&dir.join("base.db"))?;
     if !cli.no_index {
-        index(&WorkTree::new(&root), &mut store)?;
+        index_with(&WorkTree::new(&root), &mut store, &config)?;
     }
     Ok(store)
 }

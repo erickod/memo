@@ -204,9 +204,9 @@ fn test_given_depth_over_three_when_query_callers_then_usage_error_exit_1() {
 
 /// GIVEN a memo.toml with skeleton ["usecase"] and the fixture
 /// WHEN  'memo query word limit' runs
-/// THEN  the golden output lists 'usecase' under ignoradas, not under vizinhas
+/// THEN  the golden output lists 'usecase' under ignoradas, not under papéis
 #[test]
-fn test_given_skeleton_in_toml_when_query_word_then_neighbors_exclude_and_ignored_listed() {
+fn test_given_skeleton_in_toml_when_query_word_then_ignored_listed_and_not_in_roles() {
     let repo = Repo::fixture();
     repo.write(".git/memo/memo.toml", "skeleton = [\"usecase\"]\n");
     let out = memo(&repo, &["query", "word", "limit"]);

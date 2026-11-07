@@ -3,7 +3,7 @@
 use crate::error::CoreError;
 use crate::index::module_of;
 use crate::store::SqliteStore;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -26,7 +26,7 @@ pub struct SymbolInfo {
     pub edges: Vec<EdgeView>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WordInfo {
     pub word: String,
     pub verbs: Vec<String>,
@@ -34,6 +34,9 @@ pub struct WordInfo {
     pub layers: Vec<String>,
     pub symbols: Vec<SymbolAddr>,
     pub neighbors: Vec<String>,
+    /// Palavras vizinhas marcadas `esqueleto`, fora de verbos, papéis e vizinhas.
+    pub ignored: Vec<String>,
+    pub stats: Option<WordStats>,
 }
 
 /// Aresta direta de um símbolo: `out` (ele aponta) ou `in` (apontam para ele).
@@ -271,19 +274,30 @@ pub fn word_info(store: &SqliteStore, word: &str) -> Result<WordInfo, CoreError>
     let mut verbs = Vec::new();
     let mut roles = Vec::new();
     let mut neighbors = Vec::new();
+    let mut ignored = Vec::new();
     let mut stmt = store.conn.prepare(
-        "SELECT w2.text, o2.slot FROM occurrence o1
+        "SELECT w2.text, o2.slot, COALESCE(ws.esqueleto, 0) FROM occurrence o1
          JOIN occurrence o2 ON o2.symbol_id = o1.symbol_id AND o2.word_id != o1.word_id
-         JOIN word w2 ON w2.id = o2.word_id
+         JOIN word w2 ON w2.id = o2.word_id LEFT JOIN word_stats ws ON ws.word_id = w2.id
          WHERE o1.word_id = ?1
          GROUP BY w2.text, o2.slot
          ORDER BY COUNT(DISTINCT o2.symbol_id) DESC, w2.text",
     )?;
     let rows = stmt.query_map(params![word_id], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)? != 0,
+        ))
     })?;
     for row in rows {
-        let (text, slot) = row?;
+        let (text, slot, skeleton) = row?;
+        if skeleton {
+            if !ignored.contains(&text) {
+                ignored.push(text);
+            }
+            continue;
+        }
         match slot.as_str() {
             "action" => verbs.push(text),
             "role" => roles.push(text),
@@ -300,6 +314,7 @@ pub fn word_info(store: &SqliteStore, word: &str) -> Result<WordInfo, CoreError>
         .query_map([word_id], |r| r.get(0))?
         .collect::<Result<Vec<String>, _>>()?;
 
+    let stats = word_stats(store, &word)?;
     Ok(WordInfo {
         word,
         verbs,
@@ -307,6 +322,8 @@ pub fn word_info(store: &SqliteStore, word: &str) -> Result<WordInfo, CoreError>
         layers,
         symbols,
         neighbors,
+        ignored,
+        stats,
     })
 }
 
@@ -568,6 +585,24 @@ pub struct WordStats {
 }
 
 /// Estatísticas de uma palavra (spec §5.6); `None` se a palavra não existe.
-pub fn word_stats(_store: &SqliteStore, _word: &str) -> Result<Option<WordStats>, CoreError> {
-    todo!("spec §5.6")
+pub fn word_stats(store: &SqliteStore, word: &str) -> Result<Option<WordStats>, CoreError> {
+    Ok(store
+        .conn
+        .query_row(
+            "SELECT ws.uso, ws.alcance, ws.grau, ws.idf, ws.especificidade, ws.centralidade, ws.esqueleto
+             FROM word_stats ws JOIN word w ON w.id = ws.word_id WHERE w.text = ?1",
+            [word.to_lowercase()],
+            |r| {
+                Ok(WordStats {
+                    uso: r.get(0)?,
+                    alcance: r.get(1)?,
+                    grau: r.get(2)?,
+                    idf: r.get(3)?,
+                    especificidade: r.get(4)?,
+                    centralidade: r.get(5)?,
+                    esqueleto: r.get::<_, i64>(6)? != 0,
+                })
+            },
+        )
+        .optional()?)
 }

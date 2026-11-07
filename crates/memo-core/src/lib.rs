@@ -7,5 +7,6 @@ pub mod index;
 pub mod query;
 pub mod resolve;
 pub mod source;
+pub mod stats;
 pub mod store;
 pub mod words;

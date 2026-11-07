@@ -12,6 +12,7 @@ struct FileCtx {
 
 struct Resolver<'a> {
     tx: &'a Transaction<'a>,
+    write_methods: &'a [String],
     files: HashMap<i64, FileCtx>,
 }
 
@@ -27,9 +28,10 @@ struct RawRef {
 }
 
 impl<'a> Resolver<'a> {
-    fn new(tx: &'a Transaction<'a>) -> Self {
+    fn new(tx: &'a Transaction<'a>, write_methods: &'a [String]) -> Self {
         Self {
             tx,
+            write_methods,
             files: HashMap::new(),
         }
     }
@@ -205,8 +207,12 @@ fn resolve_imports(
 /// Recria as arestas de saída dos arquivos, a partir de `raw_ref` e `import` (sem reparsear).
 ///
 /// Duas fases: tipos, imports e efeitos primeiro; chamadas depois, já com herança e Protocols.
-pub fn resolve_files(tx: &Transaction, file_ids: &[i64]) -> Result<(), CoreError> {
-    let mut resolver = Resolver::new(tx);
+pub fn resolve_files(
+    tx: &Transaction,
+    file_ids: &[i64],
+    write_methods: &[String],
+) -> Result<(), CoreError> {
+    let mut resolver = Resolver::new(tx, write_methods);
     for &file_id in file_ids {
         tx.execute(
             "DELETE FROM edge WHERE src IN (SELECT id FROM symbol WHERE file_id = ?1)",
@@ -225,10 +231,6 @@ pub fn resolve_files(tx: &Transaction, file_ids: &[i64]) -> Result<(), CoreError
     }
     Ok(())
 }
-
-const WRITE_METHODS: &[&str] = &[
-    "save", "add", "insert", "update", "delete", "publish", "send", "commit", "flush",
-];
 
 impl Resolver<'_> {
     fn class_of(&self, symbol_id: i64) -> Result<Option<i64>, CoreError> {
@@ -474,7 +476,7 @@ fn call_on_type(
             }
         }
     }
-    if WRITE_METHODS.contains(&method) {
+    if resolver.write_methods.iter().any(|w| w == method) {
         let text = format!("{}.{method}", resolver.class_name(class_id)?);
         insert_edge(tx, &call_edge(raw, "ESCREVE", None, Some(&text), true))?;
     }

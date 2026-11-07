@@ -2,6 +2,7 @@
 
 use crate::error::CoreError;
 use crate::words::Vocabulary;
+use serde::Deserialize;
 use std::path::Path;
 
 const SKELETON: &[&str] = &[
@@ -46,14 +47,61 @@ impl Default for Config {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Raw {
+    main_branch: Option<String>,
+    roles: Option<Vec<String>>,
+    verbs: Option<Vec<String>>,
+    skeleton: Option<Vec<String>>,
+    write_methods: Option<Vec<String>>,
+    entrypoint_decorators: Option<Vec<String>>,
+    min_specificity: Option<f64>,
+    stale_on: Option<Vec<String>>,
+    context_root: Option<String>,
+    layers: Option<Vec<String>>,
+}
+
 impl Config {
     /// Lê o TOML; chaves ausentes mantêm as sementes e listas presentes substituem a semente.
-    pub fn from_toml(_text: &str) -> Result<Self, CoreError> {
-        todo!("spec §6.1 memo.toml")
+    pub fn from_toml(text: &str) -> Result<Self, CoreError> {
+        let raw: Raw = toml::from_str(text).map_err(|e| CoreError::Config(e.to_string()))?;
+        let mut config = Self::default();
+        config.main_branch = raw.main_branch.or(config.main_branch);
+        config.vocabulary.roles = raw.roles.unwrap_or(config.vocabulary.roles);
+        config.vocabulary.verbs = raw.verbs.unwrap_or(config.vocabulary.verbs);
+        config.skeleton = raw.skeleton.unwrap_or(config.skeleton);
+        config.write_methods = raw.write_methods.unwrap_or(config.write_methods);
+        config.entrypoint_decorators = raw
+            .entrypoint_decorators
+            .unwrap_or(config.entrypoint_decorators);
+        config.min_specificity = raw.min_specificity.unwrap_or(config.min_specificity);
+        config.stale_on = raw.stale_on.unwrap_or(config.stale_on);
+        config.context_root = raw.context_root.unwrap_or(config.context_root);
+        config.layers = raw.layers.unwrap_or(config.layers);
+        if !(0.0..=1.0).contains(&config.min_specificity) {
+            return Err(CoreError::Config(
+                "min_specificity must be between 0 and 1".to_string(),
+            ));
+        }
+        if let Some(bad) = config
+            .stale_on
+            .iter()
+            .find(|v| !matches!(v.as_str(), "sig" | "body"))
+        {
+            return Err(CoreError::Config(format!(
+                "stale_on accepts \"sig\" and \"body\", got \"{bad}\""
+            )));
+        }
+        Ok(config)
     }
 
     /// Lê `<dir>/memo.toml`; sem o arquivo, devolve as sementes.
-    pub fn load(_dir: &Path) -> Result<Self, CoreError> {
-        todo!("spec §6.1 memo.toml")
+    pub fn load(dir: &Path) -> Result<Self, CoreError> {
+        match std::fs::read_to_string(dir.join("memo.toml")) {
+            Ok(text) => Self::from_toml(&text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e.into()),
+        }
     }
 }

@@ -6,7 +6,7 @@ use crate::extract::{FileFacts, SymbolKind, extract_python_file};
 use crate::resolve::resolve_files;
 use crate::source::{SourceFile, SourceTree};
 use crate::store::SqliteStore;
-use crate::words::{NameKind, Segment, Slot, classify_name};
+use crate::words::{NameKind, Segment, Slot, classify_name_with};
 use rayon::prelude::*;
 use rusqlite::{OptionalExtension, Transaction, params};
 use std::collections::{HashMap, HashSet};
@@ -41,12 +41,13 @@ pub fn module_of(path: &str) -> String {
 }
 
 /// Contexto (segmento após `app/`) e camada (`domain`, `application` ou `infra`), spec §4.
-fn context_and_layer(path: &str) -> (Option<String>, Option<String>) {
+fn context_and_layer(path: &str, config: &Config) -> (Option<String>, Option<String>) {
     let parts: Vec<&str> = path.split('/').collect();
-    let context = (parts.first() == Some(&"app") && parts.len() > 2).then(|| parts[1].to_string());
+    let context = (parts.first() == Some(&config.context_root.as_str()) && parts.len() > 2)
+        .then(|| parts[1].to_string());
     let layer = parts
         .iter()
-        .find(|p| matches!(**p, "domain" | "application" | "infra"))
+        .find(|p| config.layers.iter().any(|l| l == **p))
         .map(|p| (*p).to_string());
     (context, layer)
 }
@@ -131,6 +132,7 @@ fn insert_symbols(
     file_id: i64,
     path: &str,
     facts: &FileFacts,
+    config: &Config,
 ) -> Result<(), CoreError> {
     let test_file = is_test_file(path);
     let mut ids: HashMap<&str, i64> = HashMap::new();
@@ -170,7 +172,10 @@ fn insert_symbols(
             (_, true) => NameKind::Test,
             _ => NameKind::Callable,
         };
-        for (pos, occ) in classify_name(name, name_kind).iter().enumerate() {
+        for (pos, occ) in classify_name_with(name, name_kind, &config.vocabulary)
+            .iter()
+            .enumerate()
+        {
             tx.execute(
                 "INSERT INTO occurrence(symbol_id, word_id, pos, slot, segment)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -267,7 +272,7 @@ pub fn index(tree: &dyn SourceTree, store: &mut SqliteStore) -> Result<IndexRepo
 pub fn index_with(
     tree: &dyn SourceTree,
     store: &mut SqliteStore,
-    _config: &Config,
+    config: &Config,
 ) -> Result<IndexReport, CoreError> {
     let listed = tree.list()?;
     let stored = load_files(store)?;
@@ -341,7 +346,7 @@ pub fn index_with(
             delete_file_symbols(&tx, id)?;
             tx.execute("DELETE FROM file WHERE id = ?1", [id])?;
         }
-        let (context, layer) = context_and_layer(&p.file.path);
+        let (context, layer) = context_and_layer(&p.file.path, config);
         let parse_error = result.as_ref().err().map(|e| e.0.clone());
         tx.execute(
             "INSERT INTO file(path, hash, mtime_ns, size, context, layer, parse_error)
@@ -358,7 +363,7 @@ pub fn index_with(
         )?;
         let file_id = tx.last_insert_rowid();
         if let Ok(facts) = &result {
-            insert_symbols(&tx, file_id, &p.file.path, facts)?;
+            insert_symbols(&tx, file_id, &p.file.path, facts, config)?;
         }
         to_resolve.push(file_id);
     }
@@ -367,7 +372,8 @@ pub fn index_with(
             to_resolve.push(id);
         }
     }
-    resolve_files(&tx, &to_resolve)?;
+    resolve_files(&tx, &to_resolve, &config.write_methods)?;
+    crate::stats::recompute(&tx, config)?;
     tx.commit()?;
 
     report.wrote = true;

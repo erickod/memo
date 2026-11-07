@@ -252,14 +252,26 @@ pub fn word_text(
     max_chars: usize,
     limit: Option<usize>,
 ) -> String {
-    let mut head = vec![
-        format!("word {}  idx={idx}", info.word),
+    let mut head = vec![format!("word {}  idx={idx}", info.word)];
+    if let Some(st) = &info.stats {
+        head.push(format!(
+            "stats: uso={} alcance={} grau={} espec={:.2} central={:.3}",
+            st.uso, st.alcance, st.grau, st.especificidade, st.centralidade
+        ));
+        if st.esqueleto {
+            head.push("esqueleto: sim (nunca âncora)".to_string());
+        }
+    }
+    head.extend([
         list_line("verbos", &info.verbs),
         list_line("papéis", &info.roles),
         list_line("camadas", &info.layers),
         list_line("vizinhas", &info.neighbors),
-        "símbolos:".to_string(),
-    ];
+    ]);
+    if !info.ignored.is_empty() {
+        head.push(list_line("ignoradas", &info.ignored));
+    }
+    head.push("símbolos:".to_string());
     if info.symbols.is_empty() {
         head.push("  nenhum".to_string());
     }

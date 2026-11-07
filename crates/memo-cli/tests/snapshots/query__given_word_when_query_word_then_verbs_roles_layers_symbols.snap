@@ -3,10 +3,13 @@ source: crates/memo-cli/tests/query.rs
 expression: stdout(&out)
 ---
 word limit  idx=ok
+stats: uso=8 alcance=4 grau=7 espec=0.16 central=0.164
+esqueleto: sim (nunca âncora)
 verbos: calculate
-papéis: repository,usecase
+papéis: repository
 camadas: application,domain,infra
 vizinhas: amount,returns,sql,test
+ignoradas: usecase
 símbolos:
   mod test_calculate_limit_usecase   app/billing/application/tests/unit/test_calculate_limit_usecase.py:L1-L8
   T test_given_amount_when_calculate_then_returns_limit   app/billing/application/tests/unit/test_calculate_limit_usecase.py:L5-L7
