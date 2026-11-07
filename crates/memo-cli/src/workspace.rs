@@ -147,25 +147,32 @@ pub fn open_indexed(cli: &Cli, opts: &IndexOpts) -> Result<Opened, Failure> {
         if opts.full {
             store.invalidate_files()?;
         }
-        Some(match &opts.git_ref {
+        // D12: a base vem da ref principal; a árvore de trabalho só alimenta a feature.
+        let on_feature = scope != "repo";
+        let ref_name = opts
+            .git_ref
+            .clone()
+            .or_else(|| (!on_feature).then(|| resolve_main(&env)).flatten());
+        Some(match ref_name {
             Some(name) => {
-                let tree = GitRef::new(&env.root, name)?;
+                let tree = GitRef::new(&env.root, &name)?;
                 let report =
                     index_with_notes_scoped(&tree, &mut store, &env.config, &notes, &scope)?;
-                store.set_meta("indexed_ref", name)?;
+                store.set_meta("indexed_ref", &name)?;
                 store.set_meta("indexed_commit", &tree.commit()?)?;
                 report
             }
             None => {
-                let report = index_with_notes_scoped(
+                if !on_feature {
+                    eprintln!("aviso: sem branch principal; a base indexa a árvore de trabalho");
+                }
+                index_with_notes_scoped(
                     &WorkTree::new(&env.root),
                     &mut store,
                     &env.config,
                     &notes,
                     &scope,
-                )?;
-                mark_worktree(&env, &store, &report)?;
-                report
+                )?
             }
         })
     };
@@ -175,18 +182,4 @@ pub fn open_indexed(cli: &Cli, opts: &IndexOpts) -> Result<Opened, Failure> {
         report,
         _lock: held,
     })
-}
-
-/// Se a base vinha de uma ref e a árvore de trabalho a mudou, o `meta` passa a dizer isso.
-fn mark_worktree(env: &Env, store: &SqliteStore, report: &IndexReport) -> Result<(), Failure> {
-    let from_ref = store
-        .get_meta("indexed_ref")?
-        .is_some_and(|r| r != "worktree");
-    if report.wrote && from_ref {
-        store.set_meta("indexed_ref", "worktree")?;
-        if let Ok(head) = git(&env.root, &["rev-parse", "HEAD"]) {
-            store.set_meta("indexed_commit", &head)?;
-        }
-    }
-    Ok(())
 }

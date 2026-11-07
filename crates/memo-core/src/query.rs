@@ -80,6 +80,8 @@ pub struct Coverage {
     pub aproximadas: i64,
     pub nao_resolvidas: i64,
     pub arquivos_com_erro: i64,
+    /// Arquivos de nota que não parseiam (preenchido por quem conhece o diretório de notas).
+    pub notas_com_erro: i64,
 }
 
 const ADDR_COLUMNS: &str =
@@ -257,6 +259,7 @@ pub fn coverage(store: &SqliteStore) -> Result<Coverage, CoreError> {
         aproximadas: count("SELECT COUNT(*) FROM edge WHERE approx = 1")?,
         nao_resolvidas: count("SELECT COUNT(*) FROM raw_ref WHERE resolved = 0")?,
         arquivos_com_erro: count("SELECT COUNT(*) FROM file WHERE parse_error IS NOT NULL")?,
+        notas_com_erro: 0,
     })
 }
 

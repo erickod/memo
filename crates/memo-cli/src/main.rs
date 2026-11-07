@@ -293,7 +293,8 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         _lock,
     } = workspace::open_indexed(cli, &opts)?;
     let notes_dir = NoteDir::new(&memo_dir.join("notes"));
-    let cov = coverage(&store)?;
+    let mut cov = coverage(&store)?;
+    cov.notas_com_erro = i64::try_from(notes_dir.scan()?.1.len()).unwrap_or(i64::MAX);
     let (max, limit) = (cli.max_chars, cli.limit);
     let delta_task = cli
         .task

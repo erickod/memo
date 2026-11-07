@@ -533,30 +533,41 @@ impl NoteDir {
         Ok(AddOutcome { note, conflicts })
     }
 
-    /// Todas as notas, por id; arquivos temporários e estranhos são ignorados.
+    /// Todas as notas, por id; arquivos temporários, estranhos e inválidos são ignorados.
     pub fn list(&self) -> Result<Vec<Note>, CoreError> {
+        Ok(self.scan()?.0)
+    }
+
+    /// Notas válidas por id e os nomes dos arquivos de nota que não parseiam: um arquivo
+    /// corrompido não derruba o comando (spec §2, regra 7).
+    pub fn scan(&self) -> Result<(Vec<Note>, Vec<String>), CoreError> {
         let entries = match std::fs::read_dir(&self.dir) {
             Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((Vec::new(), Vec::new()));
+            }
             Err(e) => return Err(e.into()),
         };
         let mut notes = Vec::new();
+        let mut invalid = Vec::new();
         for entry in entries {
             let path = entry?.path();
-            let is_note = path
+            let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("n-") && n.ends_with(".md"));
-            if !is_note {
+                .unwrap_or_default()
+                .to_string();
+            if !(name.starts_with("n-") && name.ends_with(".md")) {
                 continue;
             }
-            let text = std::fs::read_to_string(&path)?;
-            let note = Note::parse(&text)
-                .map_err(|e| CoreError::Note(format!("{}: {e}", path.display())))?;
-            notes.push(note);
+            match Note::parse(&std::fs::read_to_string(&path)?) {
+                Ok(note) => notes.push(note),
+                Err(_) => invalid.push(name),
+            }
         }
         notes.sort_by(|a, b| a.id.cmp(&b.id));
-        Ok(notes)
+        invalid.sort();
+        Ok((notes, invalid))
     }
 
     pub fn get(&self, id: &str) -> Result<Note, CoreError> {

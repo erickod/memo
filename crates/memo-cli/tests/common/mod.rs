@@ -60,8 +60,17 @@ impl Repo {
     pub fn commit_all(&self) {
         let git = |args: &[&str]| {
             let status = Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
                 .args(args)
+                .env("GIT_AUTHOR_DATE", "2026-11-07T14:05:00Z")
+                .env("GIT_COMMITTER_DATE", "2026-11-07T14:05:00Z")
                 .current_dir(&self.root)
                 .status()
                 .unwrap();

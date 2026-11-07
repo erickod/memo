@@ -8,8 +8,13 @@ use memo_core::query::{
 };
 
 fn coverage_line(c: &Coverage) -> String {
+    let notes = if c.notas_com_erro > 0 {
+        format!(", {} notas com erro", c.notas_com_erro)
+    } else {
+        String::new()
+    };
     format!(
-        "cobertura: {} resolvidas, {} aprox, {} não resolvidas, {} arquivos com erro",
+        "cobertura: {} resolvidas, {} aprox, {} não resolvidas, {} arquivos com erro{notes}",
         c.resolvidas, c.aproximadas, c.nao_resolvidas, c.arquivos_com_erro
     )
 }

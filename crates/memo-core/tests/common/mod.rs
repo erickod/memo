@@ -64,7 +64,14 @@ impl Repo {
     pub fn commit_all(&self) {
         let git = |args: &[&str]| {
             let status = Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
                 .args(args)
                 .current_dir(&self.root)
                 .status()
