@@ -1,0 +1,5 @@
+---
+source: crates/memo-cli/tests/query.rs
+expression: stdout(&out)
+---
+note n-4qipqdn2 proposta  sym:app.billing.application.usecases.calculate_limit_usecase.CalculateLimitUseCase.execute

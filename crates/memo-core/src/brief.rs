@@ -2,6 +2,7 @@
 
 use crate::delta::filter_new;
 use crate::error::CoreError;
+use crate::notes::{Note, notes_for};
 use crate::query::{SymbolAddr, addr_by_id, short_name, word_info};
 use crate::store::SqliteStore;
 use serde::Serialize;
@@ -265,18 +266,36 @@ fn writers_of_touched(store: &SqliteStore, ids: &[i64]) -> Result<Vec<WriterLine
 }
 
 /// `brief` sem notas.
+/// Troca tokens que são alias de uma nota `glossario` (âncora `word:`) pela palavra.
+fn expand_aliases(tokens: Vec<String>, notes: &[Note]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for token in tokens {
+        let word = notes
+            .iter()
+            .filter(|n| n.tipo == "glossario" && n.estado != "orfa" && n.estado != "substituida")
+            .filter_map(|n| n.ancora.strip_prefix("word:").map(|w| (n, w)))
+            .find(|(n, _)| {
+                n.aliases
+                    .iter()
+                    .any(|a| tokenize(a).first() == Some(&token))
+            })
+            .map(|(_, w)| w.to_string());
+        let token = word.unwrap_or(token);
+        if !out.contains(&token) {
+            out.push(token);
+        }
+    }
+    out
+}
+
 pub fn brief(store: &SqliteStore, request: &str) -> Result<Brief, CoreError> {
     brief_with(store, request, &[])
 }
 
 /// `brief` com as notas visíveis: o alias de nota `glossario` casa tokens e as notas dos nós
 /// listados entram na seção `notas`.
-pub fn brief_with(
-    store: &SqliteStore,
-    request: &str,
-    _notes: &[crate::notes::Note],
-) -> Result<Brief, CoreError> {
-    let tokens = tokenize(request);
+pub fn brief_with(store: &SqliteStore, request: &str, notes: &[Note]) -> Result<Brief, CoreError> {
+    let tokens = expand_aliases(tokenize(request), notes);
     let matched = match_words(store, &tokens)?;
     let mut ignored: Vec<String> = Vec::new();
     let mut usable: Vec<&Candidate> = Vec::new();
@@ -341,6 +360,7 @@ pub fn brief_with(
         }
     }
     let ids: Vec<i64> = ranked.iter().map(|(id, _, _)| *id).collect();
+    let ranked_addrs: Vec<SymbolAddr> = ranked.iter().map(|(_, _, a)| a.clone()).collect();
     let pattern = match anchors.first() {
         Some(a) => {
             let info = word_info(store, &a.word)?;
@@ -353,6 +373,7 @@ pub fn brief_with(
         }
         None => None,
     };
+    let notes_lines = related_notes(notes, &ranked_addrs, &anchors);
     Ok(Brief {
         request: request.to_string(),
         anchors,
@@ -364,9 +385,20 @@ pub fn brief_with(
             .collect(),
         outline,
         pattern,
-        notes: Vec::new(),
+        notes: notes_lines,
         unchanged: None,
     })
+}
+
+/// Notas dos nós listados e das palavras âncora, como linhas curtas.
+fn related_notes(notes: &[Note], symbols: &[SymbolAddr], anchors: &[Anchor]) -> Vec<String> {
+    let qnames: Vec<String> = symbols.iter().map(|s| s.qname.clone()).collect();
+    let files: Vec<String> = symbols.iter().map(|s| s.path.clone()).collect();
+    let words: Vec<String> = anchors.iter().map(|a| a.word.clone()).collect();
+    notes_for(notes, &qnames, &words, &files)
+        .iter()
+        .map(Note::summary)
+        .collect()
 }
 
 /// Remove do `Brief` o que já foi entregue à `task`, registra o que ficou e preenche
@@ -407,9 +439,18 @@ pub fn apply_delta(
         |w| format!("{request}|W|{}|{}", w.attr, w.writers.join(",")),
         full,
     )?;
+    let (notes, d) = filter_new(
+        store,
+        task,
+        "brief",
+        std::mem::take(&mut brief.notes),
+        |n| format!("{request}|N|{n}"),
+        full,
+    )?;
+    brief.notes = notes;
     brief.symbols = symbols;
     brief.outline = outline;
     brief.writers = writers;
-    brief.unchanged = Some(a + b + c);
+    brief.unchanged = Some(a + b + c + d);
     Ok(())
 }

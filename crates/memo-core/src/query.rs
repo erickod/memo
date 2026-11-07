@@ -110,7 +110,7 @@ fn addr_from_row(r: &rusqlite::Row) -> rusqlite::Result<SymbolAddr> {
 }
 
 /// `qname` completo ou sufixo único; sufixo ambíguo devolve `Ambiguous`, ausente `NotFound`.
-fn resolve_qname(store: &SqliteStore, target: &str) -> Result<String, CoreError> {
+pub(crate) fn resolve_qname(store: &SqliteStore, target: &str) -> Result<String, CoreError> {
     let mut stmt = store.conn.prepare(
         "SELECT qname FROM symbol
          WHERE qname = ?1

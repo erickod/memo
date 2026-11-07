@@ -1,11 +1,12 @@
 mod render;
 
 use clap::{Parser, Subcommand};
-use memo_core::brief::{apply_delta, brief};
+use memo_core::brief::{apply_delta, brief_with};
 use memo_core::config::Config;
 use memo_core::delta::apply_impact_delta;
 use memo_core::error::CoreError;
 use memo_core::index::index_with;
+use memo_core::notes::{NewNote, NoteDir, format_utc, notes_for};
 use memo_core::query::{
     callees, callers, coverage, impact, readers, symbol_info, tests_for, type_info, word_info,
     writers,
@@ -14,6 +15,7 @@ use memo_core::source::WorkTree;
 use memo_core::store::SqliteStore;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const EXIT_USAGE: u8 = 1;
 const EXIT_NOT_FOUND: u8 = 2;
@@ -62,6 +64,43 @@ enum Cmd {
     },
     /// Âncoras, símbolos, contorno, padrão, escritores e notas para um pedido.
     Brief { request: String },
+    /// Notas ancoradas nos símbolos.
+    Note {
+        #[command(subcommand)]
+        cmd: NoteCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum NoteCmd {
+    /// Registra uma nota (estado inicial `proposta`).
+    Add {
+        #[arg(long, value_parser = ["decisao", "regra", "restricao", "descartado", "glossario"])]
+        tipo: String,
+        /// `sym:<qname>`, `word:<texto>`, `edge:<qname>-><qname>` ou `file:<caminho>`.
+        #[arg(long)]
+        ancora: String,
+        #[arg(long = "secundaria")]
+        secundarias: Vec<String>,
+        #[arg(long, value_parser = ["humano", "recomendacao_aceita", "agente"])]
+        origem: String,
+        /// Confirma já na criação (só para decisão vinda de rodada humana).
+        #[arg(long)]
+        confirm: bool,
+        /// Id da nota que esta substitui.
+        #[arg(long)]
+        substitui: Option<String>,
+        /// Sinônimo (nota `glossario`).
+        #[arg(long = "alias")]
+        aliases: Vec<String>,
+        texto: String,
+    },
+    /// Lista as notas, em qualquer estado.
+    List,
+    /// Mostra uma nota por inteiro.
+    Show { id: String },
+    /// Confirma uma nota `proposta`.
+    Confirm { id: String },
 }
 
 #[derive(Subcommand)]
@@ -133,7 +172,7 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, Failure> {
 }
 
 /// Abre `$COMMON/memo/base.db` e reindexa a árvore de trabalho, salvo com `--no-index`.
-fn open_indexed(cli: &Cli) -> Result<SqliteStore, Failure> {
+fn open_indexed(cli: &Cli) -> Result<(SqliteStore, PathBuf), Failure> {
     let start = cli.repo.clone().unwrap_or_else(|| PathBuf::from("."));
     let root = PathBuf::from(git(&start, &["rev-parse", "--show-toplevel"])?);
     let common = PathBuf::from(git(
@@ -147,7 +186,18 @@ fn open_indexed(cli: &Cli) -> Result<SqliteStore, Failure> {
     if !cli.no_index {
         index_with(&WorkTree::new(&root), &mut store, &config)?;
     }
-    Ok(store)
+    Ok((store, dir))
+}
+
+/// Carimbo da nota: `MEMO_NOW` (testes) ou o relógio, em UTC.
+fn now_stamp() -> String {
+    if let Ok(fixed) = std::env::var("MEMO_NOW") {
+        return fixed;
+    }
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    format_utc(secs)
 }
 
 fn json_value<T: serde::Serialize>(value: &T) -> Result<serde_json::Value, Failure> {
@@ -155,7 +205,8 @@ fn json_value<T: serde::Serialize>(value: &T) -> Result<serde_json::Value, Failu
 }
 
 fn run(cli: &Cli) -> Result<String, Failure> {
-    let store = open_indexed(cli)?;
+    let (store, memo_dir) = open_indexed(cli)?;
+    let notes_dir = NoteDir::new(&memo_dir.join("notes"));
     let cov = coverage(&store)?;
     let (max, limit) = (cli.max_chars, cli.limit);
     let delta_task = cli
@@ -164,8 +215,10 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         .or_else(|| cli.since_last.then(|| "-".to_string()));
     let kind = match &cli.command {
         Cmd::Query { kind } => kind,
+        Cmd::Note { cmd } => return run_note(cli, cmd, &store, &notes_dir, &cov),
         Cmd::Brief { request } => {
-            let mut b = brief(&store, request)?;
+            let visible = notes_dir.visible(cli.task.as_deref())?;
+            let mut b = brief_with(&store, request, &visible)?;
             if let Some(task) = &delta_task {
                 apply_delta(&store, task, &mut b, cli.full)?;
             }
@@ -175,11 +228,15 @@ fn run(cli: &Cli) -> Result<String, Failure> {
     };
     let (cmd, data, text) = match kind {
         Query::Symbol { target } => match symbol_info(&store, target) {
-            Ok(info) => (
-                "query symbol",
-                json_value(&info)?,
-                render::symbol_text(&info, "ok", &cov, max, limit),
-            ),
+            Ok(mut info) => {
+                let visible = notes_dir.visible(cli.task.as_deref())?;
+                info.notes = notes_for(&visible, &[info.addr.qname.clone()], &[], &[]);
+                (
+                    "query symbol",
+                    json_value(&info)?,
+                    render::symbol_text(&info, "ok", &cov, max, limit),
+                )
+            }
             Err(CoreError::Ambiguous { target, candidates }) => {
                 return Err(Failure::NotFound(render::ambiguous_text(
                     &target,
@@ -230,6 +287,8 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         }
         Query::Impact { target } => {
             let mut info = impact(&store, target)?;
+            let visible = notes_dir.visible(cli.task.as_deref())?;
+            info.notes = notes_for(&visible, &[info.target.qname.clone()], &[], &[]);
             if let Some(task) = &delta_task {
                 apply_impact_delta(&store, task, &mut info, cli.full)?;
             }
@@ -258,6 +317,62 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         }
     };
     finish(cli, cmd, data, &cov, text)
+}
+
+fn run_note(
+    cli: &Cli,
+    cmd: &NoteCmd,
+    store: &SqliteStore,
+    notes: &NoteDir,
+    cov: &memo_core::query::Coverage,
+) -> Result<String, Failure> {
+    let (name, data, text) = match cmd {
+        NoteCmd::Add {
+            tipo,
+            ancora,
+            secundarias,
+            origem,
+            confirm,
+            substitui,
+            aliases,
+            texto,
+        } => {
+            let new = NewNote {
+                tipo: tipo.clone(),
+                ancora: ancora.clone(),
+                secundarias: secundarias.clone(),
+                origem: origem.clone(),
+                text: texto.clone(),
+                task: cli.task.clone(),
+                confirm: *confirm,
+                substitui: substitui.clone(),
+                aliases: aliases.clone(),
+            };
+            let out = notes.add(store, new, &now_stamp())?;
+            (
+                "note add",
+                json_value(&serde_json::json!({ "note": out.note, "conflitos": out.conflicts }))?,
+                render::note_added_text(&out.note, &out.conflicts),
+            )
+        }
+        NoteCmd::List => {
+            let all = notes.visible(cli.task.as_deref())?;
+            ("note list", json_value(&all)?, render::note_list_text(&all))
+        }
+        NoteCmd::Show { id } => {
+            let note = notes.get(id)?;
+            ("note show", json_value(&note)?, note.render())
+        }
+        NoteCmd::Confirm { id } => {
+            let note = notes.confirm(id)?;
+            (
+                "note confirm",
+                json_value(&note)?,
+                format!("note {} {}\n", note.id, note.estado),
+            )
+        }
+    };
+    finish(cli, name, data, cov, text)
 }
 
 fn finish(

@@ -1,6 +1,7 @@
 //! Formatação de saída em texto compacto (spec §8.3).
 
 use memo_core::brief::Brief;
+use memo_core::notes::Note;
 use memo_core::query::{
     Chain, ChainItem, Coverage, EdgeView, Impact, RelItem, Relation, SymbolAddr, SymbolInfo,
     TestsInfo, TypeInfo, WordInfo,
@@ -105,7 +106,8 @@ pub fn symbol_text(
         head.push("  nenhuma".to_string());
     }
     let items: Vec<String> = info.edges.iter().map(edge_line).collect();
-    let tail = ["notas: nenhuma".to_string(), coverage_line(cov)];
+    let mut tail = notes_lines(&info.notes);
+    tail.push(coverage_line(cov));
     fit(&head, &items, &tail, max_chars, limit)
 }
 
@@ -242,10 +244,46 @@ pub fn impact_text(
         &mut items,
     );
     tests_sections(&info.tests, &mut items);
-    let mut tail = vec!["notas: nenhuma".to_string()];
+    let mut tail = notes_lines(&info.notes);
     tail.extend(unchanged_line(info.unchanged));
     tail.push(coverage_line(cov));
     fit(&head, &items, &tail, max_chars, limit)
+}
+
+/// Seção `notas`: `nenhuma`, ou uma linha por nota com o peso implícito na ordem.
+fn notes_lines(notes: &[Note]) -> Vec<String> {
+    if notes.is_empty() {
+        return vec!["notas: nenhuma".to_string()];
+    }
+    let mut lines = vec!["notas:".to_string()];
+    lines.extend(notes.iter().map(|n| format!("  {}", n.summary())));
+    lines
+}
+
+pub fn note_added_text(note: &Note, conflicts: &[Note]) -> String {
+    let mut out = format!("note {} {}  {}\n", note.id, note.estado, note.ancora);
+    if !conflicts.is_empty() {
+        out.push_str("conflitos:\n");
+        for c in conflicts {
+            out.push_str(&format!("  {}\n", c.summary()));
+        }
+    }
+    out
+}
+
+pub fn note_list_text(notes: &[Note]) -> String {
+    if notes.is_empty() {
+        return "nenhuma nota\n".to_string();
+    }
+    notes
+        .iter()
+        .map(|n| {
+            format!(
+                "{} {} {} {}  {}\n",
+                n.id, n.tipo, n.estado, n.escopo, n.ancora
+            )
+        })
+        .collect()
 }
 
 fn dash_join(values: &[String]) -> String {
@@ -323,11 +361,13 @@ pub fn brief_text(
         .map(|w| format!("  {} <- {}", w.attr, w.writers.join(", ")))
         .collect();
     section("escritores", writers, &mut items);
-    let mut tail = vec![if b.notes.is_empty() {
-        "notas: nenhuma".to_string()
+    let mut tail = if b.notes.is_empty() {
+        vec!["notas: nenhuma".to_string()]
     } else {
-        format!("notas: {}", b.notes.join(" | "))
-    }];
+        let mut lines = vec!["notas:".to_string()];
+        lines.extend(b.notes.iter().map(|n| format!("  {n}")));
+        lines
+    };
     tail.extend(unchanged_line(b.unchanged));
     tail.push(coverage_line(cov));
     fit(&head, &items, &tail, max_chars, limit)

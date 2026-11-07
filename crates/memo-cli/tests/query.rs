@@ -349,9 +349,11 @@ const ADD: [&str; 8] = [
     "humano",
 ];
 
-fn add_note(repo: &Repo, extra: &[&str], text: &str) -> Output {
-    let mut args: Vec<&str> = extra.to_vec();
+/// `globals` vão antes do subcomando (`--task`); `flags` depois de `note add` (`--confirm`).
+fn add_note(repo: &Repo, globals: &[&str], flags: &[&str], text: &str) -> Output {
+    let mut args: Vec<&str> = globals.to_vec();
     args.extend(ADD);
+    args.extend(flags);
     args.push(text);
     memo(repo, &args)
 }
@@ -361,7 +363,7 @@ fn add_note(repo: &Repo, extra: &[&str], text: &str) -> Output {
 /// THEN  exit code is 0 and the golden output shows the new proposta note
 #[test]
 fn test_given_note_add_when_run_then_golden_proposta_and_exit_0() {
-    let out = add_note(&Repo::fixture(), &[], "Limite é inteiro.");
+    let out = add_note(&Repo::fixture(), &[], &[], "Limite é inteiro.");
     assert_eq!(out.status.code(), Some(0));
     insta::assert_snapshot!(stdout(&out));
 }
@@ -416,7 +418,7 @@ fn test_given_bad_anchors_when_note_add_then_exit_2_and_exit_4() {
 #[test]
 fn test_given_note_on_symbol_when_query_symbol_then_notas_listed() {
     let repo = Repo::fixture();
-    add_note(&repo, &["--confirm"], "Limite é inteiro.");
+    add_note(&repo, &[], &["--confirm"], "Limite é inteiro.");
     let out = memo(&repo, &["query", "symbol", "CalculateLimitUseCase.execute"]);
     insta::assert_snapshot!(stdout(&out));
 }
@@ -427,7 +429,7 @@ fn test_given_note_on_symbol_when_query_symbol_then_notas_listed() {
 #[test]
 fn test_given_note_when_brief_then_notes_line_present() {
     let repo = open_repo();
-    add_note(&repo, &["--confirm"], "Limite é inteiro.");
+    add_note(&repo, &[], &["--confirm"], "Limite é inteiro.");
     let out = stdout(&memo(&repo, &["brief", "calculate limit"]));
     assert!(
         out.contains("regra confirmada") && out.contains("Limite é inteiro."),
@@ -441,7 +443,7 @@ fn test_given_note_when_brief_then_notes_line_present() {
 #[test]
 fn test_given_note_when_list_confirm_show_then_state_flow_visible() {
     let repo = Repo::fixture();
-    let added = stdout(&add_note(&repo, &[], "Limite é inteiro."));
+    let added = stdout(&add_note(&repo, &[], &[], "Limite é inteiro."));
     let id = added.split_whitespace().nth(1).unwrap().to_string();
     assert!(stdout(&memo(&repo, &["note", "list"])).contains("proposta"));
     assert_eq!(
@@ -465,7 +467,7 @@ fn test_given_note_when_list_confirm_show_then_state_flow_visible() {
 #[test]
 fn test_given_task_scoped_note_when_queried_without_task_then_hidden() {
     let repo = Repo::fixture();
-    add_note(&repo, &["--task", "lend-1"], "Só desta task.");
+    add_note(&repo, &["--task", "lend-1"], &[], "Só desta task.");
     let q = ["query", "symbol", "CalculateLimitUseCase.execute"];
     assert!(!stdout(&memo(&repo, &q)).contains("Só desta task."));
     let mut with_task = vec!["--task", "lend-1"];
