@@ -84,7 +84,7 @@ const ADDR_COLUMNS: &str =
     "s.qname, s.kind, s.is_test, COALESCE(f.path, ''), s.line_start, s.line_end";
 
 /// Nome relativo ao módulo do arquivo (`Classe.metodo`); sem arquivo, o último segmento.
-fn short_name(qname: &str, path: &str) -> String {
+pub(crate) fn short_name(qname: &str, path: &str) -> String {
     let module = module_of(path);
     qname
         .strip_prefix(&format!("{module}."))
@@ -129,6 +129,13 @@ fn resolve_qname(store: &SqliteStore, target: &str) -> Result<String, CoreError>
             candidates: found,
         }),
     }
+}
+
+pub(crate) fn addr_by_id(store: &SqliteStore, id: i64) -> Result<SymbolAddr, CoreError> {
+    let sql = format!(
+        "SELECT {ADDR_COLUMNS} FROM symbol s LEFT JOIN file f ON f.id = s.file_id WHERE s.id = ?1"
+    );
+    Ok(store.conn.query_row(&sql, [id], addr_from_row)?)
 }
 
 fn addr_of(store: &SqliteStore, qname: &str) -> Result<SymbolAddr, CoreError> {
@@ -358,6 +365,8 @@ pub struct Impact {
     pub consumers: Vec<RelItem>,
     pub protocol: Vec<RelItem>,
     pub tests: TestsInfo,
+    /// Itens omitidos por já terem sido entregues nesta task (spec §8.4).
+    pub unchanged: Option<usize>,
 }
 
 fn target_id(store: &SqliteStore, qname: &str) -> Result<i64, CoreError> {
@@ -569,6 +578,7 @@ pub fn impact(store: &SqliteStore, target: &str) -> Result<Impact, CoreError> {
         consumers,
         protocol: protocol_counterparts(store, id)?,
         tests: tests_for(store, &qname)?,
+        unchanged: None,
         target: addr,
     })
 }

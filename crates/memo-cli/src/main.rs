@@ -1,7 +1,9 @@
 mod render;
 
 use clap::{Parser, Subcommand};
+use memo_core::brief::{apply_delta, brief};
 use memo_core::config::Config;
+use memo_core::delta::apply_impact_delta;
 use memo_core::error::CoreError;
 use memo_core::index::index_with;
 use memo_core::query::{
@@ -40,6 +42,12 @@ struct Cli {
     limit: Option<usize>,
     #[arg(long, global = true, default_value_t = 6000)]
     max_chars: usize,
+    /// Só o que é novo desde a última chamada, mesmo sem `--task`.
+    #[arg(long, global = true)]
+    since_last: bool,
+    /// Tudo, ignorando o delta por task.
+    #[arg(long, global = true)]
+    full: bool,
     #[command(subcommand)]
     command: Cmd,
 }
@@ -51,6 +59,8 @@ enum Cmd {
         #[command(subcommand)]
         kind: Query,
     },
+    /// Âncoras, símbolos, contorno, padrão, escritores e notas para um pedido.
+    Brief { request: String },
 }
 
 #[derive(Subcommand)]
@@ -144,7 +154,21 @@ fn run(cli: &Cli) -> Result<String, Failure> {
     let store = open_indexed(cli)?;
     let cov = coverage(&store)?;
     let (max, limit) = (cli.max_chars, cli.limit);
-    let Cmd::Query { kind } = &cli.command;
+    let delta_task = cli
+        .task
+        .clone()
+        .or_else(|| cli.since_last.then(|| "-".to_string()));
+    let kind = match &cli.command {
+        Cmd::Query { kind } => kind,
+        Cmd::Brief { request } => {
+            let mut b = brief(&store, request)?;
+            if let Some(task) = &delta_task {
+                apply_delta(&store, task, &mut b, cli.full)?;
+            }
+            let text = render::brief_text(&b, "ok", cli.task.as_deref(), &cov, max, limit);
+            return finish(cli, "brief", json_value(&b)?, &cov, text);
+        }
+    };
     let (cmd, data, text) = match kind {
         Query::Symbol { target } => match symbol_info(&store, target) {
             Ok(info) => (
@@ -201,7 +225,10 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             )
         }
         Query::Impact { target } => {
-            let info = impact(&store, target)?;
+            let mut info = impact(&store, target)?;
+            if let Some(task) = &delta_task {
+                apply_impact_delta(&store, task, &mut info, cli.full)?;
+            }
             (
                 "query impact",
                 json_value(&info)?,
@@ -226,10 +253,20 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             )
         }
     };
+    finish(cli, cmd, data, &cov, text)
+}
+
+fn finish(
+    cli: &Cli,
+    cmd: &str,
+    data: serde_json::Value,
+    cov: &memo_core::query::Coverage,
+    text: String,
+) -> Result<String, Failure> {
     if cli.json {
         let envelope = serde_json::json!({
             "schema": 1, "cmd": cmd, "task": cli.task, "index": { "status": "ok" },
-            "data": data, "cobertura": json_value(&cov)?
+            "data": data, "cobertura": json_value(cov)?
         });
         return Ok(format!("{envelope}\n"));
     }

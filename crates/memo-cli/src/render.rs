@@ -1,5 +1,6 @@
 //! Formatação de saída em texto compacto (spec §8.3).
 
+use memo_core::brief::Brief;
 use memo_core::query::{
     Chain, ChainItem, Coverage, EdgeView, Impact, RelItem, Relation, SymbolAddr, SymbolInfo,
     TestsInfo, TypeInfo, WordInfo,
@@ -241,7 +242,94 @@ pub fn impact_text(
         &mut items,
     );
     tests_sections(&info.tests, &mut items);
-    let tail = ["notas: nenhuma".to_string(), coverage_line(cov)];
+    let mut tail = vec!["notas: nenhuma".to_string()];
+    tail.extend(unchanged_line(info.unchanged));
+    tail.push(coverage_line(cov));
+    fit(&head, &items, &tail, max_chars, limit)
+}
+
+fn dash_join(values: &[String]) -> String {
+    if values.is_empty() {
+        "-".to_string()
+    } else {
+        values.join(",")
+    }
+}
+
+fn unchanged_line(unchanged: Option<usize>) -> Option<String> {
+    unchanged
+        .filter(|n| *n > 0)
+        .map(|n| format!("inalterados: {n}"))
+}
+
+fn anchors_line(b: &Brief) -> String {
+    let anchors: Vec<String> = b
+        .anchors
+        .iter()
+        .map(|a| {
+            format!(
+                "{}({:.2}){}",
+                a.word,
+                a.score,
+                if a.approx { "~" } else { "" }
+            )
+        })
+        .collect();
+    let mut line = if anchors.is_empty() {
+        "âncoras: nenhuma".to_string()
+    } else {
+        format!("âncoras: {}", anchors.join(" "))
+    };
+    if !b.ignored.is_empty() {
+        line.push_str(&format!("   ignoradas: {}", b.ignored.join(" ")));
+    }
+    line
+}
+
+pub fn brief_text(
+    b: &Brief,
+    idx: &str,
+    task: Option<&str>,
+    cov: &Coverage,
+    max_chars: usize,
+    limit: Option<usize>,
+) -> String {
+    let task = task.map(|t| format!(" task={t}")).unwrap_or_default();
+    let head = vec![
+        format!("brief \"{}\"{task}  idx={idx}", b.request),
+        anchors_line(b),
+    ];
+    let mut items = Vec::new();
+    let symbols = b.symbols.iter().map(|s| item(&s.addr)).collect();
+    section("símbolos", symbols, &mut items);
+    let outline = b
+        .outline
+        .iter()
+        .map(|o| format!("  {} {}", o.symbol, o.links.join(" ; ")))
+        .collect();
+    section("contorno", outline, &mut items);
+    if let Some(p) = &b.pattern {
+        items.push(format!(
+            "padrão({}): verbos {} · papéis {} · camadas {}",
+            p.word,
+            dash_join(&p.verbs),
+            dash_join(&p.roles),
+            dash_join(&p.layers)
+        ));
+    }
+    let writers = b
+        .writers
+        .iter()
+        .map(|w| format!("  {} <- {}", w.attr, w.writers.join(", ")))
+        .collect();
+    section("escritores", writers, &mut items);
+    let mut tail = vec![if b.notes.is_empty() {
+        "notas: nenhuma".to_string()
+    } else {
+        format!("notas: {}", b.notes.join(" | "))
+    }];
+    tail.extend(unchanged_line(b.unchanged));
+    tail.push(coverage_line(cov));
     fit(&head, &items, &tail, max_chars, limit)
 }
 
