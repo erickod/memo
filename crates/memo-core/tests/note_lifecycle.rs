@@ -74,7 +74,7 @@ const EXECUTE: &str = "sym:CalculateLimitUseCase.execute";
 /// WHEN  the repository is reindexed
 /// THEN  the note is re-anchored on '...compute', stays confirmada and is not stale
 #[test]
-fn test_given_note_on_renamed_symbol_when_reindexed_then_reanchored_without_stale() {
+fn test_given_renamed_function_same_body_when_indexed_then_symbol_renamed_note_reanchored() {
     let mut e = env("");
     let id = e.add(EXECUTE, true);
     e.edit("def execute(", "def compute(");
@@ -106,7 +106,7 @@ fn test_given_note_when_signature_changes_then_stale_with_estado_anterior() {
 /// WHEN  'recheck' runs
 /// THEN  the note is confirmada again, estado_anterior is cleared and the hashes are current
 #[test]
-fn test_given_stale_note_when_recheck_then_hashes_updated_and_previous_state_restored() {
+fn test_given_changed_signature_when_indexed_then_note_stale_and_recheck_restores() {
     let mut e = env("");
     let id = e.add(EXECUTE, true);
     let old = e.notes.get(&id).unwrap();

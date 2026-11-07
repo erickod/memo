@@ -55,7 +55,7 @@ fn test_given_init_twice_when_run_then_instruction_block_not_duplicated() {
 /// WHEN  'memo init claude --mcp --print' runs
 /// THEN  the golden plan is printed and nothing is written: no memo dir, no CLAUDE.md, no .mcp.json (A13)
 #[test]
-fn test_given_init_print_when_run_then_nothing_written() {
+fn test_given_init_print_when_run_then_no_file_written() {
     let repo = committed();
     let o = memo(&repo, &["init", "claude", "--mcp", "--print"]);
     assert_eq!(o.status.code(), Some(0));

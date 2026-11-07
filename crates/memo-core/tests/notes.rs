@@ -99,7 +99,7 @@ fn test_given_valid_sym_anchor_when_added_then_proposta_with_hashes_and_file_wri
 /// WHEN  it is added
 /// THEN  its state is 'confirmada'
 #[test]
-fn test_given_confirm_flag_when_added_then_state_confirmada() {
+fn test_given_note_with_confirm_flag_when_added_then_state_confirmada() {
     let e = env("");
     let mut n = new_note(&sym(EXECUTE), "Limite é inteiro.");
     n.confirm = true;
@@ -113,7 +113,7 @@ fn test_given_confirm_flag_when_added_then_state_confirmada() {
 /// WHEN  a note is added
 /// THEN  the error is NotFound (exit 2)
 #[test]
-fn test_given_missing_symbol_anchor_when_added_then_not_found() {
+fn test_given_missing_symbol_anchor_when_note_added_then_exit_2() {
     let e = env("");
     let err = e
         .notes
@@ -126,7 +126,7 @@ fn test_given_missing_symbol_anchor_when_added_then_not_found() {
 /// WHEN  a note is added
 /// THEN  the error is Validation with code ancora_generica (exit 4)
 #[test]
-fn test_given_skeleton_word_anchor_when_added_then_validation_ancora_generica() {
+fn test_given_skeleton_word_anchor_when_note_added_then_exit_4() {
     let e = env("skeleton = [\"usecase\"]\n");
     let err = e
         .notes
@@ -161,7 +161,7 @@ fn test_given_unknown_word_anchor_when_added_then_not_found() {
 /// WHEN  it is added
 /// THEN  the error is Validation with code texto_longo and no file is written
 #[test]
-fn test_given_text_over_1200_chars_when_added_then_validation_error() {
+fn test_given_note_over_1200_chars_when_added_then_rejected() {
     let e = env("");
     let err = e
         .notes
@@ -320,7 +320,7 @@ fn test_given_notes_in_all_states_when_notes_for_then_weighted_and_inactive_excl
 /// WHEN  notes are listed and a new note is added
 /// THEN  the stray file is ignored and is the only '.tmp' left (the add leaves none of its own)
 #[test]
-fn test_given_interrupted_write_when_listed_then_tmp_ignored_and_no_tmp_left() {
+fn test_given_interrupt_during_note_write_when_restarted_then_md_intact_and_index_rebuilt() {
     let e = env("");
     std::fs::create_dir_all(&e.dir).unwrap();
     std::fs::write(e.dir.join("n-dead0000.md.tmp"), "---\nid: broken").unwrap();

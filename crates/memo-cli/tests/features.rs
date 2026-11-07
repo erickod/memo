@@ -40,7 +40,7 @@ fn committed() -> Repo {
 /// WHEN  a function is added to the work tree and queried with '--task t1' and, apart, in the base
 /// THEN  the feature finds it, the base (--no-index) does not, and base.db is byte-identical (A11)
 #[test]
-fn test_given_derive_when_file_edited_then_only_feature_changes_base_db_identical() {
+fn test_given_derived_feature_when_file_edited_then_base_db_byte_identical() {
     let repo = committed();
     memo(&repo, &["index"]);
     assert_eq!(memo(&repo, &["derive", "t1"]).status.code(), Some(0));
@@ -155,7 +155,7 @@ fn test_given_promote_when_task_notes_then_report_and_scope_repo() {
 /// WHEN  'memo drop t1' runs, then again
 /// THEN  the first exits 0 and removes feature and note; the second exits 2
 #[test]
-fn test_given_drop_when_run_then_feature_and_task_notes_removed() {
+fn test_given_dropped_task_when_run_then_feature_db_and_task_notes_removed() {
     let repo = committed();
     memo(&repo, &["derive", "t1"]);
     let id = add_task_note(&repo, "t1", "sym:CalculateLimitUseCase.execute");
@@ -183,7 +183,7 @@ fn test_given_status_when_run_then_golden_lists_base_features_notes() {
 /// WHEN  'memo query' runs
 /// THEN  it exits 3 (index unavailable)
 #[test]
-fn test_given_lock_held_when_memo_runs_then_exit_3() {
+fn test_given_lock_held_over_30s_when_queried_then_exit_3() {
     let repo = committed();
     memo(&repo, &["index"]);
     let _held = DbLock::acquire(
@@ -248,4 +248,53 @@ fn test_given_merged_branch_when_status_then_task_listed_as_promotable() {
     assert!(made.success());
     let status = out(&memo(&repo, &["status"]));
     assert!(status.contains("promovíveis: t1"), "{status}");
+}
+
+/// GIVEN a confirmed note on execute, an indexed base and a signature change in the work tree
+/// WHEN  a query runs with '--no-index' and the note is shown with '--no-index'
+/// THEN  the event count is unchanged and the note is still 'confirmada' (P4)
+#[test]
+fn test_given_no_index_flag_when_query_run_then_no_note_transition_no_event() {
+    let repo = committed();
+    let added = memo(
+        &repo,
+        &[
+            "note",
+            "add",
+            "--tipo",
+            "regra",
+            "--ancora",
+            "sym:CalculateLimitUseCase.execute",
+            "--origem",
+            "humano",
+            "--confirm",
+            "Limite é inteiro.",
+        ],
+    );
+    let id = out(&added).split_whitespace().nth(1).unwrap().to_string();
+    let events = || {
+        memo_core::store::SqliteStore::open(&repo.path().join(".git/memo/base.db"))
+            .unwrap()
+            .events()
+            .unwrap()
+            .len()
+    };
+    let before = events();
+    let source = std::fs::read_to_string(repo.path().join(PY)).unwrap();
+    repo.write(PY, &source.replace("rate: int)", "rate: int, extra=0)"));
+
+    let query = memo(
+        &repo,
+        &[
+            "--no-index",
+            "query",
+            "symbol",
+            "CalculateLimitUseCase.execute",
+        ],
+    );
+    assert_eq!(query.status.code(), Some(0));
+    let shown = out(&memo(&repo, &["--no-index", "note", "show", &id]));
+
+    assert_eq!(events(), before);
+    assert!(shown.contains("estado: confirmada"), "{shown}");
 }

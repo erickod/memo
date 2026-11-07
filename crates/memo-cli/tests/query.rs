@@ -32,7 +32,7 @@ fn test_given_unique_suffix_when_query_symbol_then_prints_address_and_signature(
 /// WHEN  'memo query symbol execute' runs
 /// THEN  exit code is 2 and stdout lists the five candidate qnames
 #[test]
-fn test_given_ambiguous_suffix_when_query_symbol_then_candidates_and_exit_2() {
+fn test_given_ambiguous_suffix_when_queried_then_candidates_and_exit_2() {
     let repo = Repo::fixture();
     let out = memo(&repo, &["query", "symbol", "execute"]);
     assert_eq!(out.status.code(), Some(2));
@@ -132,7 +132,7 @@ fn test_given_typed_param_when_query_type_then_consumers_listed() {
 /// WHEN  'memo query callers SqlLimitRepository.save --depth 2' runs
 /// THEN  the golden output lists execute (approximate, depth 1) and its callers at depth 2 with coverage
 #[test]
-fn test_given_callee_when_query_callers_then_lists_callers_with_depth() {
+fn test_given_protocol_consumer_when_callers_then_included_with_cobertura() {
     let repo = Repo::fixture();
     let out = memo(
         &repo,
@@ -259,7 +259,7 @@ fn test_given_request_when_brief_then_golden_sections() {
 /// WHEN  'memo brief' runs twice
 /// THEN  both stdout outputs are byte-identical
 #[test]
-fn test_given_same_brief_twice_when_run_then_stdout_bytes_identical() {
+fn test_given_same_brief_twice_when_run_then_bytes_identical() {
     let repo = open_repo();
     let a = memo(&repo, &["brief", "calculate limit"]);
     let b = memo(&repo, &["brief", "calculate limit"]);
@@ -270,7 +270,7 @@ fn test_given_same_brief_twice_when_run_then_stdout_bytes_identical() {
 /// WHEN  'memo brief calculate limit' runs
 /// THEN  stdout has at most 700 chars and its last line is '+N omitidos'
 #[test]
-fn test_given_small_max_chars_when_brief_then_last_line_omitidos() {
+fn test_given_output_over_max_chars_when_rendered_then_last_line_omitidos() {
     let out = memo(
         &open_repo(),
         &["--max-chars", "700", "brief", "calculate limit"],
@@ -515,7 +515,7 @@ fn test_given_signature_change_when_symbol_queried_then_note_shown_as_stale() {
 /// WHEN  a query runs with '--no-index'
 /// THEN  the note is still 'confirmada' (P4: only reindexing changes notes)
 #[test]
-fn test_given_no_index_flag_when_signature_changed_then_note_state_unchanged() {
+fn test_given_no_index_flag_when_note_anchor_changed_then_state_unchanged() {
     let repo = Repo::fixture();
     add_note(&repo, &[], &["--confirm"], "Limite é inteiro.");
     memo(&repo, &["index"]);
@@ -536,7 +536,7 @@ fn test_given_no_index_flag_when_signature_changed_then_note_state_unchanged() {
 /// WHEN  'memo note recheck <id>' runs and the symbol is queried
 /// THEN  recheck exits 0 and the note is 'confirmada' again
 #[test]
-fn test_given_stale_note_when_note_recheck_then_confirmada_again() {
+fn test_given_stale_note_when_recheck_then_estado_anterior_restored() {
     let repo = Repo::fixture();
     let added = stdout(&add_note(&repo, &[], &["--confirm"], "Limite é inteiro."));
     let id = added.split_whitespace().nth(1).unwrap().to_string();

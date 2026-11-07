@@ -128,7 +128,7 @@ fn task_note(ancora: &str, task: &str) -> NewNote {
 /// WHEN  the task is promoted against the base graph
 /// THEN  the first becomes scope 'repo' and stays proposta, the second becomes 'orfa'
 #[test]
-fn test_given_task_notes_when_promoted_then_scope_repo_and_missing_anchor_orfa() {
+fn test_given_task_promoted_when_base_reindexed_then_notes_scope_repo() {
     let repo = Repo::fixture();
     let notes = NoteDir::new(&repo.path().join(".git/memo/notes"));
     let mut feature = SqliteStore::open_in_memory().unwrap();
