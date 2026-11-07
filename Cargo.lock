@@ -362,6 +362,7 @@ dependencies = [
  "clap",
  "insta",
  "memo-core",
+ "memo-harness",
  "serde",
  "serde_json",
 ]
@@ -384,6 +385,10 @@ dependencies = [
 [[package]]
 name = "memo-harness"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "memo-mcp"

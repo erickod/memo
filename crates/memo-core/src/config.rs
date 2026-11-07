@@ -96,6 +96,11 @@ impl Config {
         Ok(config)
     }
 
+    /// O `memo.toml` com as sementes, para o `init` gravar.
+    pub fn to_toml(&self) -> String {
+        todo!("spec §6.1 memo.toml")
+    }
+
     /// Lê `<dir>/memo.toml`; sem o arquivo, devolve as sementes.
     pub fn load(dir: &Path) -> Result<Self, CoreError> {
         match std::fs::read_to_string(dir.join("memo.toml")) {

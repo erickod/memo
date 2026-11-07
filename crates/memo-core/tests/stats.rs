@@ -156,3 +156,13 @@ fn test_given_same_tree_when_stats_computed_then_dump_bytes_identical() {
     assert!(dumps[0].contains("stats|limit|"));
     assert_eq!(dumps[0], dumps[1]);
 }
+
+/// GIVEN the default config serialized by to_toml
+/// WHEN  the text is parsed again
+/// THEN  the parsed config equals the default
+#[test]
+fn test_given_default_config_when_serialized_then_roundtrip_equals_default() {
+    let text = Config::default().to_toml();
+    assert_eq!(Config::from_toml(&text).unwrap(), Config::default());
+    assert!(text.contains("min_specificity = 0.35"));
+}
