@@ -481,6 +481,7 @@ fn edit_py(repo: &Repo, from: &str, to: &str) {
     let source = std::fs::read_to_string(repo.path().join(PY)).unwrap();
     assert!(source.contains(from), "fixture changed: {from}");
     repo.write(PY, &source.replace(from, to));
+    repo.commit_all();
 }
 
 /// GIVEN the fixture and then execute renamed to 'compute' with the same body
@@ -566,4 +567,68 @@ fn test_given_renamed_symbol_when_note_shown_then_reanchored_and_confirmada() {
     let shown = stdout(&memo(&repo, &["note", "show", &id]));
     assert!(shown.contains("CalculateLimitUseCase.compute"), "{shown}");
     assert!(shown.contains("estado: confirmada"), "{shown}");
+}
+
+/// GIVEN a committed fixture whose base was indexed from main, and a function added only in the work tree
+/// WHEN  'memo query symbol only_here' runs without any derived feature
+/// THEN  it exits 2: the base is the main ref graph, not the work tree (D12)
+#[test]
+fn test_given_ref_base_when_worktree_changed_without_feature_then_query_reads_ref_graph() {
+    let repo = Repo::fixture();
+    assert_eq!(memo(&repo, &["index"]).status.code(), Some(0));
+    let source = std::fs::read_to_string(repo.path().join(PY)).unwrap();
+    repo.write(PY, &format!("{source}\n\ndef only_here():\n    pass\n"));
+    let o = memo(&repo, &["query", "symbol", "only_here"]);
+    assert_eq!(o.status.code(), Some(2), "{}", stdout(&o));
+}
+
+/// GIVEN a feature derived for 't1' and a function added in the work tree afterwards
+/// WHEN  'memo query symbol only_here' runs with '--task t1' and without it
+/// THEN  only the feature finds it (exit 0 versus exit 2)
+#[test]
+fn test_given_derived_feature_when_worktree_changed_then_only_feature_sees_change() {
+    let repo = Repo::fixture();
+    assert_eq!(memo(&repo, &["derive", "t1"]).status.code(), Some(0));
+    let source = std::fs::read_to_string(repo.path().join(PY)).unwrap();
+    repo.write(PY, &format!("{source}\n\ndef only_here():\n    pass\n"));
+    let with = memo(&repo, &["--task", "t1", "query", "symbol", "only_here"]);
+    assert_eq!(with.status.code(), Some(0), "{}", stdout(&with));
+    let without = memo(&repo, &["query", "symbol", "only_here"]);
+    assert_eq!(without.status.code(), Some(2));
+}
+
+/// GIVEN a confirmed repo note on execute and an uncommitted signature change, with no feature
+/// WHEN  a query runs and the note is shown
+/// THEN  the note is still 'confirmada' because the work tree never reaches the base
+#[test]
+fn test_given_repo_notes_when_worktree_changed_without_feature_then_notes_not_stale() {
+    let repo = Repo::fixture();
+    let added = stdout(&add_note(&repo, &[], &["--confirm"], "Limite é inteiro."));
+    let id = added.split_whitespace().nth(1).unwrap().to_string();
+    let source = std::fs::read_to_string(repo.path().join(PY)).unwrap();
+    repo.write(PY, &source.replace("rate: int)", "rate: int, extra=0)"));
+    memo(&repo, &["query", "symbol", "CalculateLimitUseCase.execute"]);
+    let shown = stdout(&memo(&repo, &["note", "show", &id]));
+    assert!(shown.contains("estado: confirmada"), "{shown}");
+}
+
+/// GIVEN a file 'n-bad00000.md' with garbage in the notes directory
+/// WHEN  'memo --json query symbol' runs
+/// THEN  it exits 0 and cobertura.notas_com_erro is 1
+#[test]
+fn test_given_corrupted_note_file_when_queried_then_skipped_and_counted_in_cobertura() {
+    let repo = Repo::fixture();
+    repo.write(".git/memo/notes/n-bad00000.md", "garbage");
+    let o = memo(
+        &repo,
+        &["--json", "query", "symbol", "CalculateLimitUseCase.execute"],
+    );
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_str(&stdout(&o)).unwrap();
+    assert_eq!(json["cobertura"]["notas_com_erro"], 1);
 }

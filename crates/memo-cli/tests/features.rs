@@ -31,9 +31,7 @@ fn db_bytes(repo: &Repo) -> Vec<u8> {
 }
 
 fn committed() -> Repo {
-    let repo = Repo::fixture();
-    repo.commit_all();
-    repo
+    Repo::fixture()
 }
 
 /// GIVEN a committed fixture, a base indexed from the work tree and a feature derived for 't1'

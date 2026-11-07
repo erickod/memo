@@ -22,9 +22,7 @@ fn read(repo: &Repo, rel: &str) -> String {
 }
 
 fn committed() -> Repo {
-    let repo = Repo::fixture();
-    repo.commit_all();
-    repo
+    Repo::fixture()
 }
 
 /// GIVEN a committed repository
@@ -154,7 +152,7 @@ fn test_given_init_positional_repo_when_run_elsewhere_then_installs_in_that_repo
 /// THEN  it still exits 0, installs the block and says the base is deferred
 #[test]
 fn test_given_repo_without_main_branch_when_init_then_installs_and_defers_base() {
-    let repo = Repo::fixture();
+    let repo = Repo::fixture_uncommitted();
     let o = memo(&repo, &["init", "claude"]);
     assert_eq!(o.status.code(), Some(0));
     assert!(out(&o).contains("base: adiada"), "{}", out(&o));

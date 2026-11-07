@@ -27,7 +27,15 @@ fn copy_dir(from: &Path, to: &Path) {
 }
 
 impl Repo {
+    /// A fixture commitada na branch `main`: a base do `memo` vem da ref principal.
     pub fn fixture() -> Self {
+        let repo = Self::fixture_uncommitted();
+        repo.commit_all();
+        repo
+    }
+
+    /// A fixture como repositório git sem nenhum commit.
+    pub fn fixture_uncommitted() -> Self {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let root = std::env::temp_dir().join(format!("memo-test-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -60,7 +68,14 @@ impl Repo {
             assert!(status.success(), "git {args:?}");
         };
         git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "init"]);
+        let staged = Command::new("git")
+            .args(["diff", "--cached", "--quiet"])
+            .current_dir(&self.root)
+            .status()
+            .unwrap();
+        if !staged.success() {
+            git(&["commit", "-q", "-m", "init"]);
+        }
         git(&["branch", "-M", "main"]);
     }
 
