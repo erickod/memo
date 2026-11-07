@@ -1,0 +1,11 @@
+---
+source: crates/memo-cli/tests/features.rs
+expression: out(&o)
+---
+status
+base: arquivos=10 símbolos=36 ref=- commit=-
+features:
+  t1 arquivos=10 símbolos=36 ref=- commit=-
+notas: confirmada=0 orfa=0 proposta=1 stale=0 substituida=0
+promovíveis: -
+cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro

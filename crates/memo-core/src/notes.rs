@@ -601,13 +601,49 @@ impl NoteDir {
 
     /// Troca `task:<id>` por `repo` nas notas da task e confere cada âncora na `base`;
     /// âncora ausente vira `orfa` (spec §7.5).
-    pub fn promote(&self, _base: &SqliteStore, _task: &str) -> Result<PromoteReport, CoreError> {
-        todo!("spec §7.5")
+    pub fn promote(&self, base: &SqliteStore, task: &str) -> Result<PromoteReport, CoreError> {
+        let scope = format!("task:{task}");
+        let mut report = PromoteReport {
+            promoted: Vec::new(),
+            orphaned: Vec::new(),
+        };
+        let mut events = Vec::new();
+        for mut note in self.list()?.into_iter().filter(|n| n.escopo == scope) {
+            if !is_active(&note) {
+                continue;
+            }
+            let before = note.estado.clone();
+            note.escopo = "repo".to_string();
+            if anchor_present(base, &note.ancora)? {
+                events.push(NewEvent {
+                    kind: "NOTE_PROMOTED",
+                    subject: Some(note.id.clone()),
+                    payload: Some(serde_json::json!({ "task": task }).to_string()),
+                });
+                self.write(&note)?;
+                report.promoted.push(note);
+            } else {
+                note.estado = "orfa".to_string();
+                events.push(note_event("NOTE_ORPHANED", &note, &before));
+                self.write(&note)?;
+                report.orphaned.push(note);
+            }
+        }
+        if !events.is_empty() {
+            record_new_batch(&base.conn, &events)?;
+        }
+        Ok(report)
     }
 
     /// Apaga as notas com escopo `task:<id>`; devolve quantas.
-    pub fn drop_task(&self, _task: &str) -> Result<usize, CoreError> {
-        todo!("spec §6.4 drop")
+    pub fn drop_task(&self, task: &str) -> Result<usize, CoreError> {
+        let scope = format!("task:{task}");
+        let mut removed = 0;
+        for note in self.list()?.into_iter().filter(|n| n.escopo == scope) {
+            std::fs::remove_file(self.path(&note.id))?;
+            removed += 1;
+        }
+        Ok(removed)
     }
 
     /// Notas de escopo `repo` e, com `task`, as de `task:<id>`; em qualquer estado.
@@ -660,6 +696,34 @@ fn current_hashes(graph: &SqliteStore, qname: &str) -> Result<Option<(String, St
             .collect::<String>()
     };
     Ok(row.map(|(sig, body)| (cut(sig), cut(body))))
+}
+
+/// A âncora existe no grafo (sem checar `esqueleto`: a nota já foi aceita antes).
+fn anchor_present(graph: &SqliteStore, anchor: &str) -> Result<bool, CoreError> {
+    let (kind, rest) = anchor.split_once(':').unwrap_or(("", ""));
+    match kind {
+        "sym" => symbol_exists(graph, rest),
+        "word" => exists(
+            graph,
+            "SELECT EXISTS(SELECT 1 FROM word w JOIN occurrence o ON o.word_id = w.id WHERE w.text = ?1)",
+            rest,
+        ),
+        "file" => exists(
+            graph,
+            "SELECT EXISTS(SELECT 1 FROM file WHERE path = ?1)",
+            rest,
+        ),
+        "edge" => {
+            let (from, to) = rest.split_once("->").unwrap_or(("", ""));
+            Ok(graph.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM edge e JOIN symbol a ON a.id = e.src
+                 JOIN symbol b ON b.id = e.dst WHERE a.qname = ?1 AND b.qname = ?2)",
+                [from, to],
+                |r| r.get(0),
+            )?)
+        }
+        _ => Ok(false),
+    }
 }
 
 fn symbol_exists(graph: &SqliteStore, qname: &str) -> Result<bool, CoreError> {
@@ -762,17 +826,25 @@ fn judge(
     })
 }
 
+/// Contexto das transições: config, o que o lote mudou e o escopo das notas avaliadas.
+pub(crate) struct Transitions<'a> {
+    pub config: &'a Config,
+    pub delta: &'a Delta,
+    pub scope: &'a str,
+}
+
 /// Transições de nota da §7.3, calculadas contra o grafo já atualizado. Reescreve os `.md`
 /// que mudam e registra `NOTE_STALE` e `NOTE_ORPHANED` no lote da indexação. Devolve se gravou.
 pub(crate) fn apply_transitions(
     graph: &SqliteStore,
-    config: &Config,
     dir: &NoteDir,
-    delta: &Delta,
+    ctx: &Transitions,
     summary: &mut EventSummary,
 ) -> Result<bool, CoreError> {
+    let (config, delta) = (ctx.config, ctx.delta);
     let mut events: Vec<NewEvent> = Vec::new();
-    for mut note in dir.list()?.into_iter().filter(is_active) {
+    let in_scope = |n: &Note| is_active(n) && n.escopo == ctx.scope;
+    for mut note in dir.list()?.into_iter().filter(in_scope) {
         let ancora = rename_anchor(&note.ancora, &delta.renames);
         let secundarias: Vec<String> = note
             .secundarias

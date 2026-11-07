@@ -1,0 +1,7 @@
+---
+source: crates/memo-cli/tests/features.rs
+expression: out(&o)
+---
+promote t1  base=main  promovidas=1 órfãs=1
+órfãs:
+  n-o1l27erx regra orfa  only_in_feature: Regra.

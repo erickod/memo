@@ -232,3 +232,20 @@ fn test_given_two_concurrent_indexes_when_run_then_serialized_no_lost_events() {
         .count();
     assert_eq!(created, 1);
 }
+
+/// GIVEN a derived task 't1' and a branch 't1' already merged into main
+/// WHEN  'memo status' runs
+/// THEN  the promotable line is 'promovíveis: t1'
+#[test]
+fn test_given_merged_branch_when_status_then_task_listed_as_promotable() {
+    let repo = committed();
+    memo(&repo, &["derive", "t1"]);
+    let made = Command::new("git")
+        .args(["branch", "t1"])
+        .current_dir(repo.path())
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let status = out(&memo(&repo, &["status"]));
+    assert!(status.contains("promovíveis: t1"), "{status}");
+}

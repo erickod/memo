@@ -274,6 +274,60 @@ pub fn index_text(report: Option<&memo_core::index::IndexReport>, cov: &Coverage
     )
 }
 
+pub fn promote_text(task: &str, main: &str, report: &memo_core::notes::PromoteReport) -> String {
+    let mut out = format!(
+        "promote {task}  base={main}  promovidas={} órfãs={}\n",
+        report.promoted.len(),
+        report.orphaned.len()
+    );
+    if !report.orphaned.is_empty() {
+        out.push_str("órfãs:\n");
+        for note in &report.orphaned {
+            out.push_str(&format!("  {}\n", note.summary()));
+        }
+    }
+    out
+}
+
+pub fn status_text(s: &memo_core::status::Status, cov: Option<&Coverage>) -> String {
+    let graph = |g: &memo_core::status::GraphInfo| {
+        let commit = g
+            .indexed_commit
+            .as_deref()
+            .map_or("-", |c| &c[..c.len().min(7)]);
+        format!(
+            "arquivos={} símbolos={} ref={} commit={commit}",
+            g.files,
+            g.symbols,
+            g.indexed_ref.as_deref().unwrap_or("-")
+        )
+    };
+    let mut out = String::from("status\n");
+    match &s.base {
+        Some(base) => out.push_str(&format!("base: {}\n", graph(base))),
+        None => out.push_str("base: ausente\n"),
+    }
+    out.push_str("features:\n");
+    if s.features.is_empty() {
+        out.push_str("  nenhuma\n");
+    }
+    for (task, g) in &s.features {
+        out.push_str(&format!("  {task} {}\n", graph(g)));
+    }
+    let notes: Vec<String> = s.notes.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    out.push_str(&format!("notas: {}\n", notes.join(" ")));
+    let promotable = if s.promotable.is_empty() {
+        "-".to_string()
+    } else {
+        s.promotable.join(",")
+    };
+    out.push_str(&format!("promovíveis: {promotable}\n"));
+    if let Some(c) = cov {
+        out.push_str(&format!("{}\n", coverage_line(c)));
+    }
+    out
+}
+
 pub fn note_added_text(note: &Note, conflicts: &[Note]) -> String {
     let mut out = format!("note {} {}  {}\n", note.id, note.estado, note.ancora);
     if !conflicts.is_empty() {

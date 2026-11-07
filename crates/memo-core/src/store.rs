@@ -1,7 +1,7 @@
 //! Persistência do grafo em SQLite (spec §4).
 
 use crate::error::CoreError;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::fmt::Write;
 use std::path::Path;
 
@@ -109,27 +109,50 @@ impl SqliteStore {
         )?)
     }
 
-    pub fn set_meta(&self, _key: &str, _value: &str) -> Result<(), CoreError> {
-        todo!("spec §4 meta")
+    /// Grava uma chave de `meta`; não escreve se o valor já é o mesmo.
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<(), CoreError> {
+        if self.get_meta(key)?.as_deref() == Some(value) {
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [key, value],
+        )?;
+        Ok(())
     }
 
-    pub fn get_meta(&self, _key: &str) -> Result<Option<String>, CoreError> {
-        todo!("spec §4 meta")
+    pub fn get_meta(&self, key: &str) -> Result<Option<String>, CoreError> {
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+            .optional()?)
     }
 
     /// Copia o banco inteiro para `path` pela API de backup do SQLite (spec §6.4).
-    pub fn backup_to(&self, _path: &Path) -> Result<(), CoreError> {
-        todo!("spec §6.4 derive")
+    pub fn backup_to(&self, path: &Path) -> Result<(), CoreError> {
+        let mut target = Connection::open(path)?;
+        let backup = rusqlite::backup::Backup::new(&self.conn, &mut target)?;
+        backup.run_to_completion(64, std::time::Duration::ZERO, None)?;
+        Ok(())
     }
 
     /// `(arquivos, símbolos)` do grafo.
     pub fn counts(&self) -> Result<(i64, i64), CoreError> {
-        todo!("spec §8.2 status")
+        let count = |sql: &str| -> Result<i64, CoreError> {
+            Ok(self.conn.query_row(sql, [], |r| r.get(0))?)
+        };
+        Ok((
+            count("SELECT COUNT(*) FROM file")?,
+            count("SELECT COUNT(*) FROM symbol")?,
+        ))
     }
 
     /// Marca todos os arquivos como desatualizados, para reextrair na próxima indexação.
     pub fn invalidate_files(&self) -> Result<(), CoreError> {
-        todo!("spec §8.2 index --full")
+        self.conn
+            .execute("UPDATE file SET hash = '', mtime_ns = -1, size = -1", [])?;
+        Ok(())
     }
 
     /// Todos os eventos, na ordem em que foram gravados.

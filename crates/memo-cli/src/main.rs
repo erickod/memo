@@ -1,20 +1,19 @@
+mod lifecycle;
 mod render;
+mod workspace;
 
 use clap::{Parser, Subcommand};
 use memo_core::brief::{apply_delta, brief_with};
-use memo_core::config::Config;
 use memo_core::delta::apply_impact_delta;
 use memo_core::error::CoreError;
-use memo_core::index::{IndexReport, index_with_notes};
 use memo_core::notes::{NewNote, NoteDir, format_utc, notes_for};
 use memo_core::query::{
     callees, callers, coverage, impact, readers, symbol_info, tests_for, type_info, word_info,
     writers,
 };
-use memo_core::source::WorkTree;
 use memo_core::store::SqliteStore;
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::path::PathBuf;
+use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const EXIT_USAGE: u8 = 1;
@@ -63,7 +62,27 @@ enum Cmd {
         kind: Query,
     },
     /// Reindexa e mostra o resumo dos eventos do lote.
-    Index,
+    Index {
+        /// Indexa uma ref git sem checkout.
+        #[arg(long = "ref")]
+        git_ref: Option<String>,
+        /// Reextrai todos os arquivos, mesmo os inalterados.
+        #[arg(long)]
+        full: bool,
+    },
+    /// Cria o grafo da feature, copiado da base e reindexado na árvore atual.
+    Derive {
+        task: String,
+        /// Indexa esta ref como base antes de copiar.
+        #[arg(long)]
+        from: Option<String>,
+    },
+    /// Depois do merge: reindexa a base pela principal e promove as notas da task.
+    Promote { task: String },
+    /// Apaga o grafo da feature e as notas da task.
+    Drop { task: String },
+    /// Base, features, notas por estado e tasks promovíveis.
+    Status,
     /// Âncoras, símbolos, contorno, padrão, escritores e notas para um pedido.
     Brief { request: String },
     /// Notas ancoradas nos símbolos.
@@ -160,47 +179,6 @@ impl From<CoreError> for Failure {
     }
 }
 
-fn git(repo: &Path, args: &[&str]) -> Result<String, Failure> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .map_err(|e| Failure::Internal(e.to_string()))?;
-    if !out.status.success() {
-        return Err(Failure::Index(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-/// Abre `$COMMON/memo/base.db` e reindexa a árvore de trabalho, salvo com `--no-index`.
-fn open_indexed(cli: &Cli) -> Result<(SqliteStore, PathBuf, Option<IndexReport>), Failure> {
-    let start = cli.repo.clone().unwrap_or_else(|| PathBuf::from("."));
-    let root = PathBuf::from(git(&start, &["rev-parse", "--show-toplevel"])?);
-    let common = PathBuf::from(git(
-        &root,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?);
-    let dir = common.join("memo");
-    std::fs::create_dir_all(&dir).map_err(|e| Failure::Internal(e.to_string()))?;
-    let config = Config::load(&dir)?;
-    let mut store = SqliteStore::open(&dir.join("base.db"))?;
-    let notes = NoteDir::new(&dir.join("notes"));
-    let report = if cli.no_index {
-        None
-    } else {
-        Some(index_with_notes(
-            &WorkTree::new(&root),
-            &mut store,
-            &config,
-            &notes,
-        )?)
-    };
-    Ok((store, dir, report))
-}
-
 /// Carimbo da nota: `MEMO_NOW` (testes) ou o relógio, em UTC.
 fn now_stamp() -> String {
     if let Ok(fixed) = std::env::var("MEMO_NOW") {
@@ -217,7 +195,45 @@ fn json_value<T: serde::Serialize>(value: &T) -> Result<serde_json::Value, Failu
 }
 
 fn run(cli: &Cli) -> Result<String, Failure> {
-    let (store, memo_dir, report) = open_indexed(cli)?;
+    let opts = match &cli.command {
+        Cmd::Index { git_ref, full } => workspace::IndexOpts {
+            git_ref: git_ref.clone(),
+            full: *full,
+        },
+        _ => workspace::IndexOpts::default(),
+    };
+    match &cli.command {
+        Cmd::Derive { task, from } => {
+            let text = lifecycle::derive(cli, task, from.as_deref())?;
+            return finish_plain(cli, "derive", &text);
+        }
+        Cmd::Promote { task } => {
+            let text = lifecycle::promote(cli, task)?;
+            return finish_plain(cli, "promote", &text);
+        }
+        Cmd::Drop { task } => {
+            let text = lifecycle::drop(cli, task)?;
+            return finish_plain(cli, "drop", &text);
+        }
+        Cmd::Status => {
+            let (text, data) = lifecycle::status_text(cli)?;
+            return Ok(if cli.json {
+                format!(
+                    "{}\n",
+                    serde_json::json!({ "schema": 1, "cmd": "status", "task": cli.task, "data": data })
+                )
+            } else {
+                text
+            });
+        }
+        _ => {}
+    }
+    let workspace::Opened {
+        store,
+        memo_dir,
+        report,
+        _lock,
+    } = workspace::open_indexed(cli, &opts)?;
     let notes_dir = NoteDir::new(&memo_dir.join("notes"));
     let cov = coverage(&store)?;
     let (max, limit) = (cli.max_chars, cli.limit);
@@ -227,7 +243,8 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         .or_else(|| cli.since_last.then(|| "-".to_string()));
     let kind = match &cli.command {
         Cmd::Query { kind } => kind,
-        Cmd::Index => {
+        Cmd::Derive { .. } | Cmd::Promote { .. } | Cmd::Drop { .. } | Cmd::Status => unreachable!(),
+        Cmd::Index { .. } => {
             let text = render::index_text(report.as_ref(), &cov);
             return finish(cli, "index", json_value(&report.is_some())?, &cov, text);
         }
@@ -397,6 +414,16 @@ fn run_note(
         }
     };
     finish(cli, name, data, cov, text)
+}
+
+/// Saída de comandos sem índice nem cobertura: o texto, ou um envelope JSON com ele.
+fn finish_plain(cli: &Cli, cmd: &str, text: &str) -> Result<String, Failure> {
+    if cli.json {
+        let envelope =
+            serde_json::json!({ "schema": 1, "cmd": cmd, "task": cli.task, "data": text });
+        return Ok(format!("{envelope}\n"));
+    }
+    Ok(text.to_string())
 }
 
 fn finish(

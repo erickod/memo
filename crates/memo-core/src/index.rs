@@ -290,10 +290,15 @@ pub fn index_with_notes_scoped(
     store: &mut SqliteStore,
     config: &Config,
     notes: &crate::notes::NoteDir,
-    _scope: &str,
+    scope: &str,
 ) -> Result<IndexReport, CoreError> {
     let (mut report, delta) = run_index(tree, store, config)?;
-    if crate::notes::apply_transitions(store, config, notes, &delta, &mut report.events)? {
+    let ctx = crate::notes::Transitions {
+        config,
+        delta: &delta,
+        scope,
+    };
+    if crate::notes::apply_transitions(store, notes, &ctx, &mut report.events)? {
         report.wrote = true;
     }
     Ok(report)
