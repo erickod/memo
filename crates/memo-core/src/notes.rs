@@ -119,10 +119,15 @@ impl Note {
             aliases: Vec::new(),
             text: body.strip_suffix('\n').unwrap_or(body).to_string(),
         };
+        let mut seen: Vec<&str> = Vec::new();
         for line in front.lines() {
             let Some((key, value)) = line.split_once(':') else {
                 return Err(bad("malformed frontmatter line"));
             };
+            if seen.contains(&key.trim()) {
+                return Err(bad(&format!("duplicate frontmatter key '{}'", key.trim())));
+            }
+            seen.push(key.trim());
             let value = value.trim();
             let own = || value.to_string();
             match key.trim() {
@@ -408,6 +413,32 @@ impl NoteDir {
         new: NewNote,
         now: &str,
     ) -> Result<AddOutcome, CoreError> {
+        let one_line = [
+            ("task", new.task.as_deref()),
+            ("ancora", Some(new.ancora.as_str())),
+            ("substitui", new.substitui.as_deref()),
+        ]
+        .into_iter()
+        .chain(
+            new.secundarias
+                .iter()
+                .map(|a| ("secundarias", Some(a.as_str()))),
+        )
+        .chain(new.aliases.iter().map(|a| ("aliases", Some(a.as_str()))));
+        for (field, value) in one_line {
+            if value.is_some_and(|v| v.contains(['\n', '\r'])) {
+                return Err(CoreError::Validation {
+                    code: "campo_multilinha",
+                    message: format!("field '{field}' must be a single line"),
+                });
+            }
+        }
+        if let Some(task) = new.task.as_deref().filter(|t| !crate::task::is_valid_id(t)) {
+            return Err(CoreError::Validation {
+                code: "task_invalida",
+                message: format!("invalid task id '{task}'"),
+            });
+        }
         validate_choice(&new.tipo, TIPOS, "tipo_invalido")?;
         validate_choice(&new.origem, ORIGENS, "origem_invalida")?;
         let text = new.text.trim().to_string();

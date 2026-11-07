@@ -15,4 +15,5 @@ pub mod source;
 pub mod stats;
 pub mod status;
 pub mod store;
+pub mod task;
 pub mod words;

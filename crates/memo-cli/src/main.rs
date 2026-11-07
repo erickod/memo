@@ -213,7 +213,25 @@ fn json_value<T: serde::Serialize>(value: &T) -> Result<serde_json::Value, Failu
     serde_json::to_value(value).map_err(|e| Failure::Internal(e.to_string()))
 }
 
+/// Ids de task viram nomes de arquivo: recusar na borda, antes de qualquer E/S.
+fn check_task_ids(cli: &Cli) -> Result<(), Failure> {
+    let from_command = match &cli.command {
+        Cmd::Derive { task, .. } | Cmd::Promote { task } | Cmd::Drop { task } => Some(task),
+        _ => None,
+    };
+    for task in cli.task.iter().chain(from_command) {
+        if !memo_core::task::is_valid_id(task) {
+            return Err(Failure::Usage(format!(
+                "invalid task id '{}' (use letters, digits, '.', '_' or '-')",
+                task.escape_debug()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn run(cli: &Cli) -> Result<String, Failure> {
+    check_task_ids(cli)?;
     let opts = match &cli.command {
         Cmd::Index { git_ref, full } => workspace::IndexOpts {
             git_ref: git_ref.clone(),

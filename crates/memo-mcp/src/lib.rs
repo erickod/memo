@@ -125,17 +125,18 @@ impl<B: Backend> Server<B> {
             argv.extend(items.iter().map(|s| (*s).to_string()));
         };
         match tool {
-            "brief" => push(&mut argv, &["brief", required(args, "text")?]),
+            "brief" => push(&mut argv, &["brief", "--", required(args, "text")?]),
             "query" => {
                 let kind = required(args, "kind")?;
                 if !QUERY_KINDS.contains(&kind) {
                     return Err(format!("unknown query kind '{kind}'"));
                 }
-                push(&mut argv, &["query", kind, required(args, "target")?]);
+                push(&mut argv, &["query", kind]);
                 let depth = args.get("depth").and_then(Value::as_i64);
                 if let (Some(depth), "callers" | "callees") = (depth, kind) {
                     push(&mut argv, &["--depth", &depth.to_string()]);
                 }
+                push(&mut argv, &["--", required(args, "target")?]);
             }
             "note_add" => {
                 let (tipo, ancora, texto) = (
@@ -151,7 +152,7 @@ impl<B: Backend> Server<B> {
                 if args.get("confirm").and_then(Value::as_bool) == Some(true) {
                     push(&mut argv, &["--confirm"]);
                 }
-                push(&mut argv, &[texto]);
+                push(&mut argv, &["--", texto]);
             }
             "status" => push(&mut argv, &["status"]),
             other => return Err(format!("unknown tool '{other}'")),

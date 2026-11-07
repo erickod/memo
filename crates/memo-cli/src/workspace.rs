@@ -60,10 +60,12 @@ pub fn locate_from(start: &Path, create: bool) -> Result<Env, Failure> {
 
 /// Chave da feature: `--task`, ou o nome do branch atual com `/` trocado por `-` (spec §6.1).
 fn feature_key(cli: &Cli, env: &Env) -> Option<String> {
-    cli.task.clone().or_else(|| {
+    let key = cli.task.clone().or_else(|| {
         let branch = git(&env.root, &["branch", "--show-current"]).ok()?;
         (!branch.is_empty()).then(|| branch.replace('/', "-"))
-    })
+    });
+    // Um branch com caracteres fora do id válido simplesmente não tem feature.
+    key.filter(|k| memo_core::task::is_valid_id(k))
 }
 
 /// A branch principal: `main_branch` da config, `origin/HEAD`, `main`, `master` (spec §6.1).
