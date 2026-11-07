@@ -1,0 +1,8 @@
+[package]
+name = "memo-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "memo"
+path = "src/main.rs"

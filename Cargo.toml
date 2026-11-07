@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["crates/memo-core", "crates/memo-cli", "crates/memo-mcp", "crates/memo-harness"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"

@@ -1,0 +1,4 @@
+[package]
+name = "memo-mcp"
+version.workspace = true
+edition.workspace = true
