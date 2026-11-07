@@ -1,5 +1,6 @@
 //! Extração estática de Python (spec §5).
 
+use std::collections::HashMap;
 use tree_sitter::{Node, Parser};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +88,18 @@ pub struct FileFacts {
 #[derive(Debug)]
 pub struct ExtractError(pub String);
 
+const MUTATORS: &[&str] = &[
+    "append",
+    "extend",
+    "update",
+    "add",
+    "pop",
+    "remove",
+    "clear",
+    "insert",
+    "setdefault",
+];
+
 struct Ctx<'a> {
     src: &'a [u8],
     facts: FileFacts,
@@ -110,7 +123,7 @@ pub fn extract_python(module: &str, source: &str) -> Result<FileFacts, ExtractEr
 /// Como `extract_python`; `is_package` (arquivo `__init__.py`) afeta imports relativos.
 pub fn extract_python_file(
     module: &str,
-    _is_package: bool,
+    is_package: bool,
     source: &str,
 ) -> Result<FileFacts, ExtractError> {
     let mut parser = Parser::new();
@@ -139,6 +152,7 @@ pub fn extract_python_file(
         type_text: None,
     });
     visit_block(&mut ctx, root, module, false);
+    collect_imports(&mut ctx, root, module, is_package, false);
     Ok(ctx.facts)
 }
 
@@ -187,6 +201,25 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
             .map(|n| ctx.text(n).split_whitespace().collect::<String>())
             .unwrap_or_default()
     );
+    let line = def.start_position().row + 1;
+    let mut is_protocol = false;
+    if let Some(bases) = def.child_by_field_name("superclasses") {
+        let mut cursor = bases.walk();
+        for base in bases.named_children(&mut cursor) {
+            if base.kind() == "keyword_argument" {
+                continue;
+            }
+            let text = ctx.text(base).split_whitespace().collect::<String>();
+            let text = text.split('[').next().unwrap_or("").to_string();
+            is_protocol |= text == "Protocol" || text.ends_with(".Protocol");
+            ctx.facts.refs.push(RefFact {
+                src_qname: qname.clone(),
+                kind: RefKind::Especializa,
+                text,
+                line,
+            });
+        }
+    }
     let body = def.child_by_field_name("body");
     let body_hash = body.map(|b| serialize(ctx, b)).unwrap_or_default();
     ctx.facts.symbols.push(SymbolFact {
@@ -196,7 +229,7 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
         line_end: outer.end_position().row + 1,
         sig_hash: hash_of(&sig),
         body_hash: hash_of(&body_hash),
-        is_protocol: false,
+        is_protocol,
         type_text: None,
     });
     if let Some(b) = body {
@@ -220,6 +253,25 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
             }
         }
     }
+    let def_line = def.start_position().row + 1;
+    if let Some(r) = def.child_by_field_name("return_type") {
+        let text = unwrap_type(ctx.text(r));
+        if text != "None" {
+            ctx.facts.refs.push(RefFact {
+                src_qname: qname.clone(),
+                kind: RefKind::Retorna,
+                text,
+                line: def_line,
+            });
+        }
+    }
+    let param_types: HashMap<String, String> = ctx
+        .facts
+        .receives
+        .iter()
+        .filter(|r| r.src_qname == qname)
+        .filter_map(|r| r.dst_text.clone().map(|t| (r.attr.clone(), t)))
+        .collect();
     let sig = format!(
         "{}|{}|{}|{}",
         if is_async { "async" } else { "def" },
@@ -243,8 +295,11 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
         is_protocol: false,
         type_text: None,
     });
-    if in_class && let Some(b) = body {
-        self_attributes(ctx, b, prefix);
+    if let Some(b) = body {
+        if in_class {
+            self_attributes(ctx, b, prefix, &param_types);
+        }
+        scan_effects(ctx, b, &qname, in_class);
     }
 }
 
@@ -279,12 +334,18 @@ fn param_signature(ctx: &mut Ctx, p: Node, qname: &str, in_class: bool) -> Optio
         other => return Some(other.to_string()),
     };
     if !(in_class && matches!(name.as_str(), "self" | "cls")) {
+        let pos = ctx
+            .facts
+            .receives
+            .iter()
+            .filter(|r| r.src_qname == qname)
+            .count();
         ctx.facts.receives.push(ReceiveFact {
             src_qname: qname.to_string(),
             attr: name.clone(),
             dst_text: annotation.as_deref().map(unwrap_type),
-            pos: 0,
-            line: 0,
+            pos,
+            line: p.start_position().row + 1,
         });
     }
     Some(format!(
@@ -317,9 +378,18 @@ fn unwrap_type(raw: &str) -> String {
     }
 }
 
-fn push_attribute(ctx: &mut Ctx, class_qname: &str, name: &str, node: Node) {
+fn push_attribute(
+    ctx: &mut Ctx,
+    class_qname: &str,
+    name: &str,
+    node: Node,
+    type_text: Option<String>,
+) {
     let qname = format!("{class_qname}.{name}");
-    if ctx.facts.symbols.iter().any(|s| s.qname == qname) {
+    if let Some(existing) = ctx.facts.symbols.iter_mut().find(|s| s.qname == qname) {
+        if existing.type_text.is_none() {
+            existing.type_text = type_text;
+        }
         return;
     }
     let rhs = node
@@ -334,7 +404,7 @@ fn push_attribute(ctx: &mut Ctx, class_qname: &str, name: &str, node: Node) {
         sig_hash: hash_of(&rhs),
         body_hash: hash_of(""),
         is_protocol: false,
-        type_text: None,
+        type_text,
     });
 }
 
@@ -354,12 +424,20 @@ fn class_body_attribute(ctx: &mut Ctx, stmt: Node, class_qname: &str) {
         .filter(|n| n.kind() == "identifier")
     {
         let name = ctx.text(left).to_string();
-        push_attribute(ctx, class_qname, &name, assign);
+        let type_text = assign
+            .child_by_field_name("type")
+            .map(|t| unwrap_type(ctx.text(t)));
+        push_attribute(ctx, class_qname, &name, assign, type_text);
     }
 }
 
 /// `self.x = ...` em qualquer ponto do método, sem entrar em funções locais.
-fn self_attributes(ctx: &mut Ctx, node: Node, class_qname: &str) {
+fn self_attributes(
+    ctx: &mut Ctx,
+    node: Node,
+    class_qname: &str,
+    param_types: &HashMap<String, String>,
+) {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
@@ -373,12 +451,19 @@ fn self_attributes(ctx: &mut Ctx, node: Node, class_qname: &str) {
                     && let Some(attr) = left.child_by_field_name("attribute")
                 {
                     let name = ctx.text(attr).to_string();
-                    push_attribute(ctx, class_qname, &name, child);
+                    let type_text = child
+                        .child_by_field_name("type")
+                        .map(|t| unwrap_type(ctx.text(t)))
+                        .or_else(|| {
+                            let right = child.child_by_field_name("right")?;
+                            param_types.get(ctx.text(right)).cloned()
+                        });
+                    push_attribute(ctx, class_qname, &name, child, type_text);
                 }
             }
             _ => {}
         }
-        self_attributes(ctx, child, class_qname);
+        self_attributes(ctx, child, class_qname, param_types);
     }
 }
 
@@ -418,4 +503,242 @@ fn write_node(ctx: &Ctx, node: Node, out: &mut String, first_in_block: bool) {
         }
     }
     out.push(')');
+}
+
+/// Caminho após `self` de uma cadeia `self.a.b` (vazio para o próprio `self`).
+fn self_chain(ctx: &Ctx, node: Node) -> Option<Vec<String>> {
+    match node.kind() {
+        "identifier" if ctx.text(node) == "self" => Some(Vec::new()),
+        "attribute" => {
+            let mut path = self_chain(ctx, node.child_by_field_name("object")?)?;
+            path.push(ctx.text(node.child_by_field_name("attribute")?).to_string());
+            Some(path)
+        }
+        _ => None,
+    }
+}
+
+fn push_ref(ctx: &mut Ctx, src: &str, kind: RefKind, text: String, node: Node) {
+    ctx.facts.refs.push(RefFact {
+        src_qname: src.to_string(),
+        kind,
+        text,
+        line: node.start_position().row + 1,
+    });
+}
+
+fn write_target(ctx: &mut Ctx, target: Node, src: &str, track_self: bool) {
+    match target.kind() {
+        "attribute" | "subscript" => {
+            let base = if target.kind() == "subscript" {
+                target.child_by_field_name("value")
+            } else {
+                Some(target)
+            };
+            match base.and_then(|b| track_self.then(|| self_chain(ctx, b)).flatten()) {
+                Some(path) if !path.is_empty() => {
+                    push_ref(ctx, src, RefKind::Escreve, path.join("."), target);
+                }
+                _ => {
+                    if let Some(b) = base {
+                        scan_effects(ctx, b, src, track_self);
+                    }
+                }
+            }
+            if target.kind() == "subscript" {
+                let mut cursor = target.walk();
+                for idx in target.children_by_field_name("subscript", &mut cursor) {
+                    scan_effects(ctx, idx, src, track_self);
+                }
+            }
+        }
+        "pattern_list" | "tuple_pattern" | "list_pattern" => {
+            let mut cursor = target.walk();
+            for child in target.named_children(&mut cursor) {
+                write_target(ctx, child, src, track_self);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Efeitos de um símbolo: `ESCREVE`, `LE` (só `self.x`) e `LEVANTA` (spec §5.5).
+fn scan_effects(ctx: &mut Ctx, node: Node, src: &str, track_self: bool) {
+    match node.kind() {
+        "class_definition" => return,
+        "assignment" | "augmented_assignment" => {
+            if let Some(left) = node.child_by_field_name("left") {
+                write_target(ctx, left, src, track_self);
+            }
+            if let Some(right) = node.child_by_field_name("right") {
+                scan_effects(ctx, right, src, track_self);
+            }
+            return;
+        }
+        "call" => {
+            let func = node.child_by_field_name("function");
+            match func {
+                Some(f) if f.kind() == "attribute" => {
+                    let obj = f.child_by_field_name("object");
+                    let method = f
+                        .child_by_field_name("attribute")
+                        .map(|m| ctx.text(m).to_string())
+                        .unwrap_or_default();
+                    let path = obj
+                        .and_then(|o| track_self.then(|| self_chain(ctx, o)).flatten())
+                        .filter(|p| !p.is_empty());
+                    match path {
+                        Some(path) => {
+                            let kind = if MUTATORS.contains(&method.as_str()) {
+                                RefKind::Escreve
+                            } else {
+                                RefKind::Le
+                            };
+                            push_ref(ctx, src, kind, path.join("."), node);
+                        }
+                        None => {
+                            if let Some(o) = obj {
+                                scan_effects(ctx, o, src, track_self);
+                            }
+                        }
+                    }
+                }
+                Some(f) => scan_effects(ctx, f, src, track_self),
+                None => {}
+            }
+            if let Some(args) = node.child_by_field_name("arguments") {
+                scan_effects(ctx, args, src, track_self);
+            }
+            return;
+        }
+        "attribute" => {
+            if let Some(path) = track_self.then(|| self_chain(ctx, node)).flatten()
+                && !path.is_empty()
+            {
+                push_ref(ctx, src, RefKind::Le, path.join("."), node);
+                return;
+            }
+        }
+        "raise_statement" => {
+            let raised = node.named_child(0).map(|n| match n.kind() {
+                "call" => n.child_by_field_name("function").unwrap_or(n),
+                _ => n,
+            });
+            if let Some(r) = raised {
+                let text = ctx.text(r).to_string();
+                push_ref(ctx, src, RefKind::Levanta, text, node);
+            }
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        scan_effects(ctx, child, src, track_self);
+    }
+}
+
+/// `from ..a import b` em `module` vira o módulo absoluto (spec §4, `IMPORTA`).
+fn absolute_module(spec: &str, module: &str, is_package: bool) -> String {
+    let dots = spec.chars().take_while(|c| *c == '.').count();
+    let rest = &spec[dots..];
+    if dots == 0 {
+        return rest.to_string();
+    }
+    let mut base = if is_package {
+        module.to_string()
+    } else {
+        module
+            .rsplit_once('.')
+            .map(|(p, _)| p.to_string())
+            .unwrap_or_default()
+    };
+    for _ in 1..dots {
+        base = base
+            .rsplit_once('.')
+            .map(|(p, _)| p.to_string())
+            .unwrap_or_default();
+    }
+    [base.as_str(), rest]
+        .iter()
+        .filter(|p| !p.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+fn push_import(ctx: &mut Ctx, local: String, target: String, node: Node, type_checking: bool) {
+    ctx.facts.imports.push(ImportFact {
+        local_name: local,
+        target,
+        line: node.start_position().row + 1,
+        type_checking,
+    });
+}
+
+fn collect_imports(ctx: &mut Ctx, node: Node, module: &str, is_package: bool, tc: bool) {
+    match node.kind() {
+        "import_statement" => {
+            let mut cursor = node.walk();
+            for name in node.children_by_field_name("name", &mut cursor) {
+                if name.kind() == "aliased_import" {
+                    let target = name.child_by_field_name("name").map(|n| ctx.text(n));
+                    let alias = name.child_by_field_name("alias").map(|n| ctx.text(n));
+                    if let (Some(t), Some(a)) = (target, alias) {
+                        push_import(ctx, a.to_string(), t.to_string(), node, tc);
+                    }
+                } else {
+                    let text = ctx.text(name).to_string();
+                    push_import(ctx, text.clone(), text, node, tc);
+                }
+            }
+            return;
+        }
+        "import_from_statement" => {
+            let spec = node
+                .child_by_field_name("module_name")
+                .map(|n| ctx.text(n).to_string())
+                .unwrap_or_default();
+            let base = absolute_module(&spec, module, is_package);
+            let join = |n: &str| {
+                if base.is_empty() {
+                    n.to_string()
+                } else {
+                    format!("{base}.{n}")
+                }
+            };
+            let mut cursor = node.walk();
+            for name in node.children_by_field_name("name", &mut cursor) {
+                if name.kind() == "aliased_import" {
+                    let target = name.child_by_field_name("name").map(|n| ctx.text(n));
+                    let alias = name.child_by_field_name("alias").map(|n| ctx.text(n));
+                    if let (Some(t), Some(a)) = (target, alias) {
+                        push_import(ctx, a.to_string(), join(t), node, tc);
+                    }
+                } else {
+                    let text = ctx.text(name).to_string();
+                    push_import(ctx, text.clone(), join(&text), node, tc);
+                }
+            }
+            return;
+        }
+        "if_statement" => {
+            let cond = node
+                .child_by_field_name("condition")
+                .map(|c| ctx.text(c).to_string())
+                .unwrap_or_default();
+            let guard = cond == "TYPE_CHECKING" || cond.ends_with(".TYPE_CHECKING");
+            let consequence = node.child_by_field_name("consequence").map(|c| c.id());
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                let inner = tc || (guard && Some(child.id()) == consequence);
+                collect_imports(ctx, child, module, is_package, inner);
+            }
+            return;
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_imports(ctx, child, module, is_package, tc);
+    }
 }

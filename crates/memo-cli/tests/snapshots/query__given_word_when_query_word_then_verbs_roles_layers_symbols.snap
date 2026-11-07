@@ -16,4 +16,4 @@ símbolos:
   C LimitRepository   app/billing/domain/protocols/limit_repository.py:L4-L5
   mod limit_repository   app/billing/infra/repositories/limit_repository.py:L1-L4
   C SqlLimitRepository   app/billing/infra/repositories/limit_repository.py:L1-L3
-cobertura: 0 resolvidas, 0 aprox, 0 não resolvidas, 0 arquivos com erro
+cobertura: 15 resolvidas, 0 aprox, 0 não resolvidas, 0 arquivos com erro

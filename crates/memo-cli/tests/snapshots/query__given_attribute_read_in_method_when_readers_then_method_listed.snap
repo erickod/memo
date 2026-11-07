@@ -1,0 +1,7 @@
+---
+source: crates/memo-cli/tests/query.rs
+expression: stdout(&out)
+---
+readers CalculateLimitUseCase._repo  idx=ok
+  M CalculateLimitUseCase.execute   app/billing/application/usecases/calculate_limit_usecase.py:L8-L13 :L12
+cobertura: 15 resolvidas, 0 aprox, 0 não resolvidas, 0 arquivos com erro

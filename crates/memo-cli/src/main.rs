@@ -3,10 +3,9 @@ mod render;
 use clap::{Parser, Subcommand};
 use memo_core::error::CoreError;
 use memo_core::index::index;
-use memo_core::query::{symbol_info, word_info};
+use memo_core::query::{coverage, readers, symbol_info, type_info, word_info, writers};
 use memo_core::source::WorkTree;
 use memo_core::store::SqliteStore;
-use render::Coverage;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -56,6 +55,12 @@ enum Query {
     Symbol { target: String },
     /// Verbos, papéis, camadas, símbolos e vizinhas de uma palavra.
     Word { word: String },
+    /// Símbolos que escrevem o atributo.
+    Writers { attr: String },
+    /// Símbolos que leem o atributo.
+    Readers { attr: String },
+    /// Quem produz e quem consome o tipo.
+    Type { target: String },
 }
 
 enum Failure {
@@ -92,7 +97,7 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, Failure> {
 }
 
 /// Abre `$COMMON/memo/base.db` e reindexa a árvore de trabalho, salvo com `--no-index`.
-fn open_indexed(cli: &Cli) -> Result<(SqliteStore, usize), Failure> {
+fn open_indexed(cli: &Cli) -> Result<SqliteStore, Failure> {
     let start = cli.repo.clone().unwrap_or_else(|| PathBuf::from("."));
     let root = PathBuf::from(git(&start, &["rev-parse", "--show-toplevel"])?);
     let common = PathBuf::from(git(
@@ -102,33 +107,27 @@ fn open_indexed(cli: &Cli) -> Result<(SqliteStore, usize), Failure> {
     let dir = common.join("memo");
     std::fs::create_dir_all(&dir).map_err(|e| Failure::Internal(e.to_string()))?;
     let mut store = SqliteStore::open(&dir.join("base.db"))?;
-    let errors = if cli.no_index {
-        store.files_with_error()?.len()
-    } else {
-        index(&WorkTree::new(&root), &mut store)?
-            .files_with_error
-            .len()
-    };
-    Ok((store, errors))
+    if !cli.no_index {
+        index(&WorkTree::new(&root), &mut store)?;
+    }
+    Ok(store)
+}
+
+fn json_value<T: serde::Serialize>(value: &T) -> Result<serde_json::Value, Failure> {
+    serde_json::to_value(value).map_err(|e| Failure::Internal(e.to_string()))
 }
 
 fn run(cli: &Cli) -> Result<String, Failure> {
-    let (store, errors) = open_indexed(cli)?;
-    let cov = Coverage {
-        files_with_error: errors,
-    };
-    let cobertura = serde_json::json!({
-        "resolvidas": 0, "aproximadas": 0, "nao_resolvidas": 0, "arquivos_com_erro": errors
-    });
-    let index_meta = serde_json::json!({ "status": "ok" });
-    let (cmd, data, text) = match &cli.command {
-        Cmd::Query {
-            kind: Query::Symbol { target },
-        } => match symbol_info(&store, target) {
+    let store = open_indexed(cli)?;
+    let cov = coverage(&store)?;
+    let (max, limit) = (cli.max_chars, cli.limit);
+    let Cmd::Query { kind } = &cli.command;
+    let (cmd, data, text) = match kind {
+        Query::Symbol { target } => match symbol_info(&store, target) {
             Ok(info) => (
                 "query symbol",
-                serde_json::to_value(&info).map_err(|e| Failure::Internal(e.to_string()))?,
-                render::symbol_text(&info, "ok", &cov, cli.max_chars),
+                json_value(&info)?,
+                render::symbol_text(&info, "ok", &cov, max, limit),
             ),
             Err(CoreError::Ambiguous { target, candidates }) => {
                 return Err(Failure::NotFound(render::ambiguous_text(
@@ -138,21 +137,43 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             }
             Err(e) => return Err(e.into()),
         },
-        Cmd::Query {
-            kind: Query::Word { word },
-        } => {
+        Query::Word { word } => {
             let info = word_info(&store, word)?;
             (
                 "query word",
-                serde_json::to_value(&info).map_err(|e| Failure::Internal(e.to_string()))?,
-                render::word_text(&info, "ok", &cov, cli.max_chars, cli.limit),
+                json_value(&info)?,
+                render::word_text(&info, "ok", &cov, max, limit),
+            )
+        }
+        Query::Writers { attr } => {
+            let rel = writers(&store, attr)?;
+            (
+                "query writers",
+                json_value(&rel)?,
+                render::relation_text("writers", &rel, "ok", &cov, max, limit),
+            )
+        }
+        Query::Readers { attr } => {
+            let rel = readers(&store, attr)?;
+            (
+                "query readers",
+                json_value(&rel)?,
+                render::relation_text("readers", &rel, "ok", &cov, max, limit),
+            )
+        }
+        Query::Type { target } => {
+            let info = type_info(&store, target)?;
+            (
+                "query type",
+                json_value(&info)?,
+                render::type_text(&info, "ok", &cov, max, limit),
             )
         }
     };
     if cli.json {
         let envelope = serde_json::json!({
-            "schema": 1, "cmd": cmd, "task": cli.task, "index": index_meta,
-            "data": data, "cobertura": cobertura
+            "schema": 1, "cmd": cmd, "task": cli.task, "index": { "status": "ok" },
+            "data": data, "cobertura": json_value(&cov)?
         });
         return Ok(format!("{envelope}\n"));
     }

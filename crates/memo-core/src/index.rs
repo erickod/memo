@@ -1,7 +1,8 @@
 //! Indexação incremental (spec §6.3).
 
 use crate::error::CoreError;
-use crate::extract::{FileFacts, SymbolKind, extract_python};
+use crate::extract::{FileFacts, SymbolKind, extract_python_file};
+use crate::resolve::resolve_files;
 use crate::source::{SourceFile, SourceTree};
 use crate::store::SqliteStore;
 use crate::words::{NameKind, Segment, Slot, classify_name};
@@ -105,6 +106,13 @@ fn load_files(store: &SqliteStore) -> Result<HashMap<String, StoredFile>, CoreEr
 
 fn delete_file_symbols(tx: &Transaction, file_id: i64) -> Result<(), CoreError> {
     tx.execute(
+        "DELETE FROM edge WHERE src IN (SELECT id FROM symbol WHERE file_id = ?1)
+            OR dst IN (SELECT id FROM symbol WHERE file_id = ?1)",
+        [file_id],
+    )?;
+    tx.execute("DELETE FROM raw_ref WHERE file_id = ?1", [file_id])?;
+    tx.execute("DELETE FROM import WHERE file_id = ?1", [file_id])?;
+    tx.execute(
         "DELETE FROM occurrence WHERE symbol_id IN (SELECT id FROM symbol WHERE file_id = ?1)",
         [file_id],
     )?;
@@ -136,8 +144,8 @@ fn insert_symbols(
             .and_then(|(p, _)| ids.get(p).copied());
         tx.execute(
             "INSERT INTO symbol(qname, name, kind, nivel, parent_id, file_id, line_start, line_end,
-                                sig_hash, body_hash, is_test)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                sig_hash, body_hash, is_test, is_protocol, type_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 sym.qname,
                 name,
@@ -149,7 +157,9 @@ fn insert_symbols(
                 int(sym.line_end),
                 sym.sig_hash,
                 sym.body_hash,
-                is_test
+                is_test,
+                sym.is_protocol,
+                sym.type_text
             ],
         )?;
         let symbol_id = tx.last_insert_rowid();
@@ -173,6 +183,74 @@ fn insert_symbols(
             )?;
         }
     }
+    for r in &facts.receives {
+        if let Some(&src) = ids.get(r.src_qname.as_str()) {
+            let raw = NewRawRef {
+                file_id,
+                src,
+                kind: "RECEBE",
+                text: r.dst_text.as_deref(),
+                line: r.line,
+                attr: Some(&r.attr),
+                pos: Some(r.pos),
+            };
+            insert_raw_ref(tx, &raw)?;
+        }
+    }
+    for r in &facts.refs {
+        if let Some(&src) = ids.get(r.src_qname.as_str()) {
+            let raw = NewRawRef {
+                file_id,
+                src,
+                kind: r.kind.as_str(),
+                text: Some(&r.text),
+                line: r.line,
+                attr: None,
+                pos: None,
+            };
+            insert_raw_ref(tx, &raw)?;
+        }
+    }
+    for i in &facts.imports {
+        tx.execute(
+            "INSERT INTO import(file_id, local_name, target, line, type_checking)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                file_id,
+                i.local_name,
+                i.target,
+                int(i.line),
+                i.type_checking
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+struct NewRawRef<'a> {
+    file_id: i64,
+    src: i64,
+    kind: &'a str,
+    text: Option<&'a str>,
+    line: usize,
+    attr: Option<&'a str>,
+    pos: Option<usize>,
+}
+
+fn insert_raw_ref(tx: &Transaction, r: &NewRawRef) -> Result<(), CoreError> {
+    tx.execute(
+        "INSERT INTO raw_ref(file_id, src, kind, callee_text, line, attr, pos)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            r.file_id,
+            r.src,
+            r.kind,
+            r.text,
+            int(r.line),
+            r.attr,
+            r.pos.map(int)
+        ],
+    )?;
     Ok(())
 }
 
@@ -219,10 +297,15 @@ pub fn index(tree: &dyn SourceTree, store: &mut SqliteStore) -> Result<IndexRepo
 
     let parsed: Vec<_> = pending
         .par_iter()
-        .map(|p| extract_python(&module_of(&p.file.path), &p.content))
+        .map(|p| {
+            let is_package = p.file.path.ends_with("__init__.py");
+            extract_python_file(&module_of(&p.file.path), is_package, &p.content)
+        })
         .collect();
 
     let tx = store.conn.transaction()?;
+    let affected = affected_files(&tx, &stored, &pending, &removed)?;
+    let mut to_resolve: Vec<i64> = Vec::new();
     for path in removed {
         let id = stored[path].id;
         delete_file_symbols(&tx, id)?;
@@ -259,13 +342,70 @@ pub fn index(tree: &dyn SourceTree, store: &mut SqliteStore) -> Result<IndexRepo
                 parse_error
             ],
         )?;
+        let file_id = tx.last_insert_rowid();
         if let Ok(facts) = &result {
-            insert_symbols(&tx, tx.last_insert_rowid(), &p.file.path, facts)?;
+            insert_symbols(&tx, file_id, &p.file.path, facts)?;
+        }
+        to_resolve.push(file_id);
+    }
+    for id in affected {
+        if !to_resolve.contains(&id) {
+            to_resolve.push(id);
         }
     }
+    resolve_files(&tx, &to_resolve)?;
     tx.commit()?;
 
     report.wrote = true;
     report.files_with_error = store.files_with_error()?;
     Ok(report)
+}
+
+/// Arquivos não alterados cujas arestas dependem dos que mudam: quem aponta para os símbolos
+/// deles ou importa os módulos deles (spec §6.3, passo 3).
+fn affected_files(
+    tx: &Transaction,
+    stored: &HashMap<String, StoredFile>,
+    pending: &[Pending],
+    removed: &[&String],
+) -> Result<Vec<i64>, CoreError> {
+    let mut changed_ids: Vec<i64> = removed.iter().map(|p| stored[*p].id).collect();
+    changed_ids.extend(
+        pending
+            .iter()
+            .filter_map(|p| stored.get(&p.file.path))
+            .map(|s| s.id),
+    );
+    let modules: Vec<String> = removed
+        .iter()
+        .map(|p| module_of(p))
+        .chain(pending.iter().map(|p| module_of(&p.file.path)))
+        .collect();
+
+    let mut out: HashSet<i64> = HashSet::new();
+    for id in &changed_ids {
+        let mut stmt = tx.prepare(
+            "SELECT DISTINCT s.file_id FROM edge e
+             JOIN symbol s ON s.id = e.src JOIN symbol d ON d.id = e.dst
+             WHERE d.file_id = ?1",
+        )?;
+        for row in stmt.query_map([id], |r| r.get::<_, i64>(0))? {
+            out.insert(row?);
+        }
+    }
+    for module in &modules {
+        let mut stmt = tx.prepare(
+            "SELECT DISTINCT file_id FROM import
+             WHERE target = ?1 OR substr(target, 1, length(?1) + 1) = ?1 || '.'",
+        )?;
+        for row in stmt.query_map([module], |r| r.get::<_, i64>(0))? {
+            out.insert(row?);
+        }
+    }
+    let mut ids: Vec<i64> = out
+        .into_iter()
+        .filter(|id| !changed_ids.contains(id))
+        .collect();
+    ids.sort_unstable();
+    Ok(ids)
 }

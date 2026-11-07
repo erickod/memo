@@ -19,7 +19,8 @@ CREATE TABLE symbol(
   parent_id INTEGER REFERENCES symbol(id), file_id INTEGER REFERENCES file(id),
   line_start INTEGER, line_end INTEGER,
   sig_hash TEXT, body_hash TEXT, decorators TEXT,
-  is_test INTEGER DEFAULT 0, is_entrypoint INTEGER DEFAULT 0, is_protocol INTEGER DEFAULT 0);
+  is_test INTEGER DEFAULT 0, is_entrypoint INTEGER DEFAULT 0, is_protocol INTEGER DEFAULT 0,
+  type_text TEXT);
 CREATE TABLE word(id INTEGER PRIMARY KEY, text TEXT UNIQUE NOT NULL);
 CREATE TABLE occurrence(
   symbol_id INTEGER NOT NULL, word_id INTEGER NOT NULL, pos INTEGER NOT NULL,
@@ -32,7 +33,8 @@ CREATE TABLE edge(
   dst_text TEXT,
   line INTEGER, attr TEXT, pos INTEGER,
   approx INTEGER DEFAULT 0, count INTEGER DEFAULT 1);
-CREATE TABLE raw_ref(file_id INTEGER, src INTEGER, kind TEXT, callee_text TEXT, receiver TEXT, line INTEGER);
+CREATE TABLE raw_ref(file_id INTEGER, src INTEGER, kind TEXT, callee_text TEXT, receiver TEXT, line INTEGER,
+  attr TEXT, pos INTEGER, resolved INTEGER DEFAULT 1);
 CREATE TABLE import(file_id INTEGER, local_name TEXT, target TEXT, line INTEGER, type_checking INTEGER DEFAULT 0);
 CREATE TABLE word_stats(
   word_id INTEGER PRIMARY KEY, uso INTEGER, alcance INTEGER, grau INTEGER,
@@ -44,6 +46,8 @@ CREATE INDEX edge_dst_kind ON edge(dst, kind);
 CREATE INDEX occurrence_word ON occurrence(word_id);
 CREATE INDEX symbol_file ON symbol(file_id);
 CREATE INDEX symbol_parent ON symbol(parent_id);
+CREATE INDEX raw_ref_file ON raw_ref(file_id);
+CREATE INDEX import_file ON import(file_id);
 ";
 
 pub struct SqliteStore {
@@ -155,6 +159,26 @@ impl SqliteStore {
             })?;
             let occ: Vec<String> = occ.collect::<Result<_, _>>()?;
             let _ = writeln!(out, "{}", occ.join(","));
+        }
+        let mut edges = self.conn.prepare(
+            "SELECT e.kind, s.qname, COALESCE(d.qname, ''), COALESCE(e.dst_text, ''),
+                    COALESCE(e.line, 0), COALESCE(e.attr, ''), e.approx
+             FROM edge e JOIN symbol s ON s.id = e.src LEFT JOIN symbol d ON d.id = e.dst
+             ORDER BY e.kind, s.qname, COALESCE(d.qname, ''), COALESCE(e.dst_text, ''), e.line, e.attr",
+        )?;
+        let mut rows = edges.query([])?;
+        while let Some(r) = rows.next()? {
+            let _ = writeln!(
+                out,
+                "edge|{}|{}|{}|{}|{}|{}|{}",
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, i64>(6)?,
+            );
         }
         Ok(out)
     }

@@ -26,6 +26,16 @@ pub struct SymbolInfo {
     pub edges: Vec<EdgeView>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WordInfo {
+    pub word: String,
+    pub verbs: Vec<String>,
+    pub roles: Vec<String>,
+    pub layers: Vec<String>,
+    pub symbols: Vec<SymbolAddr>,
+    pub neighbors: Vec<String>,
+}
+
 /// Aresta direta de um símbolo: `out` (ele aponta) ou `in` (apontam para ele).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EdgeView {
@@ -67,46 +77,22 @@ pub struct Coverage {
     pub arquivos_com_erro: i64,
 }
 
-/// Símbolos que escrevem o atributo (`ESCREVE`).
-pub fn writers(_store: &SqliteStore, _target: &str) -> Result<Relation, CoreError> {
-    todo!("spec §8.2 query writers")
-}
-
-/// Símbolos que leem o atributo (`LE`).
-pub fn readers(_store: &SqliteStore, _target: &str) -> Result<Relation, CoreError> {
-    todo!("spec §8.2 query readers")
-}
-
-/// Quem produz (`RETORNA`) e quem consome (`RECEBE`) o tipo.
-pub fn type_info(_store: &SqliteStore, _target: &str) -> Result<TypeInfo, CoreError> {
-    todo!("spec §8.2 query type")
-}
-
-pub fn coverage(_store: &SqliteStore) -> Result<Coverage, CoreError> {
-    todo!("spec §4 cobertura")
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct WordInfo {
-    pub word: String,
-    pub verbs: Vec<String>,
-    pub roles: Vec<String>,
-    pub layers: Vec<String>,
-    pub symbols: Vec<SymbolAddr>,
-    pub neighbors: Vec<String>,
-}
-
 const ADDR_COLUMNS: &str =
     "s.qname, s.kind, s.is_test, COALESCE(f.path, ''), s.line_start, s.line_end";
+
+/// Nome relativo ao módulo do arquivo (`Classe.metodo`); sem arquivo, o último segmento.
+fn short_name(qname: &str, path: &str) -> String {
+    let module = module_of(path);
+    qname
+        .strip_prefix(&format!("{module}."))
+        .unwrap_or_else(|| qname.rsplit('.').next().unwrap_or(qname))
+        .to_string()
+}
 
 fn addr_from_row(r: &rusqlite::Row) -> rusqlite::Result<SymbolAddr> {
     let qname: String = r.get(0)?;
     let path: String = r.get(3)?;
-    let module = module_of(&path);
-    let short = qname
-        .strip_prefix(&format!("{module}."))
-        .unwrap_or_else(|| qname.rsplit('.').next().unwrap_or(&qname))
-        .to_string();
+    let short = short_name(&qname, &path);
     Ok(SymbolAddr {
         short,
         qname,
@@ -118,8 +104,8 @@ fn addr_from_row(r: &rusqlite::Row) -> rusqlite::Result<SymbolAddr> {
     })
 }
 
-/// Aceita `qname` completo ou sufixo único; sufixo ambíguo devolve `Ambiguous`.
-pub fn symbol_info(store: &SqliteStore, target: &str) -> Result<SymbolInfo, CoreError> {
+/// `qname` completo ou sufixo único; sufixo ambíguo devolve `Ambiguous`, ausente `NotFound`.
+fn resolve_qname(store: &SqliteStore, target: &str) -> Result<String, CoreError> {
     let mut stmt = store.conn.prepare(
         "SELECT qname FROM symbol
          WHERE qname = ?1
@@ -132,27 +118,133 @@ pub fn symbol_info(store: &SqliteStore, target: &str) -> Result<SymbolInfo, Core
     if let Some(exact) = found.iter().find(|q| q.as_str() == target) {
         found = vec![exact.clone()];
     }
-    let qname = match found.len() {
-        0 => return Err(CoreError::NotFound(target.to_string())),
-        1 => found.remove(0),
-        _ => {
-            return Err(CoreError::Ambiguous {
-                target: target.to_string(),
-                candidates: found,
-            });
-        }
-    };
+    match found.len() {
+        0 => Err(CoreError::NotFound(target.to_string())),
+        1 => Ok(found.remove(0)),
+        _ => Err(CoreError::Ambiguous {
+            target: target.to_string(),
+            candidates: found,
+        }),
+    }
+}
+
+fn addr_of(store: &SqliteStore, qname: &str) -> Result<SymbolAddr, CoreError> {
+    let sql = format!(
+        "SELECT {ADDR_COLUMNS} FROM symbol s LEFT JOIN file f ON f.id = s.file_id WHERE s.qname = ?1"
+    );
+    Ok(store.conn.query_row(&sql, [qname], addr_from_row)?)
+}
+
+/// Aceita `qname` completo ou sufixo único; sufixo ambíguo devolve `Ambiguous`.
+pub fn symbol_info(store: &SqliteStore, target: &str) -> Result<SymbolInfo, CoreError> {
+    let qname = resolve_qname(store, target)?;
     let sql = format!(
         "SELECT {ADDR_COLUMNS}, COALESCE(s.sig_hash, '') FROM symbol s
          LEFT JOIN file f ON f.id = s.file_id WHERE s.qname = ?1"
     );
-    Ok(store.conn.query_row(&sql, [&qname], |r| {
+    let mut info = store.conn.query_row(&sql, [&qname], |r| {
         Ok(SymbolInfo {
             addr: addr_from_row(r)?,
             sig_hash: r.get(6)?,
             edges: Vec::new(),
         })
-    })?)
+    })?;
+    info.edges = direct_edges(store, &qname)?;
+    Ok(info)
+}
+
+/// Arestas diretas, de saída e de entrada, em ordem estável.
+fn direct_edges(store: &SqliteStore, qname: &str) -> Result<Vec<EdgeView>, CoreError> {
+    let mut out = Vec::new();
+    for (dir, near, far) in [("out", "src", "dst"), ("in", "dst", "src")] {
+        let sql = format!(
+            "SELECT e.kind, e.dst_text, e.attr, e.line, e.approx, o.qname, COALESCE(of.path, '')
+             FROM edge e JOIN symbol me ON me.id = e.{near}
+             LEFT JOIN symbol o ON o.id = e.{far} LEFT JOIN file of ON of.id = o.file_id
+             WHERE me.qname = ?1
+             ORDER BY e.kind, COALESCE(o.qname, e.dst_text, ''), e.line"
+        );
+        let mut stmt = store.conn.prepare(&sql)?;
+        let rows = stmt.query_map([qname], |r| {
+            let other_q: Option<String> = r.get(5)?;
+            let path: String = r.get(6)?;
+            let dst_text: Option<String> = r.get(1)?;
+            Ok(EdgeView {
+                dir: dir.to_string(),
+                kind: r.get(0)?,
+                other: other_q
+                    .map(|q| short_name(&q, &path))
+                    .or(dst_text)
+                    .unwrap_or_default(),
+                attr: r.get(2)?,
+                line: r.get(3)?,
+                approx: r.get::<_, i64>(4)? != 0,
+            })
+        })?;
+        for row in rows {
+            out.push(row?);
+        }
+    }
+    Ok(out)
+}
+
+fn related(store: &SqliteStore, qname: &str, edge_kind: &str) -> Result<Vec<RelItem>, CoreError> {
+    let sql = format!(
+        "SELECT {ADDR_COLUMNS}, e.line, e.approx, e.attr FROM edge e
+         JOIN symbol s ON s.id = e.src LEFT JOIN file f ON f.id = s.file_id
+         JOIN symbol t ON t.id = e.dst
+         WHERE t.qname = ?1 AND e.kind = ?2 ORDER BY s.qname, e.line"
+    );
+    let mut stmt = store.conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![qname, edge_kind], |r| {
+        Ok(RelItem {
+            addr: addr_from_row(r)?,
+            line: r.get(6)?,
+            approx: r.get::<_, i64>(7)? != 0,
+            attr: r.get(8)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Símbolos que escrevem o atributo (`ESCREVE`).
+pub fn writers(store: &SqliteStore, target: &str) -> Result<Relation, CoreError> {
+    relation(store, target, "ESCREVE")
+}
+
+/// Símbolos que leem o atributo (`LE`).
+pub fn readers(store: &SqliteStore, target: &str) -> Result<Relation, CoreError> {
+    relation(store, target, "LE")
+}
+
+fn relation(store: &SqliteStore, target: &str, kind: &str) -> Result<Relation, CoreError> {
+    let qname = resolve_qname(store, target)?;
+    Ok(Relation {
+        target: addr_of(store, &qname)?,
+        items: related(store, &qname, kind)?,
+    })
+}
+
+/// Quem produz (`RETORNA`) e quem consome (`RECEBE`) o tipo.
+pub fn type_info(store: &SqliteStore, target: &str) -> Result<TypeInfo, CoreError> {
+    let qname = resolve_qname(store, target)?;
+    Ok(TypeInfo {
+        target: addr_of(store, &qname)?,
+        producers: related(store, &qname, "RETORNA")?,
+        consumers: related(store, &qname, "RECEBE")?,
+    })
+}
+
+/// Resolvidas e aproximadas vêm das arestas; não resolvidas, das referências sem destino no repo.
+pub fn coverage(store: &SqliteStore) -> Result<Coverage, CoreError> {
+    let count =
+        |sql: &str| -> Result<i64, CoreError> { Ok(store.conn.query_row(sql, [], |r| r.get(0))?) };
+    Ok(Coverage {
+        resolvidas: count("SELECT COUNT(*) FROM edge WHERE dst IS NOT NULL AND approx = 0")?,
+        aproximadas: count("SELECT COUNT(*) FROM edge WHERE approx = 1")?,
+        nao_resolvidas: count("SELECT COUNT(*) FROM raw_ref WHERE resolved = 0")?,
+        arquivos_com_erro: count("SELECT COUNT(*) FROM file WHERE parse_error IS NOT NULL")?,
+    })
 }
 
 pub fn word_info(store: &SqliteStore, word: &str) -> Result<WordInfo, CoreError> {
