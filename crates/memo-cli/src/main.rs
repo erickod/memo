@@ -1,3 +1,4 @@
+mod init;
 mod lifecycle;
 mod render;
 mod workspace;
@@ -60,6 +61,21 @@ enum Cmd {
     Query {
         #[command(subcommand)]
         kind: Query,
+    },
+    /// Instala a integração com o harness (`claude` ou `codex`) e indexa a base.
+    Init {
+        /// `[<repo>] <harness>`
+        #[arg(num_args = 1..=2, required = true)]
+        args: Vec<String>,
+        /// Ref a indexar como base (padrão: a branch principal).
+        #[arg(long = "ref")]
+        git_ref: Option<String>,
+        /// Registra também o servidor `memo serve` na config MCP.
+        #[arg(long)]
+        mcp: bool,
+        /// Mostra o que seria escrito e não escreve nada.
+        #[arg(long)]
+        print: bool,
     },
     /// Reindexa e mostra o resumo dos eventos do lote.
     Index {
@@ -203,6 +219,23 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         _ => workspace::IndexOpts::default(),
     };
     match &cli.command {
+        Cmd::Init {
+            args,
+            git_ref,
+            mcp,
+            print,
+        } => {
+            let text = init::init(
+                cli,
+                &init::InitArgs {
+                    args,
+                    git_ref: git_ref.as_deref(),
+                    mcp: *mcp,
+                    print: *print,
+                },
+            )?;
+            return finish_plain(cli, "init", &text);
+        }
         Cmd::Derive { task, from } => {
             let text = lifecycle::derive(cli, task, from.as_deref())?;
             return finish_plain(cli, "derive", &text);
@@ -243,7 +276,13 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         .or_else(|| cli.since_last.then(|| "-".to_string()));
     let kind = match &cli.command {
         Cmd::Query { kind } => kind,
-        Cmd::Derive { .. } | Cmd::Promote { .. } | Cmd::Drop { .. } | Cmd::Status => unreachable!(),
+        Cmd::Init { .. }
+        | Cmd::Derive { .. }
+        | Cmd::Promote { .. }
+        | Cmd::Drop { .. }
+        | Cmd::Status => {
+            unreachable!()
+        }
         Cmd::Index { .. } => {
             let text = render::index_text(report.as_ref(), &cov);
             return finish(cli, "index", json_value(&report.is_some())?, &cov, text);

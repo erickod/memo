@@ -34,13 +34,22 @@ pub fn git(repo: &Path, args: &[&str]) -> Result<String, Failure> {
 /// Raiz git, `$COMMON/memo` (criado) e a config do repositório.
 pub fn locate(cli: &Cli) -> Result<Env, Failure> {
     let start = cli.repo.clone().unwrap_or_else(|| PathBuf::from("."));
+    locate_from(&start, true)
+}
+
+/// Como `locate`, a partir de `start`; com `create = false` não cria `$COMMON/memo`
+/// (dry-run do `init`) e usa as sementes se ainda não há `memo.toml`.
+pub fn locate_from(start: &Path, create: bool) -> Result<Env, Failure> {
+    let start = start.to_path_buf();
     let root = PathBuf::from(git(&start, &["rev-parse", "--show-toplevel"])?);
     let common = PathBuf::from(git(
         &root,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
     )?);
     let memo_dir = common.join("memo");
-    std::fs::create_dir_all(&memo_dir).map_err(|e| Failure::Internal(e.to_string()))?;
+    if create {
+        std::fs::create_dir_all(&memo_dir).map_err(|e| Failure::Internal(e.to_string()))?;
+    }
     let config = Config::load(&memo_dir)?;
     Ok(Env {
         root,
@@ -145,13 +154,17 @@ pub fn open_indexed(cli: &Cli, opts: &IndexOpts) -> Result<Opened, Failure> {
                 store.set_meta("indexed_commit", &tree.commit()?)?;
                 report
             }
-            None => index_with_notes_scoped(
-                &WorkTree::new(&env.root),
-                &mut store,
-                &env.config,
-                &notes,
-                &scope,
-            )?,
+            None => {
+                let report = index_with_notes_scoped(
+                    &WorkTree::new(&env.root),
+                    &mut store,
+                    &env.config,
+                    &notes,
+                    &scope,
+                )?;
+                mark_worktree(&env, &store, &report)?;
+                report
+            }
         })
     };
     Ok(Opened {
@@ -160,4 +173,18 @@ pub fn open_indexed(cli: &Cli, opts: &IndexOpts) -> Result<Opened, Failure> {
         report,
         _lock: held,
     })
+}
+
+/// Se a base vinha de uma ref e a árvore de trabalho a mudou, o `meta` passa a dizer isso.
+fn mark_worktree(env: &Env, store: &SqliteStore, report: &IndexReport) -> Result<(), Failure> {
+    let from_ref = store
+        .get_meta("indexed_ref")?
+        .is_some_and(|r| r != "worktree");
+    if report.wrote && from_ref {
+        store.set_meta("indexed_ref", "worktree")?;
+        if let Ok(head) = git(&env.root, &["rev-parse", "HEAD"]) {
+            store.set_meta("indexed_commit", &head)?;
+        }
+    }
+    Ok(())
 }

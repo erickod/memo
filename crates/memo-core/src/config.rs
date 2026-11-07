@@ -98,7 +98,29 @@ impl Config {
 
     /// O `memo.toml` com as sementes, para o `init` gravar.
     pub fn to_toml(&self) -> String {
-        todo!("spec §6.1 memo.toml")
+        let list = |values: &[String]| {
+            let items: Vec<String> = values.iter().map(|v| format!("{v:?}")).collect();
+            format!("[{}]", items.join(", "))
+        };
+        let mut out = String::from(
+            "# memo.toml: configuração do repositório. Listas presentes substituem as sementes.\n",
+        );
+        if let Some(branch) = &self.main_branch {
+            out.push_str(&format!("main_branch = {branch:?}\n"));
+        }
+        out.push_str(&format!("roles = {}\n", list(&self.vocabulary.roles)));
+        out.push_str(&format!("verbs = {}\n", list(&self.vocabulary.verbs)));
+        out.push_str(&format!("skeleton = {}\n", list(&self.skeleton)));
+        out.push_str(&format!("write_methods = {}\n", list(&self.write_methods)));
+        out.push_str(&format!(
+            "entrypoint_decorators = {}\n",
+            list(&self.entrypoint_decorators)
+        ));
+        out.push_str(&format!("min_specificity = {:?}\n", self.min_specificity));
+        out.push_str(&format!("stale_on = {}\n", list(&self.stale_on)));
+        out.push_str(&format!("context_root = {:?}\n", self.context_root));
+        out.push_str(&format!("layers = {}\n", list(&self.layers)));
+        out
     }
 
     /// Lê `<dir>/memo.toml`; sem o arquivo, devolve as sementes.

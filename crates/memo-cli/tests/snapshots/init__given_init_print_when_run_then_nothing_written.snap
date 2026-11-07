@@ -1,0 +1,9 @@
+---
+source: crates/memo-cli/tests/init.rs
+expression: out(&o)
+---
+init claude --print: nada foi gravado
+.git/memo/memo.toml: seria gravado
+base: seria indexada de main
+CLAUDE.md: seria gravado
+.mcp.json: seria gravado
