@@ -5,7 +5,7 @@ use memo_core::brief::{apply_delta, brief_with};
 use memo_core::config::Config;
 use memo_core::delta::apply_impact_delta;
 use memo_core::error::CoreError;
-use memo_core::index::index_with;
+use memo_core::index::{IndexReport, index_with_notes};
 use memo_core::notes::{NewNote, NoteDir, format_utc, notes_for};
 use memo_core::query::{
     callees, callers, coverage, impact, readers, symbol_info, tests_for, type_info, word_info,
@@ -62,6 +62,8 @@ enum Cmd {
         #[command(subcommand)]
         kind: Query,
     },
+    /// Reindexa e mostra o resumo dos eventos do lote.
+    Index,
     /// Âncoras, símbolos, contorno, padrão, escritores e notas para um pedido.
     Brief { request: String },
     /// Notas ancoradas nos símbolos.
@@ -101,6 +103,8 @@ enum NoteCmd {
     Show { id: String },
     /// Confirma uma nota `proposta`.
     Confirm { id: String },
+    /// Atualiza os hashes de uma nota `stale` e volta ao estado anterior.
+    Recheck { id: String },
 }
 
 #[derive(Subcommand)]
@@ -172,7 +176,7 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, Failure> {
 }
 
 /// Abre `$COMMON/memo/base.db` e reindexa a árvore de trabalho, salvo com `--no-index`.
-fn open_indexed(cli: &Cli) -> Result<(SqliteStore, PathBuf), Failure> {
+fn open_indexed(cli: &Cli) -> Result<(SqliteStore, PathBuf, Option<IndexReport>), Failure> {
     let start = cli.repo.clone().unwrap_or_else(|| PathBuf::from("."));
     let root = PathBuf::from(git(&start, &["rev-parse", "--show-toplevel"])?);
     let common = PathBuf::from(git(
@@ -183,10 +187,18 @@ fn open_indexed(cli: &Cli) -> Result<(SqliteStore, PathBuf), Failure> {
     std::fs::create_dir_all(&dir).map_err(|e| Failure::Internal(e.to_string()))?;
     let config = Config::load(&dir)?;
     let mut store = SqliteStore::open(&dir.join("base.db"))?;
-    if !cli.no_index {
-        index_with(&WorkTree::new(&root), &mut store, &config)?;
-    }
-    Ok((store, dir))
+    let notes = NoteDir::new(&dir.join("notes"));
+    let report = if cli.no_index {
+        None
+    } else {
+        Some(index_with_notes(
+            &WorkTree::new(&root),
+            &mut store,
+            &config,
+            &notes,
+        )?)
+    };
+    Ok((store, dir, report))
 }
 
 /// Carimbo da nota: `MEMO_NOW` (testes) ou o relógio, em UTC.
@@ -205,7 +217,7 @@ fn json_value<T: serde::Serialize>(value: &T) -> Result<serde_json::Value, Failu
 }
 
 fn run(cli: &Cli) -> Result<String, Failure> {
-    let (store, memo_dir) = open_indexed(cli)?;
+    let (store, memo_dir, report) = open_indexed(cli)?;
     let notes_dir = NoteDir::new(&memo_dir.join("notes"));
     let cov = coverage(&store)?;
     let (max, limit) = (cli.max_chars, cli.limit);
@@ -215,6 +227,10 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         .or_else(|| cli.since_last.then(|| "-".to_string()));
     let kind = match &cli.command {
         Cmd::Query { kind } => kind,
+        Cmd::Index => {
+            let text = render::index_text(report.as_ref(), &cov);
+            return finish(cli, "index", json_value(&report.is_some())?, &cov, text);
+        }
         Cmd::Note { cmd } => return run_note(cli, cmd, &store, &notes_dir, &cov),
         Cmd::Brief { request } => {
             let visible = notes_dir.visible(cli.task.as_deref())?;
@@ -363,8 +379,16 @@ fn run_note(
             let note = notes.get(id)?;
             ("note show", json_value(&note)?, note.render())
         }
+        NoteCmd::Recheck { id } => {
+            let note = notes.recheck(store, id)?;
+            (
+                "note recheck",
+                json_value(&note)?,
+                format!("note {} {}\n", note.id, note.estado),
+            )
+        }
         NoteCmd::Confirm { id } => {
-            let note = notes.confirm(id)?;
+            let note = notes.confirm_recorded(store, id)?;
             (
                 "note confirm",
                 json_value(&note)?,

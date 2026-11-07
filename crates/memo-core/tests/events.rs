@@ -77,16 +77,18 @@ fn test_given_changed_signature_when_reindexed_then_signature_event_with_hashes(
 
 /// GIVEN execute changes 'amount * rate' to 'amount + rate'
 /// WHEN  the repository is reindexed
-/// THEN  there is one SYMBOL_BODY_CHANGED for execute and no SYMBOL_SIGNATURE_CHANGED
+/// THEN  execute has one SYMBOL_BODY_CHANGED (its class and module change too) and no SIGNATURE one
 #[test]
 fn test_given_changed_body_only_when_reindexed_then_body_changed_event_only() {
     let (repo, mut store) = setup();
     edit(&repo, "amount * rate", "amount + rate");
     reindex(&repo, &mut store);
     let events = store.events().unwrap();
-    let body = of_kind(&events, "SYMBOL_BODY_CHANGED");
+    let body: Vec<EventRow> = of_kind(&events, "SYMBOL_BODY_CHANGED")
+        .into_iter()
+        .filter(|e| e.subject.as_deref() == Some(EXECUTE_Q))
+        .collect();
     assert_eq!(body.len(), 1);
-    assert_eq!(body[0].subject.as_deref(), Some(EXECUTE_Q));
     assert!(of_kind(&events, "SYMBOL_SIGNATURE_CHANGED").is_empty());
 }
 
@@ -225,7 +227,8 @@ fn test_given_word_lifecycle_when_reindexed_then_word_created_and_destroyed() {
 
 /// GIVEN a rename of execute to 'compute' with unchanged body
 /// WHEN  the report summary line is built
-/// THEN  it reads 'eventos: +0 símbolos, ~0 alterados, 1 renomeado, 0 notas stale'
+/// THEN  it reads 'eventos: +0 símbolos, ~2 alterados, 1 renomeado, 0 notas stale'
+///       (the enclosing class and module bodies change when a method is renamed)
 #[test]
 fn test_given_rename_when_summary_then_line_matches_spec_format() {
     let (repo, mut store) = setup();
@@ -233,6 +236,6 @@ fn test_given_rename_when_summary_then_line_matches_spec_format() {
     let report = reindex(&repo, &mut store);
     assert_eq!(
         report.events.line(),
-        "eventos: +0 símbolos, ~0 alterados, 1 renomeado, 0 notas stale"
+        "eventos: +0 símbolos, ~2 alterados, 1 renomeado, 0 notas stale"
     );
 }

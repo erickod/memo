@@ -187,6 +187,17 @@ impl SqliteStore {
             let occ: Vec<String> = occ.collect::<Result<_, _>>()?;
             let _ = writeln!(out, "{}", occ.join(","));
         }
+        for e in self.events()? {
+            let _ = writeln!(
+                out,
+                "event|{}|{}|{}|{}|{}",
+                e.batch,
+                e.seq,
+                e.kind,
+                e.subject.unwrap_or_default(),
+                e.payload.unwrap_or_default()
+            );
+        }
         let mut stats = self.conn.prepare(
             "SELECT w.text, ws.uso, ws.alcance, ws.grau, ws.idf, ws.especificidade, ws.centralidade, ws.esqueleto
              FROM word_stats ws JOIN word w ON w.id = ws.word_id ORDER BY w.text",

@@ -2,7 +2,7 @@
 
 use crate::config::Config;
 use crate::error::CoreError;
-use crate::events::EventSummary;
+use crate::events::{Delta, EventSummary};
 use crate::extract::{FileFacts, SymbolKind, extract_python_file};
 use crate::resolve::resolve_files;
 use crate::source::{SourceFile, SourceTree};
@@ -272,13 +272,20 @@ pub fn index(tree: &dyn SourceTree, store: &mut SqliteStore) -> Result<IndexRepo
 }
 
 /// Como `index_with`, e aplica às notas as transições da §7.3 (`stale`, `orfa`, reancoragem).
+///
+/// As notas são reavaliadas a cada chamada, também sem mudança de arquivo: as transições
+/// comparam estado com estado, então são idempotentes e se recuperam de uma interrupção.
 pub fn index_with_notes(
     tree: &dyn SourceTree,
     store: &mut SqliteStore,
     config: &Config,
-    _notes: &crate::notes::NoteDir,
+    notes: &crate::notes::NoteDir,
 ) -> Result<IndexReport, CoreError> {
-    index_with(tree, store, config)
+    let (mut report, delta) = run_index(tree, store, config)?;
+    if crate::notes::apply_transitions(store, config, notes, &delta, &mut report.events)? {
+        report.wrote = true;
+    }
+    Ok(report)
 }
 
 pub fn index_with(
@@ -286,6 +293,14 @@ pub fn index_with(
     store: &mut SqliteStore,
     config: &Config,
 ) -> Result<IndexReport, CoreError> {
+    Ok(run_index(tree, store, config)?.0)
+}
+
+fn run_index(
+    tree: &dyn SourceTree,
+    store: &mut SqliteStore,
+    config: &Config,
+) -> Result<(IndexReport, Delta), CoreError> {
     let listed = tree.list()?;
     let stored = load_files(store)?;
 
@@ -323,7 +338,7 @@ pub fn index_with(
     };
     if pending.is_empty() && touched.is_empty() && removed.is_empty() {
         report.files_with_error = store.files_with_error()?;
-        return Ok(report);
+        return Ok((report, Delta::default()));
     }
 
     let parsed: Vec<_> = pending
@@ -335,6 +350,7 @@ pub fn index_with(
         .collect();
 
     let tx = store.conn.transaction()?;
+    let before = crate::events::snapshot(&tx)?;
     let affected = affected_files(&tx, &stored, &pending, &removed)?;
     let mut to_resolve: Vec<i64> = Vec::new();
     for path in removed {
@@ -386,11 +402,19 @@ pub fn index_with(
     }
     resolve_files(&tx, &to_resolve, &config.write_methods)?;
     crate::stats::recompute(&tx, config)?;
+    let after = crate::events::snapshot(&tx)?;
+    let mut diff = crate::events::diff(&before, &after);
+    if !diff.events.is_empty() {
+        let batch = crate::events::next_batch(&tx)?;
+        crate::events::record(&tx, &batch, &diff.events)?;
+        diff.delta.batch = Some(batch);
+    }
     tx.commit()?;
 
     report.wrote = true;
+    report.events = diff.summary;
     report.files_with_error = store.files_with_error()?;
-    Ok(report)
+    Ok((report, diff.delta))
 }
 
 /// Arquivos não alterados cujas arestas dependem dos que mudam: quem aponta para os símbolos

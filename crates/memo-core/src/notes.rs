@@ -1,8 +1,11 @@
 //! Notas ancoradas: um arquivo Markdown por nota, a única fonte de verdade (spec §7).
 
+use crate::config::Config;
 use crate::error::CoreError;
+use crate::events::{Delta, EventSummary, NewEvent, record, record_new_batch};
 use crate::query::{resolve_qname, word_stats};
 use crate::store::SqliteStore;
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -384,7 +387,7 @@ impl NoteDir {
     }
 
     /// Grava por arquivo temporário e rename: uma interrupção nunca deixa `.md` truncado.
-    fn write(&self, note: &Note) -> Result<(), CoreError> {
+    pub(crate) fn write(&self, note: &Note) -> Result<(), CoreError> {
         std::fs::create_dir_all(&self.dir)?;
         let tmp = self.dir.join(format!("{}.md.tmp", note.id));
         std::fs::write(&tmp, note.render())?;
@@ -468,10 +471,28 @@ impl NoteDir {
             text,
         };
         self.write(&note)?;
+        let mut events = vec![NewEvent {
+            kind: "NOTE_ADDED",
+            subject: Some(note.id.clone()),
+            payload: None,
+        }];
+        if note.estado == "confirmada" {
+            events.push(NewEvent {
+                kind: "NOTE_CONFIRMED",
+                subject: Some(note.id.clone()),
+                payload: None,
+            });
+        }
         if let Some(mut old) = replaced {
             old.estado = "substituida".to_string();
             self.write(&old)?;
+            events.push(NewEvent {
+                kind: "NOTE_SUPERSEDED",
+                subject: Some(old.id.clone()),
+                payload: Some(serde_json::json!({ "por": note.id }).to_string()),
+            });
         }
+        record_new_batch(&graph.conn, &events)?;
         Ok(AddOutcome { note, conflicts })
     }
 
@@ -532,13 +553,44 @@ impl NoteDir {
     }
 
     /// Como `confirm`, e grava `NOTE_CONFIRMED`.
-    pub fn confirm_recorded(&self, _graph: &SqliteStore, id: &str) -> Result<Note, CoreError> {
-        self.confirm(id)
+    pub fn confirm_recorded(&self, graph: &SqliteStore, id: &str) -> Result<Note, CoreError> {
+        let before = self.get(id)?;
+        let note = self.confirm(id)?;
+        if before.estado != "confirmada" {
+            let event = NewEvent {
+                kind: "NOTE_CONFIRMED",
+                subject: Some(note.id.clone()),
+                payload: None,
+            };
+            record_new_batch(&graph.conn, &[event])?;
+        }
+        Ok(note)
     }
 
     /// Atualiza os hashes da âncora e volta ao estado anterior ao `stale` (spec §7.3).
-    pub fn recheck(&self, _graph: &SqliteStore, _id: &str) -> Result<Note, CoreError> {
-        todo!("spec §7.3 recheck")
+    pub fn recheck(&self, graph: &SqliteStore, id: &str) -> Result<Note, CoreError> {
+        let mut note = self.get(id)?;
+        if note.estado != "stale" {
+            return Err(CoreError::Validation {
+                code: "estado_invalido",
+                message: format!(
+                    "only a stale note can be rechecked, '{id}' is {}",
+                    note.estado
+                ),
+            });
+        }
+        if let Some(qname) = note.ancora.strip_prefix("sym:") {
+            let (sig, body) = current_hashes(graph, qname)?
+                .ok_or_else(|| CoreError::NotFound(format!("sym:{qname}")))?;
+            note.ancora_sig = Some(sig);
+            note.ancora_body = Some(body);
+        }
+        note.estado = note
+            .estado_anterior
+            .take()
+            .unwrap_or_else(|| "proposta".to_string());
+        self.write(&note)?;
+        Ok(note)
     }
 
     /// Notas de escopo `repo` e, com `task`, as de `task:<id>`; em qualquer estado.
@@ -572,4 +624,184 @@ pub fn format_utc(epoch_secs: i64) -> String {
         rem % 3600 / 60,
         rem % 60
     )
+}
+
+/// Os 12 primeiros caracteres de `sig_hash` e `body_hash` do símbolo, se ele existe.
+fn current_hashes(graph: &SqliteStore, qname: &str) -> Result<Option<(String, String)>, CoreError> {
+    let row: Option<(Option<String>, Option<String>)> = graph
+        .conn
+        .query_row(
+            "SELECT sig_hash, body_hash FROM symbol WHERE qname = ?1",
+            [qname],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let cut = |h: Option<String>| {
+        h.unwrap_or_default()
+            .chars()
+            .take(HASH_CHARS)
+            .collect::<String>()
+    };
+    Ok(row.map(|(sig, body)| (cut(sig), cut(body))))
+}
+
+fn symbol_exists(graph: &SqliteStore, qname: &str) -> Result<bool, CoreError> {
+    exists(
+        graph,
+        "SELECT EXISTS(SELECT 1 FROM symbol WHERE qname = ?1)",
+        qname,
+    )
+}
+
+/// Aplica a tabela de renomeações a uma âncora `sym:` ou `edge:`.
+fn rename_anchor(anchor: &str, renames: &[(String, String)]) -> String {
+    let map = |q: &str| {
+        renames
+            .iter()
+            .find(|(de, _)| de == q)
+            .map_or_else(|| q.to_string(), |(_, para)| para.clone())
+    };
+    match anchor.split_once(':') {
+        Some(("sym", q)) => format!("sym:{}", map(q)),
+        Some(("edge", e)) => {
+            let ends: Vec<String> = e.split("->").map(map).collect();
+            format!("edge:{}", ends.join("->"))
+        }
+        _ => anchor.to_string(),
+    }
+}
+
+enum Transition {
+    Keep,
+    Stale,
+    Orphan,
+}
+
+fn judge(
+    graph: &SqliteStore,
+    config: &Config,
+    note: &Note,
+    delta: &Delta,
+    renamed: bool,
+) -> Result<Transition, CoreError> {
+    let (kind, rest) = note.ancora.split_once(':').unwrap_or(("", ""));
+    Ok(match kind {
+        "sym" => {
+            let Some((sig, body)) = current_hashes(graph, rest)? else {
+                return Ok(Transition::Orphan);
+            };
+            let sig_moved = config.stale_on.iter().any(|v| v == "sig")
+                && note.ancora_sig.as_ref().is_some_and(|s| *s != sig);
+            let body_moved = config.stale_on.iter().any(|v| v == "body")
+                && note.ancora_body.as_ref().is_some_and(|b| *b != body);
+            if !renamed && (sig_moved || body_moved) {
+                Transition::Stale
+            } else {
+                Transition::Keep
+            }
+        }
+        "word" => {
+            let used = exists(
+                graph,
+                "SELECT EXISTS(SELECT 1 FROM word w JOIN occurrence o ON o.word_id = w.id
+                 WHERE w.text = ?1)",
+                rest,
+            )?;
+            if used {
+                Transition::Keep
+            } else {
+                Transition::Orphan
+            }
+        }
+        "file" => {
+            let there = exists(
+                graph,
+                "SELECT EXISTS(SELECT 1 FROM file WHERE path = ?1)",
+                rest,
+            )?;
+            if there {
+                Transition::Keep
+            } else {
+                Transition::Orphan
+            }
+        }
+        "edge" => {
+            let (from, to) = rest.split_once("->").unwrap_or(("", ""));
+            let both = symbol_exists(graph, from)? && symbol_exists(graph, to)?;
+            let linked: bool = graph.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM edge e JOIN symbol a ON a.id = e.src
+                 JOIN symbol b ON b.id = e.dst WHERE a.qname = ?1 AND b.qname = ?2)",
+                [from, to],
+                |r| r.get(0),
+            )?;
+            let moved = delta.sig_changed.contains(from) || delta.sig_changed.contains(to);
+            match (linked, both && moved) {
+                (true, _) => Transition::Keep,
+                (false, true) => Transition::Stale,
+                (false, false) => Transition::Orphan,
+            }
+        }
+        _ => Transition::Keep,
+    })
+}
+
+/// Transições de nota da §7.3, calculadas contra o grafo já atualizado. Reescreve os `.md`
+/// que mudam e registra `NOTE_STALE` e `NOTE_ORPHANED` no lote da indexação. Devolve se gravou.
+pub(crate) fn apply_transitions(
+    graph: &SqliteStore,
+    config: &Config,
+    dir: &NoteDir,
+    delta: &Delta,
+    summary: &mut EventSummary,
+) -> Result<bool, CoreError> {
+    let mut events: Vec<NewEvent> = Vec::new();
+    for mut note in dir.list()?.into_iter().filter(is_active) {
+        let ancora = rename_anchor(&note.ancora, &delta.renames);
+        let secundarias: Vec<String> = note
+            .secundarias
+            .iter()
+            .map(|a| rename_anchor(a, &delta.renames))
+            .collect();
+        let renamed = ancora != note.ancora;
+        let mut dirty = renamed || secundarias != note.secundarias;
+        note.ancora = ancora;
+        note.secundarias = secundarias;
+        let before = note.estado.clone();
+        match judge(graph, config, &note, delta, renamed)? {
+            Transition::Keep => {}
+            Transition::Stale if note.estado != "stale" => {
+                note.estado_anterior = Some(before.clone());
+                note.estado = "stale".to_string();
+                summary.notes_stale += 1;
+                events.push(note_event("NOTE_STALE", &note, &before));
+                dirty = true;
+            }
+            Transition::Stale => {}
+            Transition::Orphan => {
+                note.estado = "orfa".to_string();
+                summary.notes_orphaned += 1;
+                events.push(note_event("NOTE_ORPHANED", &note, &before));
+                dirty = true;
+            }
+        }
+        if dirty {
+            dir.write(&note)?;
+        }
+    }
+    if events.is_empty() {
+        return Ok(false);
+    }
+    match &delta.batch {
+        Some(batch) => record(&graph.conn, batch, &events)?,
+        None => record_new_batch(&graph.conn, &events)?,
+    }
+    Ok(true)
+}
+
+fn note_event(kind: &'static str, note: &Note, before: &str) -> NewEvent {
+    NewEvent {
+        kind,
+        subject: Some(note.id.clone()),
+        payload: Some(serde_json::json!({ "antes": before, "depois": note.estado }).to_string()),
+    }
 }

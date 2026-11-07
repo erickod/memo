@@ -260,6 +260,20 @@ fn notes_lines(notes: &[Note]) -> Vec<String> {
     lines
 }
 
+pub fn index_text(report: Option<&memo_core::index::IndexReport>, cov: &Coverage) -> String {
+    let Some(r) = report else {
+        return format!("index idx=skipped\n{}\n", coverage_line(cov));
+    };
+    format!(
+        "index idx=ok arquivos={} alterados={} removidos={}\n{}\n{}\n",
+        r.files_total,
+        r.files_changed,
+        r.files_removed,
+        r.events.line(),
+        coverage_line(cov)
+    )
+}
+
 pub fn note_added_text(note: &Note, conflicts: &[Note]) -> String {
     let mut out = format!("note {} {}  {}\n", note.id, note.estado, note.ancora);
     if !conflicts.is_empty() {
