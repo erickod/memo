@@ -163,7 +163,7 @@ fn test_given_brief_call_when_handled_then_argv_is_brief_with_text_and_task() {
     );
     assert_eq!(
         argv(&f),
-        strs(&["--task", "lend-1", "brief", "calcular limite"])
+        strs(&["--task", "lend-1", "brief", "--", "calcular limite"])
     );
     assert_eq!(
         r["result"]["content"][0],
@@ -188,13 +188,15 @@ fn test_given_query_call_when_handled_then_argv_maps_kind_target_depth_task() {
     );
     assert_eq!(
         argv(&f),
-        strs(&["--task", "t", "query", "callers", "A.run", "--depth", "2"])
+        strs(&[
+            "--task", "t", "query", "callers", "--depth", "2", "--", "A.run"
+        ])
     );
     call(
         &server,
         tool_call("query", json!({"kind":"symbol","target":"A.run","depth":3})),
     );
-    assert_eq!(argv(&f), strs(&["query", "symbol", "A.run"]));
+    assert_eq!(argv(&f), strs(&["query", "symbol", "--", "A.run"]));
 }
 
 /// GIVEN a note_add call with confirm true
@@ -225,6 +227,7 @@ fn test_given_note_add_call_when_handled_then_argv_uses_agent_origin_and_confirm
             "--origem",
             "agente",
             "--confirm",
+            "--",
             "Regra."
         ])
     );
@@ -339,4 +342,30 @@ fn test_given_two_lines_when_serve_runs_then_two_responses_in_order() {
         lines.iter().map(|l| l["id"].clone()).collect::<Vec<_>>(),
         vec![json!(1), json!(2)]
     );
+}
+
+/// GIVEN a brief call whose text is '--task=evil'
+/// WHEN  it is handled
+/// THEN  the argv has '--' right before the text, so the CLI cannot read it as a flag
+#[test]
+fn test_given_dash_prefixed_brief_text_when_mcp_called_then_argv_has_double_dash_separator() {
+    let f = fake("x", false);
+    call(
+        &Server::new(&f, None),
+        tool_call("brief", json!({"text":"--task=evil"})),
+    );
+    assert_eq!(argv(&f), strs(&["brief", "--", "--task=evil"]));
+}
+
+/// GIVEN a query call whose target is '--json'
+/// WHEN  it is handled
+/// THEN  the target comes after '--' and stays positional
+#[test]
+fn test_given_dash_prefixed_query_target_when_mcp_called_then_target_stays_positional() {
+    let f = fake("x", false);
+    call(
+        &Server::new(&f, None),
+        tool_call("query", json!({"kind":"symbol","target":"--json"})),
+    );
+    assert_eq!(argv(&f), strs(&["query", "symbol", "--", "--json"]));
 }

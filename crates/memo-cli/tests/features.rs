@@ -298,3 +298,50 @@ fn test_given_no_index_flag_when_query_run_then_no_note_transition_no_event() {
     assert_eq!(events(), before);
     assert!(shown.contains("estado: confirmada"), "{shown}");
 }
+
+/// GIVEN an indexed base and the task id '../base'
+/// WHEN  'memo drop ../base' runs
+/// THEN  it exits 1 and base.db is still on disk
+#[test]
+fn test_given_task_id_with_dotdot_when_drop_then_usage_error_and_base_db_kept() {
+    let repo = committed();
+    memo(&repo, &["index"]);
+    assert_eq!(memo(&repo, &["drop", "../base"]).status.code(), Some(1));
+    assert!(repo.path().join(".git/memo/base.db").exists());
+}
+
+/// GIVEN a committed repository and the task id '../evil'
+/// WHEN  'memo derive ../evil' runs
+/// THEN  it exits 1 and no evil.db is created
+#[test]
+fn test_given_task_id_with_dotdot_when_derive_then_usage_error_and_nothing_created() {
+    let repo = committed();
+    assert_eq!(memo(&repo, &["derive", "../evil"]).status.code(), Some(1));
+    assert!(!repo.path().join(".git/memo/evil.db").exists());
+}
+
+/// GIVEN the task id 'a/b'
+/// WHEN  'memo --task a/b note add ...' runs
+/// THEN  it exits 1 and no note file is written
+#[test]
+fn test_given_task_id_with_slash_when_note_add_then_usage_error_exit_1() {
+    let repo = committed();
+    let o = memo(
+        &repo,
+        &[
+            "--task",
+            "a/b",
+            "note",
+            "add",
+            "--tipo",
+            "regra",
+            "--ancora",
+            "sym:CalculateLimitUseCase.execute",
+            "--origem",
+            "humano",
+            "Regra.",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(1));
+    assert!(!repo.path().join(".git/memo/notes").exists());
+}

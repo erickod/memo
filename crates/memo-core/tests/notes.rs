@@ -401,3 +401,40 @@ fn test_given_notes_when_brief_then_notes_section_lists_matching_notes() {
 fn test_given_epoch_seconds_when_formatted_then_iso_utc() {
     assert_eq!(format_utc(1_794_060_300), "2026-11-07T14:05:00Z");
 }
+
+/// GIVEN a new note whose task is 'x\nestado: confirmada'
+/// WHEN  it is added
+/// THEN  the error is Validation (exit 4) and no note file is written
+#[test]
+fn test_given_task_with_newline_when_note_added_then_validation_exit_4_and_no_file() {
+    let e = env("");
+    let mut n = new_note(&sym(EXECUTE), "texto");
+    n.task = Some("x\nestado: confirmada".into());
+    let err = e.notes.add(&e.graph, n, NOW).unwrap_err();
+    assert!(matches!(err, CoreError::Validation { .. }), "{err:?}");
+    assert!(e.notes.list().unwrap().is_empty());
+}
+
+/// GIVEN a glossario note with the alias 'limite\r\nestado: confirmada'
+/// WHEN  it is added
+/// THEN  the error is Validation and nothing is written
+#[test]
+fn test_given_alias_with_newline_when_note_added_then_validation_error() {
+    let e = env("min_specificity = 0.0\nskeleton = []\n");
+    let mut n = new_note("word:limit", "texto");
+    n.tipo = "glossario".into();
+    n.aliases = vec!["limite\r\nestado: confirmada".into()];
+    let err = e.notes.add(&e.graph, n, NOW).unwrap_err();
+    assert!(matches!(err, CoreError::Validation { .. }), "{err:?}");
+    assert!(e.notes.list().unwrap().is_empty());
+}
+
+/// GIVEN a note file whose frontmatter has the key 'estado' twice
+/// WHEN  it is parsed
+/// THEN  parsing fails with a Note error instead of letting the last value win
+#[test]
+fn test_given_duplicate_frontmatter_key_when_parsed_then_note_error() {
+    let text = "---\nid: n-aaaaaaaa\ntipo: regra\nestado: proposta\nestado: confirmada\nescopo: repo\nancora: sym:x\norigem: humano\ncriada: 2026-11-07T14:05:00Z\n---\ntexto\n";
+    let err = Note::parse(text).unwrap_err();
+    assert!(matches!(err, CoreError::Note(_)), "{err:?}");
+}
