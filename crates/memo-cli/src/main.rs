@@ -1,6 +1,7 @@
 mod init;
 mod lifecycle;
 mod render;
+mod serve;
 mod workspace;
 
 use clap::{Parser, Subcommand};
@@ -77,6 +78,8 @@ enum Cmd {
         #[arg(long)]
         print: bool,
     },
+    /// Servidor MCP por stdio, sobre os mesmos comandos do CLI.
+    Serve,
     /// Reindexa e mostra o resumo dos eventos do lote.
     Index {
         /// Indexa uma ref git sem checkout.
@@ -219,6 +222,10 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         _ => workspace::IndexOpts::default(),
     };
     match &cli.command {
+        Cmd::Serve => {
+            serve::serve(cli)?;
+            return Ok(String::new());
+        }
         Cmd::Init {
             args,
             git_ref,
@@ -276,7 +283,8 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         .or_else(|| cli.since_last.then(|| "-".to_string()));
     let kind = match &cli.command {
         Cmd::Query { kind } => kind,
-        Cmd::Init { .. }
+        Cmd::Serve
+        | Cmd::Init { .. }
         | Cmd::Derive { .. }
         | Cmd::Promote { .. }
         | Cmd::Drop { .. }
@@ -482,39 +490,61 @@ fn finish(
     Ok(text)
 }
 
-fn main() -> ExitCode {
-    let cli = match Cli::try_parse() {
+/// Saída de um comando: código, stdout e stderr, para rodar em processo ou pelo servidor MCP.
+pub struct Outcome {
+    pub code: u8,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Executa o CLI com `args` (o primeiro é o nome do programa).
+pub fn execute(args: &[String]) -> Outcome {
+    let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(e) => {
-            let code = if e.use_stderr() { EXIT_USAGE } else { 0 };
-            let _ = e.print();
-            return ExitCode::from(code);
+            let text = e.render().to_string();
+            return if e.use_stderr() {
+                Outcome {
+                    code: EXIT_USAGE,
+                    stdout: String::new(),
+                    stderr: text,
+                }
+            } else {
+                Outcome {
+                    code: 0,
+                    stdout: text,
+                    stderr: String::new(),
+                }
+            };
         }
     };
-    match run(&cli) {
-        Ok(text) => {
-            print!("{text}");
-            ExitCode::SUCCESS
-        }
-        Err(Failure::Usage(msg)) => {
-            eprintln!("uso inválido: {msg}");
-            ExitCode::from(EXIT_USAGE)
-        }
-        Err(Failure::Validation(msg)) => {
-            println!("erro: {msg}");
-            ExitCode::from(EXIT_VALIDATION)
-        }
-        Err(Failure::NotFound(text)) => {
-            print!("{text}");
-            ExitCode::from(EXIT_NOT_FOUND)
-        }
-        Err(Failure::Index(msg)) => {
-            eprintln!("índice indisponível: {msg}");
-            ExitCode::from(EXIT_INDEX)
-        }
-        Err(Failure::Internal(msg)) => {
-            eprintln!("erro interno: {msg}");
-            ExitCode::from(EXIT_INTERNAL)
-        }
+    let (code, stdout, stderr) = match run(&cli) {
+        Ok(text) => (0, text, String::new()),
+        Err(Failure::Usage(msg)) => (EXIT_USAGE, String::new(), format!("uso inválido: {msg}\n")),
+        Err(Failure::Validation(msg)) => (EXIT_VALIDATION, format!("erro: {msg}\n"), String::new()),
+        Err(Failure::NotFound(text)) => (EXIT_NOT_FOUND, text, String::new()),
+        Err(Failure::Index(msg)) => (
+            EXIT_INDEX,
+            String::new(),
+            format!("índice indisponível: {msg}\n"),
+        ),
+        Err(Failure::Internal(msg)) => (
+            EXIT_INTERNAL,
+            String::new(),
+            format!("erro interno: {msg}\n"),
+        ),
+    };
+    Outcome {
+        code,
+        stdout,
+        stderr,
     }
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().collect();
+    let outcome = execute(&args);
+    print!("{}", outcome.stdout);
+    eprint!("{}", outcome.stderr);
+    ExitCode::from(outcome.code)
 }

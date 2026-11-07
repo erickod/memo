@@ -15,5 +15,6 @@ serde_json = "1.0.154"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 memo-core = { version = "0.1.0", path = "../memo-core" }
 memo-harness = { version = "0.1.0", path = "../memo-harness" }
+memo-mcp = { version = "0.1.0", path = "../memo-mcp" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

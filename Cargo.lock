@@ -363,6 +363,7 @@ dependencies = [
  "insta",
  "memo-core",
  "memo-harness",
+ "memo-mcp",
  "serde",
  "serde_json",
 ]
