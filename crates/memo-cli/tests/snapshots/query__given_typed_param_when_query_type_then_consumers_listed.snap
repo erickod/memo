@@ -8,4 +8,4 @@ produz:
 consome:
   M AnticipateInvoiceUseCase.__init__   app/billing/application/usecases/anticipate_invoice_usecase.py:L5-L6 invoice :L5
   M CancelInvoiceUseCase.__init__   app/billing/application/usecases/cancel_invoice_usecase.py:L5-L6 invoice :L5
-cobertura: 15 resolvidas, 0 aprox, 0 não resolvidas, 0 arquivos com erro
+cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro

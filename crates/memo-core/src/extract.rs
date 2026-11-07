@@ -33,6 +33,7 @@ pub enum RefKind {
     Especializa,
     Escreve,
     Le,
+    Chama,
 }
 
 impl RefKind {
@@ -43,6 +44,7 @@ impl RefKind {
             RefKind::Especializa => "ESPECIALIZA",
             RefKind::Escreve => "ESCREVE",
             RefKind::Le => "LE",
+            RefKind::Chama => "CHAMA",
         }
     }
 }
@@ -54,6 +56,8 @@ pub struct RefFact {
     pub kind: RefKind,
     /// Tipo (RETORNA, LEVANTA, ESPECIALIZA) ou caminho após `self` (ESCREVE, LE: `a.b`).
     pub text: String,
+    /// Tipo (texto bruto) do receptor local, para chamadas `x.m()` (spec §5.4, regra 6).
+    pub receiver: Option<String>,
     pub line: usize,
 }
 
@@ -216,6 +220,7 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
                 src_qname: qname.clone(),
                 kind: RefKind::Especializa,
                 text,
+                receiver: None,
                 line,
             });
         }
@@ -261,6 +266,7 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
                 src_qname: qname.clone(),
                 kind: RefKind::Retorna,
                 text,
+                receiver: None,
                 line: def_line,
             });
         }
@@ -299,7 +305,9 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
         if in_class {
             self_attributes(ctx, b, prefix, &param_types);
         }
-        scan_effects(ctx, b, &qname, in_class);
+        let mut locals = param_types.clone();
+        collect_locals(ctx, b, &mut locals);
+        scan_effects(ctx, b, &qname, in_class, &locals);
     }
 }
 
@@ -523,11 +531,18 @@ fn push_ref(ctx: &mut Ctx, src: &str, kind: RefKind, text: String, node: Node) {
         src_qname: src.to_string(),
         kind,
         text,
+        receiver: None,
         line: node.start_position().row + 1,
     });
 }
 
-fn write_target(ctx: &mut Ctx, target: Node, src: &str, track_self: bool) {
+fn write_target(
+    ctx: &mut Ctx,
+    target: Node,
+    src: &str,
+    track_self: bool,
+    locals: &HashMap<String, String>,
+) {
     match target.kind() {
         "attribute" | "subscript" => {
             let base = if target.kind() == "subscript" {
@@ -541,21 +556,21 @@ fn write_target(ctx: &mut Ctx, target: Node, src: &str, track_self: bool) {
                 }
                 _ => {
                     if let Some(b) = base {
-                        scan_effects(ctx, b, src, track_self);
+                        scan_effects(ctx, b, src, track_self, locals);
                     }
                 }
             }
             if target.kind() == "subscript" {
                 let mut cursor = target.walk();
                 for idx in target.children_by_field_name("subscript", &mut cursor) {
-                    scan_effects(ctx, idx, src, track_self);
+                    scan_effects(ctx, idx, src, track_self, locals);
                 }
             }
         }
         "pattern_list" | "tuple_pattern" | "list_pattern" => {
             let mut cursor = target.walk();
             for child in target.named_children(&mut cursor) {
-                write_target(ctx, child, src, track_self);
+                write_target(ctx, child, src, track_self, locals);
             }
         }
         _ => {}
@@ -563,20 +578,39 @@ fn write_target(ctx: &mut Ctx, target: Node, src: &str, track_self: bool) {
 }
 
 /// Efeitos de um símbolo: `ESCREVE`, `LE` (só `self.x`) e `LEVANTA` (spec §5.5).
-fn scan_effects(ctx: &mut Ctx, node: Node, src: &str, track_self: bool) {
+fn scan_effects(
+    ctx: &mut Ctx,
+    node: Node,
+    src: &str,
+    track_self: bool,
+    locals: &HashMap<String, String>,
+) {
     match node.kind() {
         "class_definition" => return,
         "assignment" | "augmented_assignment" => {
             if let Some(left) = node.child_by_field_name("left") {
-                write_target(ctx, left, src, track_self);
+                write_target(ctx, left, src, track_self, locals);
             }
             if let Some(right) = node.child_by_field_name("right") {
-                scan_effects(ctx, right, src, track_self);
+                scan_effects(ctx, right, src, track_self, locals);
             }
             return;
         }
         "call" => {
             let func = node.child_by_field_name("function");
+            if let Some(callee) = func.and_then(|f| callee_text(ctx, f)) {
+                let first = callee.split('.').next().unwrap_or("");
+                let receiver = (callee.contains('.') && !matches!(first, "self" | "cls"))
+                    .then(|| locals.get(first).cloned())
+                    .flatten();
+                ctx.facts.refs.push(RefFact {
+                    src_qname: src.to_string(),
+                    kind: RefKind::Chama,
+                    text: callee,
+                    receiver,
+                    line: node.start_position().row + 1,
+                });
+            }
             match func {
                 Some(f) if f.kind() == "attribute" => {
                     let obj = f.child_by_field_name("object");
@@ -598,16 +632,16 @@ fn scan_effects(ctx: &mut Ctx, node: Node, src: &str, track_self: bool) {
                         }
                         None => {
                             if let Some(o) = obj {
-                                scan_effects(ctx, o, src, track_self);
+                                scan_effects(ctx, o, src, track_self, locals);
                             }
                         }
                     }
                 }
-                Some(f) => scan_effects(ctx, f, src, track_self),
+                Some(f) => scan_effects(ctx, f, src, track_self, locals),
                 None => {}
             }
             if let Some(args) = node.child_by_field_name("arguments") {
-                scan_effects(ctx, args, src, track_self);
+                scan_effects(ctx, args, src, track_self, locals);
             }
             return;
         }
@@ -633,7 +667,7 @@ fn scan_effects(ctx: &mut Ctx, node: Node, src: &str, track_self: bool) {
     }
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        scan_effects(ctx, child, src, track_self);
+        scan_effects(ctx, child, src, track_self, locals);
     }
 }
 
@@ -740,5 +774,61 @@ fn collect_imports(ctx: &mut Ctx, node: Node, module: &str, is_package: bool, tc
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         collect_imports(ctx, child, module, is_package, tc);
+    }
+}
+
+/// `a.b.c` quando o nó é só nomes e pontos; `None` caso contrário.
+fn dotted_name(ctx: &Ctx, node: Node) -> Option<String> {
+    match node.kind() {
+        "identifier" => Some(ctx.text(node).to_string()),
+        "attribute" => {
+            let object = dotted_name(ctx, node.child_by_field_name("object")?)?;
+            Some(format!(
+                "{object}.{}",
+                ctx.text(node.child_by_field_name("attribute")?)
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Texto do chamado; `?.m` quando o receptor não é um nome (ex.: `f().m()`), só o método importa.
+fn callee_text(ctx: &Ctx, func: Node) -> Option<String> {
+    dotted_name(ctx, func).or_else(|| {
+        (func.kind() == "attribute")
+            .then(|| func.child_by_field_name("attribute"))
+            .flatten()
+            .map(|m| format!("?.{}", ctx.text(m)))
+    })
+}
+
+/// Tipos de variáveis locais: `x: T = ...` e `x = Tipo(...)` (primeira ocorrência vale).
+fn collect_locals(ctx: &Ctx, node: Node, locals: &mut HashMap<String, String>) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "function_definition" | "class_definition" | "lambda" => continue,
+            "assignment" => {
+                let left = child.child_by_field_name("left");
+                if let Some(l) = left.filter(|l| l.kind() == "identifier") {
+                    let name = ctx.text(l).to_string();
+                    let ty = child
+                        .child_by_field_name("type")
+                        .map(|t| unwrap_type(ctx.text(t)))
+                        .or_else(|| {
+                            let right = child.child_by_field_name("right")?;
+                            if right.kind() != "call" {
+                                return None;
+                            }
+                            dotted_name(ctx, right.child_by_field_name("function")?)
+                        });
+                    if let Some(ty) = ty {
+                        locals.entry(name).or_insert(ty);
+                    }
+                }
+            }
+            _ => {}
+        }
+        collect_locals(ctx, child, locals);
     }
 }

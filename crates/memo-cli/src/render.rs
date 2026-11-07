@@ -1,7 +1,8 @@
 //! Formatação de saída em texto compacto (spec §8.3).
 
 use memo_core::query::{
-    Coverage, EdgeView, RelItem, Relation, SymbolAddr, SymbolInfo, TypeInfo, WordInfo,
+    Chain, ChainItem, Coverage, EdgeView, Impact, RelItem, Relation, SymbolAddr, SymbolInfo,
+    TestsInfo, TypeInfo, WordInfo,
 };
 
 fn coverage_line(c: &Coverage) -> String {
@@ -149,6 +150,99 @@ pub fn type_text(
     }
     items.extend(info.consumers.iter().map(rel_item));
     fit(&head, &items, &[coverage_line(cov)], max_chars, limit)
+}
+
+fn chain_item(i: &ChainItem) -> String {
+    let approx = if i.approx { " ~" } else { "" };
+    let line = i.line.map(|l| format!(" :L{l}")).unwrap_or_default();
+    match (&i.addr, &i.ext) {
+        (Some(addr), _) => format!("{}  d{}{approx}{line}", item(addr), i.depth),
+        (None, ext) => format!(
+            "  ext {}  d{}{line}",
+            ext.as_deref().unwrap_or("?"),
+            i.depth
+        ),
+    }
+}
+
+fn section(label: &str, lines: Vec<String>, items: &mut Vec<String>) {
+    items.push(format!("{label}:"));
+    if lines.is_empty() {
+        items.push("  nenhum".to_string());
+    }
+    items.extend(lines);
+}
+
+pub fn chain_text(
+    label: &str,
+    chain: &Chain,
+    idx: &str,
+    cov: &Coverage,
+    max_chars: usize,
+    limit: Option<usize>,
+) -> String {
+    let mut head = vec![format!("{label} {}  idx={idx}", chain.target.short)];
+    if chain.items.is_empty() {
+        head.push("  nenhum".to_string());
+    }
+    let items: Vec<String> = chain.items.iter().map(chain_item).collect();
+    fit(&head, &items, &[coverage_line(cov)], max_chars, limit)
+}
+
+fn tests_sections(tests: &TestsInfo, items: &mut Vec<String>) {
+    section(
+        "testes exatos",
+        tests.exact.iter().map(rel_item).collect(),
+        items,
+    );
+    section(
+        "testes ~",
+        tests.approx.iter().map(rel_item).collect(),
+        items,
+    );
+}
+
+pub fn tests_text(
+    target: &SymbolAddr,
+    tests: &TestsInfo,
+    idx: &str,
+    cov: &Coverage,
+    max_chars: usize,
+    limit: Option<usize>,
+) -> String {
+    let head = vec![format!("tests {}  idx={idx}", target.short)];
+    let mut items = Vec::new();
+    tests_sections(tests, &mut items);
+    fit(&head, &items, &[coverage_line(cov)], max_chars, limit)
+}
+
+pub fn impact_text(
+    info: &Impact,
+    idx: &str,
+    cov: &Coverage,
+    max_chars: usize,
+    limit: Option<usize>,
+) -> String {
+    let head = vec![format!("impact {}  idx={idx}", info.target.short)];
+    let mut items = Vec::new();
+    section(
+        "chamadores",
+        info.callers.iter().map(chain_item).collect(),
+        &mut items,
+    );
+    section(
+        "consumidores",
+        info.consumers.iter().map(rel_item).collect(),
+        &mut items,
+    );
+    section(
+        "protocolo",
+        info.protocol.iter().map(rel_item).collect(),
+        &mut items,
+    );
+    tests_sections(&info.tests, &mut items);
+    let tail = ["notas: nenhuma".to_string(), coverage_line(cov)];
+    fit(&head, &items, &tail, max_chars, limit)
 }
 
 pub fn word_text(

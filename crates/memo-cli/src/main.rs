@@ -3,7 +3,10 @@ mod render;
 use clap::{Parser, Subcommand};
 use memo_core::error::CoreError;
 use memo_core::index::index;
-use memo_core::query::{coverage, readers, symbol_info, type_info, word_info, writers};
+use memo_core::query::{
+    callees, callers, coverage, impact, readers, symbol_info, tests_for, type_info, word_info,
+    writers,
+};
 use memo_core::source::WorkTree;
 use memo_core::store::SqliteStore;
 use std::path::{Path, PathBuf};
@@ -61,6 +64,22 @@ enum Query {
     Readers { attr: String },
     /// Quem produz e quem consome o tipo.
     Type { target: String },
+    /// Quem chama o símbolo.
+    Callers {
+        target: String,
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(i64).range(1..=3))]
+        depth: i64,
+    },
+    /// O que o símbolo chama.
+    Callees {
+        target: String,
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(i64).range(1..=3))]
+        depth: i64,
+    },
+    /// Chamadores, consumidores do tipo, Protocol, testes e notas.
+    Impact { target: String },
+    /// Testes que chamam o símbolo (exato) ou se sobrepõem por palavras (~).
+    Tests { target: String },
 }
 
 enum Failure {
@@ -159,6 +178,39 @@ fn run(cli: &Cli) -> Result<String, Failure> {
                 "query readers",
                 json_value(&rel)?,
                 render::relation_text("readers", &rel, "ok", &cov, max, limit),
+            )
+        }
+        Query::Callers { target, depth } => {
+            let chain = callers(&store, target, *depth)?;
+            (
+                "query callers",
+                json_value(&chain)?,
+                render::chain_text("callers", &chain, "ok", &cov, max, limit),
+            )
+        }
+        Query::Callees { target, depth } => {
+            let chain = callees(&store, target, *depth)?;
+            (
+                "query callees",
+                json_value(&chain)?,
+                render::chain_text("callees", &chain, "ok", &cov, max, limit),
+            )
+        }
+        Query::Impact { target } => {
+            let info = impact(&store, target)?;
+            (
+                "query impact",
+                json_value(&info)?,
+                render::impact_text(&info, "ok", &cov, max, limit),
+            )
+        }
+        Query::Tests { target } => {
+            let tests = tests_for(&store, target)?;
+            let addr = symbol_info(&store, target)?.addr;
+            (
+                "query tests",
+                json_value(&tests)?,
+                render::tests_text(&addr, &tests, "ok", &cov, max, limit),
             )
         }
         Query::Type { target } => {

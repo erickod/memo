@@ -22,6 +22,7 @@ struct RawRef {
     text: Option<String>,
     attr: Option<String>,
     pos: Option<i64>,
+    receiver: Option<String>,
     line: i64,
 }
 
@@ -133,18 +134,77 @@ struct NewEdge<'a> {
     line: i64,
     attr: Option<&'a str>,
     pos: Option<i64>,
+    approx: bool,
 }
 
 fn insert_edge(tx: &Transaction, e: &NewEdge) -> Result<(), CoreError> {
     tx.execute(
         "INSERT INTO edge(kind, src, dst, dst_text, line, attr, pos, approx)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
-        params![e.kind, e.src, e.dst, e.dst_text, e.line, e.attr, e.pos],
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            e.kind, e.src, e.dst, e.dst_text, e.line, e.attr, e.pos, e.approx
+        ],
     )?;
     Ok(())
 }
 
+fn load_refs(tx: &Transaction, file_id: i64) -> Result<Vec<RawRef>, CoreError> {
+    let mut stmt = tx.prepare(
+        "SELECT rowid, src, kind, callee_text, attr, pos, line, receiver FROM raw_ref
+         WHERE file_id = ?1 ORDER BY rowid",
+    )?;
+    let refs = stmt
+        .query_map([file_id], |r| {
+            Ok(RawRef {
+                rowid: r.get(0)?,
+                src: r.get(1)?,
+                kind: r.get(2)?,
+                text: r.get(3)?,
+                attr: r.get(4)?,
+                pos: r.get(5)?,
+                line: r.get(6)?,
+                receiver: r.get(7)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(refs)
+}
+
+fn resolve_imports(
+    tx: &Transaction,
+    resolver: &mut Resolver,
+    file_id: i64,
+) -> Result<(), CoreError> {
+    let module = resolver.file_ctx(file_id)?.module.clone();
+    let Some((src, _)) = resolver.symbol(&module)? else {
+        return Ok(());
+    };
+    let mut stmt = tx.prepare(
+        "SELECT target, line, type_checking FROM import WHERE file_id = ?1 ORDER BY rowid",
+    )?;
+    let imports: Vec<(String, i64, i64)> = stmt
+        .query_map([file_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    for (target, line, type_checking) in imports {
+        let dst = resolver.symbol(&target)?.map(|(id, _)| id);
+        let edge = NewEdge {
+            kind: "IMPORTA",
+            src,
+            dst,
+            dst_text: dst.is_none().then_some(target.as_str()),
+            line,
+            attr: (type_checking != 0).then_some("type_checking"),
+            pos: None,
+            approx: false,
+        };
+        insert_edge(tx, &edge)?;
+    }
+    Ok(())
+}
+
 /// Recria as arestas de saída dos arquivos, a partir de `raw_ref` e `import` (sem reparsear).
+///
+/// Duas fases: tipos, imports e efeitos primeiro; chamadas depois, já com herança e Protocols.
 pub fn resolve_files(tx: &Transaction, file_ids: &[i64]) -> Result<(), CoreError> {
     let mut resolver = Resolver::new(tx);
     for &file_id in file_ids {
@@ -152,55 +212,340 @@ pub fn resolve_files(tx: &Transaction, file_ids: &[i64]) -> Result<(), CoreError
             "DELETE FROM edge WHERE src IN (SELECT id FROM symbol WHERE file_id = ?1)",
             [file_id],
         )?;
-        let module = resolver.file_ctx(file_id)?.module.clone();
-        let module_id = resolver.symbol(&module)?.map(|(id, _)| id);
+        resolve_imports(tx, &mut resolver, file_id)?;
+        for raw in load_refs(tx, file_id)?.iter().filter(|r| r.kind != "CHAMA") {
+            resolve_ref(tx, &mut resolver, file_id, raw)?;
+        }
+    }
+    resolve_structural(tx, &mut resolver)?;
+    for &file_id in file_ids {
+        for raw in load_refs(tx, file_id)?.iter().filter(|r| r.kind == "CHAMA") {
+            resolve_call(tx, &mut resolver, file_id, raw)?;
+        }
+    }
+    Ok(())
+}
 
-        if let Some(src) = module_id {
-            let mut stmt = tx.prepare(
-                "SELECT target, line, type_checking FROM import WHERE file_id = ?1 ORDER BY rowid",
+const WRITE_METHODS: &[&str] = &[
+    "save", "add", "insert", "update", "delete", "publish", "send", "commit", "flush",
+];
+
+impl Resolver<'_> {
+    fn class_of(&self, symbol_id: i64) -> Result<Option<i64>, CoreError> {
+        Ok(self
+            .tx
+            .query_row(
+                "SELECT p.id FROM symbol s JOIN symbol p ON p.id = s.parent_id
+                 WHERE s.id = ?1 AND p.kind = 'class'",
+                [symbol_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Método da classe ou de uma base do repo (herança explícita).
+    fn method_in_class(
+        &self,
+        class_id: i64,
+        name: &str,
+        depth: u8,
+    ) -> Result<Option<i64>, CoreError> {
+        let own: Option<i64> = self
+            .tx
+            .query_row(
+                "SELECT id FROM symbol WHERE parent_id = ?1 AND name = ?2 AND kind = 'method'",
+                params![class_id, name],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if own.is_some() || depth == 0 {
+            return Ok(own);
+        }
+        let mut stmt = self.tx.prepare(
+            "SELECT dst FROM edge WHERE src = ?1 AND kind = 'ESPECIALIZA'
+             AND dst IS NOT NULL AND approx = 0 ORDER BY id",
+        )?;
+        let bases: Vec<i64> = stmt
+            .query_map([class_id], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        for base in bases {
+            if let Some(found) = self.method_in_class(base, name, depth - 1)? {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
+    }
+
+    fn is_protocol(&self, class_id: i64) -> Result<bool, CoreError> {
+        let flag: i64 = self.tx.query_row(
+            "SELECT is_protocol FROM symbol WHERE id = ?1",
+            [class_id],
+            |r| r.get(0),
+        )?;
+        Ok(flag != 0)
+    }
+
+    /// Classes com `ESPECIALIZA` (explícita ou estrutural) para o Protocol, em ordem estável.
+    fn implementations(&self, protocol_id: i64) -> Result<Vec<i64>, CoreError> {
+        let mut stmt = self.tx.prepare(
+            "SELECT DISTINCT e.src FROM edge e JOIN symbol s ON s.id = e.src
+             WHERE e.kind = 'ESPECIALIZA' AND e.dst = ?1 ORDER BY s.qname",
+        )?;
+        let ids = stmt
+            .query_map([protocol_id], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(ids)
+    }
+
+    fn class_name(&self, class_id: i64) -> Result<String, CoreError> {
+        let qname: String =
+            self.tx
+                .query_row("SELECT qname FROM symbol WHERE id = ?1", [class_id], |r| {
+                    r.get(0)
+                })?;
+        Ok(qname.rsplit('.').next().unwrap_or(&qname).to_string())
+    }
+
+    /// Classe do tipo anotado de um atributo.
+    fn attr_class(&mut self, attr_id: i64) -> Result<Option<i64>, CoreError> {
+        let row: (Option<String>, i64) = self.tx.query_row(
+            "SELECT type_text, file_id FROM symbol WHERE id = ?1",
+            [attr_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        match row {
+            (Some(text), file_id) => self.resolve_type(file_id, &text),
+            _ => Ok(None),
+        }
+    }
+
+    fn arity(&self, method_id: i64) -> Result<i64, CoreError> {
+        Ok(self.tx.query_row(
+            "SELECT COUNT(*) FROM edge WHERE kind = 'RECEBE' AND src = ?1",
+            [method_id],
+            |r| r.get(0),
+        )?)
+    }
+}
+
+/// `ESPECIALIZA` estrutural (`~`): a classe tem todos os métodos públicos do Protocol, com a
+/// mesma aridade, sem herdar dele (spec §4).
+fn resolve_structural(tx: &Transaction, resolver: &mut Resolver) -> Result<(), CoreError> {
+    tx.execute(
+        "DELETE FROM edge WHERE kind = 'ESPECIALIZA' AND approx = 1",
+        [],
+    )?;
+    let mut stmt = tx
+        .prepare("SELECT id FROM symbol WHERE kind = 'class' AND is_protocol = 1 ORDER BY qname")?;
+    let protocols: Vec<i64> = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut stmt = tx
+        .prepare("SELECT id FROM symbol WHERE kind = 'class' AND is_protocol = 0 ORDER BY qname")?;
+    let classes: Vec<i64> = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    for protocol in protocols {
+        let mut stmt = tx.prepare(
+            "SELECT id, name FROM symbol WHERE parent_id = ?1 AND kind = 'method'
+             AND substr(name, 1, 1) != '_' ORDER BY name",
+        )?;
+        let methods: Vec<(i64, String)> = stmt
+            .query_map([protocol], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        if methods.is_empty() {
+            continue;
+        }
+        for &class in &classes {
+            let explicit: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM edge WHERE kind = 'ESPECIALIZA' AND src = ?1 AND dst = ?2)",
+                params![class, protocol],
+                |r| r.get(0),
             )?;
-            let imports: Vec<(String, i64, i64)> = stmt
-                .query_map([file_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                .collect::<Result<_, _>>()?;
-            for (target, line, type_checking) in imports {
-                let dst = resolver.symbol(&target)?.map(|(id, _)| id);
-                let text = dst.is_none().then_some(target.as_str());
-                let attr = (type_checking != 0).then_some("type_checking");
+            if explicit {
+                continue;
+            }
+            let mut implements = true;
+            for (method_id, name) in &methods {
+                let found = resolver.method_in_class(class, name, 3)?;
+                implements &= match found {
+                    Some(m) => resolver.arity(m)? == resolver.arity(*method_id)?,
+                    None => false,
+                };
+            }
+            if implements {
                 let edge = NewEdge {
-                    kind: "IMPORTA",
-                    src,
-                    dst,
-                    dst_text: text,
-                    line,
-                    attr,
+                    kind: "ESPECIALIZA",
+                    src: class,
+                    dst: Some(protocol),
+                    dst_text: None,
+                    line: 0,
+                    attr: None,
                     pos: None,
+                    approx: true,
                 };
                 insert_edge(tx, &edge)?;
             }
         }
-
-        let mut stmt = tx.prepare(
-            "SELECT rowid, src, kind, callee_text, attr, pos, line FROM raw_ref
-             WHERE file_id = ?1 ORDER BY rowid",
-        )?;
-        let refs: Vec<RawRef> = stmt
-            .query_map([file_id], |r| {
-                Ok(RawRef {
-                    rowid: r.get(0)?,
-                    src: r.get(1)?,
-                    kind: r.get(2)?,
-                    text: r.get(3)?,
-                    attr: r.get(4)?,
-                    pos: r.get(5)?,
-                    line: r.get(6)?,
-                })
-            })?
-            .collect::<Result<_, _>>()?;
-        for raw in refs {
-            resolve_ref(tx, &mut resolver, file_id, &raw)?;
-        }
     }
     Ok(())
+}
+
+struct CallTarget {
+    kind: &'static str,
+    dst: i64,
+}
+
+/// Procura o chamado por escopo do módulo e imports (regras 1, 2 e 5).
+fn find_named(
+    resolver: &mut Resolver,
+    file_id: i64,
+    text: &str,
+) -> Result<Option<CallTarget>, CoreError> {
+    let ctx = resolver.file_ctx(file_id)?;
+    let mut candidates = vec![format!("{}.{text}", ctx.module)];
+    for (local, target) in &ctx.imports {
+        if text == local {
+            candidates.push(target.clone());
+        } else if let Some(rest) = text.strip_prefix(&format!("{local}.")) {
+            candidates.push(format!("{target}.{rest}"));
+        }
+    }
+    for qname in candidates {
+        if let Some((dst, kind)) = resolver.symbol(&qname)? {
+            match kind.as_str() {
+                "function" | "method" => return Ok(Some(CallTarget { kind: "CHAMA", dst })),
+                "class" => return Ok(Some(CallTarget { kind: "CRIA", dst })),
+                _ => {}
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn call_edge<'a>(
+    raw: &'a RawRef,
+    kind: &'a str,
+    dst: Option<i64>,
+    text: Option<&'a str>,
+    approx: bool,
+) -> NewEdge<'a> {
+    NewEdge {
+        kind,
+        src: raw.src,
+        dst,
+        dst_text: text,
+        line: raw.line,
+        attr: None,
+        pos: None,
+        approx,
+    }
+}
+
+fn mark(tx: &Transaction, raw: &RawRef, state: i64) -> Result<(), CoreError> {
+    tx.execute(
+        "UPDATE raw_ref SET resolved = ?1 WHERE rowid = ?2",
+        params![state, raw.rowid],
+    )?;
+    Ok(())
+}
+
+/// Chamada a método de um tipo conhecido: aresta ao método do tipo, `~` a cada implementação
+/// se o tipo é Protocol, e `ESCREVE` externo (`~`) para métodos de escrita (spec §5.4, §5.5).
+fn call_on_type(
+    tx: &Transaction,
+    resolver: &mut Resolver,
+    raw: &RawRef,
+    class_id: i64,
+    method: &str,
+    receiver_approx: bool,
+) -> Result<bool, CoreError> {
+    let Some(target) = resolver.method_in_class(class_id, method, 3)? else {
+        return Ok(false);
+    };
+    insert_edge(
+        tx,
+        &call_edge(raw, "CHAMA", Some(target), None, receiver_approx),
+    )?;
+    if resolver.is_protocol(class_id)? {
+        for implementation in resolver.implementations(class_id)? {
+            if let Some(m) = resolver.method_in_class(implementation, method, 3)? {
+                insert_edge(tx, &call_edge(raw, "CHAMA", Some(m), None, true))?;
+            }
+        }
+    }
+    if WRITE_METHODS.contains(&method) {
+        let text = format!("{}.{method}", resolver.class_name(class_id)?);
+        insert_edge(tx, &call_edge(raw, "ESCREVE", None, Some(&text), true))?;
+    }
+    Ok(true)
+}
+
+fn resolve_call(
+    tx: &Transaction,
+    resolver: &mut Resolver,
+    file_id: i64,
+    raw: &RawRef,
+) -> Result<(), CoreError> {
+    let text = raw.text.clone().unwrap_or_default();
+    let segs: Vec<&str> = text.split('.').collect();
+    let src_class = resolver.class_of(raw.src)?;
+    let last = segs[segs.len() - 1];
+
+    let handled = if matches!(segs[0], "self" | "cls") {
+        match (segs.len(), src_class) {
+            (2, Some(class)) => match resolver.method_in_class(class, segs[1], 3)? {
+                Some(m) => {
+                    insert_edge(tx, &call_edge(raw, "CHAMA", Some(m), None, false))?;
+                    true
+                }
+                None => false,
+            },
+            (3, Some(class)) => match resolver.resolve_path(class, segs[1])? {
+                Some(attr) => match resolver.attr_class(attr)? {
+                    Some(t) => call_on_type(tx, resolver, raw, t, segs[2], false)?,
+                    None => false,
+                },
+                None => false,
+            },
+            _ => false,
+        }
+    } else if let Some(found) = find_named(resolver, file_id, &text)? {
+        insert_edge(
+            tx,
+            &call_edge(raw, found.kind, Some(found.dst), None, false),
+        )?;
+        true
+    } else if let (Some(receiver), true) = (raw.receiver.as_deref(), segs.len() == 2) {
+        match resolver.resolve_type(file_id, receiver)? {
+            Some(class) => call_on_type(tx, resolver, raw, class, last, true)?,
+            None => false,
+        }
+    } else {
+        false
+    };
+    if handled {
+        return mark(tx, raw, 1);
+    }
+
+    // Regra 7: só o nome do método.
+    let mut stmt = tx.prepare(
+        "SELECT id FROM symbol WHERE name = ?1 AND kind IN ('function', 'method') ORDER BY qname",
+    )?;
+    let named: Vec<i64> = stmt
+        .query_map([last], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    match named.as_slice() {
+        [only] => {
+            insert_edge(tx, &call_edge(raw, "CHAMA", Some(*only), None, true))?;
+            mark(tx, raw, 1)
+        }
+        [] => {
+            insert_edge(tx, &call_edge(raw, "CHAMA", None, Some(&text), false))?;
+            mark(tx, raw, 2)
+        }
+        _ => mark(tx, raw, 0),
+    }
 }
 
 fn resolve_ref(
@@ -242,6 +587,7 @@ fn resolve_ref(
                     line: raw.line,
                     attr: None,
                     pos: None,
+                    approx: false,
                 };
                 insert_edge(tx, &edge)?;
             }
@@ -260,6 +606,7 @@ fn resolve_ref(
                 line: raw.line,
                 attr: raw.attr.as_deref(),
                 pos: raw.pos,
+                approx: false,
             };
             insert_edge(tx, &edge)?;
         }

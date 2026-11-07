@@ -1,0 +1,8 @@
+---
+source: crates/memo-cli/tests/query.rs
+expression: stdout(&out)
+---
+callees CalculateLimitUseCase.execute  idx=ok
+  M LimitRepository.save   app/billing/domain/protocols/limit_repository.py:L5-L5  d1 :L12
+  M SqlLimitRepository.save   app/billing/infra/repositories/limit_repository.py:L2-L3  d1 ~ :L12
+cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro

@@ -193,6 +193,7 @@ fn insert_symbols(
                 line: r.line,
                 attr: Some(&r.attr),
                 pos: Some(r.pos),
+                receiver: None,
             };
             insert_raw_ref(tx, &raw)?;
         }
@@ -207,6 +208,7 @@ fn insert_symbols(
                 line: r.line,
                 attr: None,
                 pos: None,
+                receiver: r.receiver.as_deref(),
             };
             insert_raw_ref(tx, &raw)?;
         }
@@ -235,12 +237,13 @@ struct NewRawRef<'a> {
     line: usize,
     attr: Option<&'a str>,
     pos: Option<usize>,
+    receiver: Option<&'a str>,
 }
 
 fn insert_raw_ref(tx: &Transaction, r: &NewRawRef) -> Result<(), CoreError> {
     tx.execute(
-        "INSERT INTO raw_ref(file_id, src, kind, callee_text, line, attr, pos)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO raw_ref(file_id, src, kind, callee_text, line, attr, pos, receiver)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             r.file_id,
             r.src,
@@ -248,7 +251,8 @@ fn insert_raw_ref(tx: &Transaction, r: &NewRawRef) -> Result<(), CoreError> {
             r.text,
             int(r.line),
             r.attr,
-            r.pos.map(int)
+            r.pos.map(int),
+            r.receiver
         ],
     )?;
     Ok(())
@@ -392,6 +396,16 @@ fn affected_files(
         for row in stmt.query_map([id], |r| r.get::<_, i64>(0))? {
             out.insert(row?);
         }
+    }
+    // Chamadas via Protocol dependem das implementações conhecidas, que podem mudar em outro arquivo.
+    let mut stmt = tx.prepare(
+        "SELECT DISTINCT s.file_id FROM edge e
+         JOIN symbol s ON s.id = e.src JOIN symbol d ON d.id = e.dst
+         JOIN symbol p ON p.id = d.parent_id
+         WHERE p.is_protocol = 1 AND e.kind = 'CHAMA' AND e.approx = 0",
+    )?;
+    for row in stmt.query_map([], |r| r.get::<_, i64>(0))? {
+        out.insert(row?);
     }
     for module in &modules {
         let mut stmt = tx.prepare(

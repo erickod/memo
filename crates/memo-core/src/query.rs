@@ -343,20 +343,215 @@ pub struct Impact {
     pub tests: TestsInfo,
 }
 
+fn target_id(store: &SqliteStore, qname: &str) -> Result<i64, CoreError> {
+    Ok(store
+        .conn
+        .query_row("SELECT id FROM symbol WHERE qname = ?1", [qname], |r| {
+            r.get(0)
+        })?)
+}
+
+const CALL_KINDS: &str = "('CHAMA', 'CRIA')";
+
+/// Percorre arestas de chamada, nível a nível (cada símbolo aparece no menor nível).
+/// `up` segue de quem chama; `!up`, do que é chamado.
+fn walk_calls(
+    store: &SqliteStore,
+    start: i64,
+    depth: i64,
+    up: bool,
+) -> Result<Vec<ChainItem>, CoreError> {
+    let (near, far) = if up { ("dst", "src") } else { ("src", "dst") };
+    let sql = format!(
+        "SELECT {ADDR_COLUMNS}, e.line, e.approx, s.id FROM edge e
+         JOIN symbol s ON s.id = e.{far} LEFT JOIN file f ON f.id = s.file_id
+         WHERE e.{near} = ?1 AND e.kind IN {CALL_KINDS} ORDER BY s.qname, e.line"
+    );
+    let mut stmt = store.conn.prepare(&sql)?;
+    let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::from([start]);
+    let mut frontier: Vec<(i64, bool)> = vec![(start, false)];
+    let mut items = Vec::new();
+    for level in 1..=depth {
+        let mut level_seen = std::collections::HashSet::new();
+        let mut next: Vec<(i64, bool)> = Vec::new();
+        for (node, path_approx) in &frontier {
+            let rows = stmt.query_map([node], |r| {
+                Ok((
+                    addr_from_row(r)?,
+                    r.get::<_, Option<i64>>(6)?,
+                    r.get::<_, i64>(7)? != 0,
+                    r.get::<_, i64>(8)?,
+                ))
+            })?;
+            for row in rows {
+                let (addr, line, approx, id) = row?;
+                if seen.contains(&id) {
+                    continue;
+                }
+                let approx = approx || *path_approx;
+                items.push(ChainItem {
+                    addr: Some(addr),
+                    ext: None,
+                    depth: level,
+                    line,
+                    approx,
+                });
+                if level_seen.insert(id) {
+                    next.push((id, approx));
+                }
+            }
+            if !up && level == 1 {
+                let mut ext = store.conn.prepare(
+                    "SELECT dst_text, line FROM edge WHERE src = ?1 AND kind = 'CHAMA'
+                     AND dst IS NULL ORDER BY dst_text, line",
+                )?;
+                let rows = ext.query_map([node], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?))
+                })?;
+                for row in rows {
+                    let (text, line) = row?;
+                    items.push(ChainItem {
+                        addr: None,
+                        ext: Some(text),
+                        depth: level,
+                        line,
+                        approx: false,
+                    });
+                }
+            }
+        }
+        seen.extend(level_seen);
+        frontier = next;
+    }
+    Ok(items)
+}
+
+fn chain(store: &SqliteStore, target: &str, depth: i64, up: bool) -> Result<Chain, CoreError> {
+    let qname = resolve_qname(store, target)?;
+    let id = target_id(store, &qname)?;
+    Ok(Chain {
+        target: addr_of(store, &qname)?,
+        items: walk_calls(store, id, depth.clamp(1, 3), up)?,
+    })
+}
+
 /// Quem chama o símbolo, até `depth` níveis (1 a 3).
-pub fn callers(_store: &SqliteStore, _target: &str, _depth: i64) -> Result<Chain, CoreError> {
-    todo!("spec §8.2 query callers")
+pub fn callers(store: &SqliteStore, target: &str, depth: i64) -> Result<Chain, CoreError> {
+    chain(store, target, depth, true)
 }
 
 /// O que o símbolo chama, até `depth` níveis (1 a 3).
-pub fn callees(_store: &SqliteStore, _target: &str, _depth: i64) -> Result<Chain, CoreError> {
-    todo!("spec §8.2 query callees")
+pub fn callees(store: &SqliteStore, target: &str, depth: i64) -> Result<Chain, CoreError> {
+    chain(store, target, depth, false)
 }
 
-pub fn impact(_store: &SqliteStore, _target: &str) -> Result<Impact, CoreError> {
-    todo!("spec §8.2 query impact")
+/// Testes com chamada direta (exata, ou aproximada) e testes por sobreposição de palavras.
+pub fn tests_for(store: &SqliteStore, target: &str) -> Result<TestsInfo, CoreError> {
+    let qname = resolve_qname(store, target)?;
+    let id = target_id(store, &qname)?;
+    let sql = format!(
+        "SELECT {ADDR_COLUMNS}, e.line, e.approx, e.attr FROM edge e
+         JOIN symbol s ON s.id = e.src LEFT JOIN file f ON f.id = s.file_id
+         WHERE e.dst = ?1 AND e.kind IN {CALL_KINDS} AND s.is_test = 1 ORDER BY s.qname, e.line"
+    );
+    let direct: Vec<RelItem> = store
+        .conn
+        .prepare(&sql)?
+        .query_map([id], |r| {
+            Ok(RelItem {
+                addr: addr_from_row(r)?,
+                line: r.get(6)?,
+                approx: r.get::<_, i64>(7)? != 0,
+                attr: None,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    let mut info = TestsInfo::default();
+    let mut listed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for item in &direct {
+        if !item.approx && listed.insert(item.addr.qname.clone()) {
+            info.exact.push(item.clone());
+        }
+    }
+    for item in direct {
+        if listed.insert(item.addr.qname.clone()) {
+            info.approx.push(item);
+        }
+    }
+    // Sobreposição: palavras `object` do símbolo e da classe dele, presentes em nomes de testes.
+    let sql = format!(
+        "SELECT DISTINCT {ADDR_COLUMNS} FROM symbol t
+         JOIN occurrence o ON o.symbol_id = t.id
+         JOIN symbol s ON s.id = t.id LEFT JOIN file f ON f.id = s.file_id
+         WHERE t.is_test = 1 AND o.word_id IN (
+             SELECT o2.word_id FROM occurrence o2
+             WHERE o2.slot = 'object'
+               AND o2.symbol_id IN (?1, (SELECT parent_id FROM symbol WHERE id = ?1)))
+         ORDER BY s.qname"
+    );
+    let overlap: Vec<SymbolAddr> = store
+        .conn
+        .prepare(&sql)?
+        .query_map([id], addr_from_row)?
+        .collect::<Result<_, _>>()?;
+    for addr in overlap {
+        if listed.insert(addr.qname.clone()) {
+            info.approx.push(RelItem {
+                addr,
+                attr: None,
+                line: None,
+                approx: true,
+            });
+        }
+    }
+    Ok(info)
 }
 
-pub fn tests_for(_store: &SqliteStore, _target: &str) -> Result<TestsInfo, CoreError> {
-    todo!("spec §8.2 query tests")
+/// Contrapartida de Protocol: o método do Protocol que a classe implementa, ou as implementações
+/// do método quando o alvo é de um Protocol.
+fn protocol_counterparts(store: &SqliteStore, id: i64) -> Result<Vec<RelItem>, CoreError> {
+    let sql = format!(
+        "SELECT {ADDR_COLUMNS}, e.approx FROM symbol me
+         JOIN edge e ON e.kind = 'ESPECIALIZA'
+         JOIN symbol s ON s.parent_id = (CASE WHEN e.src = me.parent_id THEN e.dst ELSE e.src END)
+              AND s.name = me.name AND s.kind = 'method'
+         LEFT JOIN file f ON f.id = s.file_id
+         JOIN symbol p ON p.id = (CASE WHEN e.src = me.parent_id THEN e.dst ELSE e.src END)
+         WHERE me.id = ?1 AND me.kind = 'method'
+           AND ((e.src = me.parent_id AND (SELECT is_protocol FROM symbol WHERE id = e.dst) = 1)
+             OR (e.dst = me.parent_id AND (SELECT is_protocol FROM symbol WHERE id = me.parent_id) = 1))
+         ORDER BY s.qname"
+    );
+    let rows = store
+        .conn
+        .prepare(&sql)?
+        .query_map([id], |r| {
+            Ok(RelItem {
+                addr: addr_from_row(r)?,
+                attr: None,
+                line: None,
+                approx: r.get::<_, i64>(6)? != 0,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+/// O que muda se o símbolo mudar: chamadores, consumidores do tipo, Protocol, testes.
+pub fn impact(store: &SqliteStore, target: &str) -> Result<Impact, CoreError> {
+    let qname = resolve_qname(store, target)?;
+    let id = target_id(store, &qname)?;
+    let addr = addr_of(store, &qname)?;
+    let mut consumers = Vec::new();
+    if addr.kind == "class" {
+        consumers.extend(related(store, &qname, "RECEBE")?);
+        consumers.extend(related(store, &qname, "RETORNA")?);
+    }
+    Ok(Impact {
+        callers: walk_calls(store, id, 2, true)?,
+        consumers,
+        protocol: protocol_counterparts(store, id)?,
+        tests: tests_for(store, &qname)?,
+        target: addr,
+    })
 }
