@@ -44,6 +44,12 @@ impl Repo {
     pub fn path(&self) -> &Path {
         &self.root
     }
+
+    pub fn write(&self, rel: &str, content: &str) {
+        let file = self.root.join(rel);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, content).unwrap();
+    }
 }
 
 impl Drop for Repo {

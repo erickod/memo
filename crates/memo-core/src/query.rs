@@ -555,3 +555,19 @@ pub fn impact(store: &SqliteStore, target: &str) -> Result<Impact, CoreError> {
         target: addr,
     })
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WordStats {
+    pub uso: i64,
+    pub alcance: i64,
+    pub grau: i64,
+    pub idf: f64,
+    pub especificidade: f64,
+    pub centralidade: f64,
+    pub esqueleto: bool,
+}
+
+/// Estatísticas de uma palavra (spec §5.6); `None` se a palavra não existe.
+pub fn word_stats(_store: &SqliteStore, _word: &str) -> Result<Option<WordStats>, CoreError> {
+    todo!("spec §5.6")
+}

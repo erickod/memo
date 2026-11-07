@@ -1,0 +1,20 @@
+---
+source: crates/memo-cli/tests/query.rs
+assertion_line: 214
+expression: stdout(&out)
+---
+word limit  idx=ok
+verbos: calculate
+papéis: repository,usecase
+camadas: application,domain,infra
+vizinhas: amount,returns,sql,test
+símbolos:
+  mod test_calculate_limit_usecase   app/billing/application/tests/unit/test_calculate_limit_usecase.py:L1-L8
+  T test_given_amount_when_calculate_then_returns_limit   app/billing/application/tests/unit/test_calculate_limit_usecase.py:L5-L7
+  mod calculate_limit_usecase   app/billing/application/usecases/calculate_limit_usecase.py:L1-L14
+  C CalculateLimitUseCase   app/billing/application/usecases/calculate_limit_usecase.py:L4-L13
+  mod limit_repository   app/billing/domain/protocols/limit_repository.py:L1-L6
+  C LimitRepository   app/billing/domain/protocols/limit_repository.py:L4-L5
+  mod limit_repository   app/billing/infra/repositories/limit_repository.py:L1-L4
+  C SqlLimitRepository   app/billing/infra/repositories/limit_repository.py:L1-L3
+cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro

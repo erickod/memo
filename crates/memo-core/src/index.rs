@@ -1,5 +1,6 @@
 //! Indexação incremental (spec §6.3).
 
+use crate::config::Config;
 use crate::error::CoreError;
 use crate::extract::{FileFacts, SymbolKind, extract_python_file};
 use crate::resolve::resolve_files;
@@ -258,7 +259,16 @@ fn insert_raw_ref(tx: &Transaction, r: &NewRawRef) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// Indexa com a configuração padrão (sementes embutidas).
 pub fn index(tree: &dyn SourceTree, store: &mut SqliteStore) -> Result<IndexReport, CoreError> {
+    index_with(tree, store, &Config::default())
+}
+
+pub fn index_with(
+    tree: &dyn SourceTree,
+    store: &mut SqliteStore,
+    _config: &Config,
+) -> Result<IndexReport, CoreError> {
     let listed = tree.list()?;
     let stored = load_files(store)?;
 

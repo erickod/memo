@@ -9,5 +9,6 @@ rayon = "1.12.0"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.21"
+toml = "1.2.1"
 tree-sitter = "0.27.2"
 tree-sitter-python = "0.25.0"

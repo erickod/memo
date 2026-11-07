@@ -201,3 +201,37 @@ fn test_given_depth_over_three_when_query_callers_then_usage_error_exit_1() {
     );
     assert_eq!(out.status.code(), Some(1));
 }
+
+/// GIVEN a memo.toml with skeleton ["usecase"] and the fixture
+/// WHEN  'memo query word limit' runs
+/// THEN  the golden output lists 'usecase' under ignoradas, not under vizinhas
+#[test]
+fn test_given_skeleton_in_toml_when_query_word_then_neighbors_exclude_and_ignored_listed() {
+    let repo = Repo::fixture();
+    repo.write(".git/memo/memo.toml", "skeleton = [\"usecase\"]\n");
+    let out = memo(&repo, &["query", "word", "limit"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN a memo.toml with skeleton ["usecase"] and the fixture
+/// WHEN  'memo query word usecase' runs
+/// THEN  the output has the line 'esqueleto: sim'
+#[test]
+fn test_given_skeleton_word_when_query_word_then_esqueleto_line_marked() {
+    let repo = Repo::fixture();
+    repo.write(".git/memo/memo.toml", "skeleton = [\"usecase\"]\n");
+    let out = memo(&repo, &["query", "word", "usecase"]);
+    assert!(stdout(&out).contains("esqueleto: sim"), "{}", stdout(&out));
+}
+
+/// GIVEN a memo.toml with 'roles = 3'
+/// WHEN  'memo query word limit' runs
+/// THEN  exit code is 1 (usage error)
+#[test]
+fn test_given_invalid_memo_toml_when_query_then_exit_1() {
+    let repo = Repo::fixture();
+    repo.write(".git/memo/memo.toml", "roles = 3\n");
+    let out = memo(&repo, &["query", "word", "limit"]);
+    assert_eq!(out.status.code(), Some(1));
+}

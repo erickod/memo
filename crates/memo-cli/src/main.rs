@@ -83,6 +83,7 @@ enum Query {
 }
 
 enum Failure {
+    Usage(String),
     NotFound(String),
     Index(String),
     Internal(String),
@@ -91,6 +92,7 @@ enum Failure {
 impl From<CoreError> for Failure {
     fn from(e: CoreError) -> Self {
         match e {
+            CoreError::Config(_) => Failure::Usage(e.to_string()),
             CoreError::NotFound(_) | CoreError::Ambiguous { .. } => {
                 Failure::NotFound(e.to_string())
             }
@@ -245,6 +247,10 @@ fn main() -> ExitCode {
         Ok(text) => {
             print!("{text}");
             ExitCode::SUCCESS
+        }
+        Err(Failure::Usage(msg)) => {
+            eprintln!("uso inválido: {msg}");
+            ExitCode::from(EXIT_USAGE)
         }
         Err(Failure::NotFound(text)) => {
             print!("{text}");

@@ -8,6 +8,8 @@ pub enum CoreError {
     Store(#[from] rusqlite::Error),
     #[error("source error: {0}")]
     Source(String),
+    #[error("config error: {0}")]
+    Config(String),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("ambiguous target {target}: {} candidates", .candidates.len())]

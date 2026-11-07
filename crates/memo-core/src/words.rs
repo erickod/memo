@@ -39,6 +39,23 @@ const VERBS: &[&str] = &[
     "send",
 ];
 
+/// Vocabulário que classifica palavras em slots (spec §5.2); sementes embutidas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Vocabulary {
+    pub roles: Vec<String>,
+    pub verbs: Vec<String>,
+}
+
+impl Default for Vocabulary {
+    fn default() -> Self {
+        let own = |list: &[&str]| list.iter().map(|s| (*s).to_string()).collect();
+        Self {
+            roles: own(ROLES),
+            verbs: own(VERBS),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
     Action,
