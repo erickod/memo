@@ -474,3 +474,96 @@ fn test_given_task_scoped_note_when_queried_without_task_then_hidden() {
     with_task.extend(q);
     assert!(stdout(&memo(&repo, &with_task)).contains("Só desta task."));
 }
+
+const PY: &str = "app/billing/application/usecases/calculate_limit_usecase.py";
+
+fn edit_py(repo: &Repo, from: &str, to: &str) {
+    let source = std::fs::read_to_string(repo.path().join(PY)).unwrap();
+    assert!(source.contains(from), "fixture changed: {from}");
+    repo.write(PY, &source.replace(from, to));
+}
+
+/// GIVEN the fixture and then execute renamed to 'compute' with the same body
+/// WHEN  'memo index' runs after the first one
+/// THEN  the golden output ends with the one-line events summary
+#[test]
+fn test_given_index_command_when_run_then_golden_summary_line() {
+    let repo = Repo::fixture();
+    assert_eq!(memo(&repo, &["index"]).status.code(), Some(0));
+    edit_py(&repo, "def execute(", "def compute(");
+    let out = memo(&repo, &["index"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN a confirmed note on execute and a signature change
+/// WHEN  'memo query symbol' runs
+/// THEN  the note appears as 'stale' (the marker is the state)
+#[test]
+fn test_given_signature_change_when_symbol_queried_then_note_shown_as_stale() {
+    let repo = Repo::fixture();
+    add_note(&repo, &[], &["--confirm"], "Limite é inteiro.");
+    edit_py(&repo, "rate: int)", "rate: int, extra=0)");
+    let out = stdout(&memo(
+        &repo,
+        &["query", "symbol", "CalculateLimitUseCase.execute"],
+    ));
+    assert!(out.contains("regra stale"), "{out}");
+}
+
+/// GIVEN a confirmed note and a signature change
+/// WHEN  a query runs with '--no-index'
+/// THEN  the note is still 'confirmada' (P4: only reindexing changes notes)
+#[test]
+fn test_given_no_index_flag_when_signature_changed_then_note_state_unchanged() {
+    let repo = Repo::fixture();
+    add_note(&repo, &[], &["--confirm"], "Limite é inteiro.");
+    memo(&repo, &["index"]);
+    edit_py(&repo, "rate: int)", "rate: int, extra=0)");
+    let out = stdout(&memo(
+        &repo,
+        &[
+            "--no-index",
+            "query",
+            "symbol",
+            "CalculateLimitUseCase.execute",
+        ],
+    ));
+    assert!(out.contains("regra confirmada"), "{out}");
+}
+
+/// GIVEN a stale note
+/// WHEN  'memo note recheck <id>' runs and the symbol is queried
+/// THEN  recheck exits 0 and the note is 'confirmada' again
+#[test]
+fn test_given_stale_note_when_note_recheck_then_confirmada_again() {
+    let repo = Repo::fixture();
+    let added = stdout(&add_note(&repo, &[], &["--confirm"], "Limite é inteiro."));
+    let id = added.split_whitespace().nth(1).unwrap().to_string();
+    edit_py(&repo, "rate: int)", "rate: int, extra=0)");
+    memo(&repo, &["index"]);
+    assert_eq!(
+        memo(&repo, &["note", "recheck", &id]).status.code(),
+        Some(0)
+    );
+    let out = stdout(&memo(
+        &repo,
+        &["query", "symbol", "CalculateLimitUseCase.execute"],
+    ));
+    assert!(out.contains("regra confirmada"), "{out}");
+}
+
+/// GIVEN a note on execute and execute renamed with the same body
+/// WHEN  the repository is reindexed and the note is shown
+/// THEN  the note is anchored on 'compute' and still 'confirmada' (A9)
+#[test]
+fn test_given_renamed_symbol_when_note_shown_then_reanchored_and_confirmada() {
+    let repo = Repo::fixture();
+    let added = stdout(&add_note(&repo, &[], &["--confirm"], "Limite é inteiro."));
+    let id = added.split_whitespace().nth(1).unwrap().to_string();
+    edit_py(&repo, "def execute(", "def compute(");
+    memo(&repo, &["index"]);
+    let shown = stdout(&memo(&repo, &["note", "show", &id]));
+    assert!(shown.contains("CalculateLimitUseCase.compute"), "{shown}");
+    assert!(shown.contains("estado: confirmada"), "{shown}");
+}

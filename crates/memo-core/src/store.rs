@@ -50,6 +50,16 @@ CREATE INDEX raw_ref_file ON raw_ref(file_id);
 CREATE INDEX import_file ON import(file_id);
 ";
 
+/// Fato imutável gravado na tabela `event` (spec §10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventRow {
+    pub batch: String,
+    pub seq: i64,
+    pub kind: String,
+    pub subject: Option<String>,
+    pub payload: Option<String>,
+}
+
 pub struct SqliteStore {
     pub(crate) conn: Connection,
 }
@@ -97,6 +107,23 @@ impl SqliteStore {
             [qname],
             |r| r.get(0),
         )?)
+    }
+
+    /// Todos os eventos, na ordem em que foram gravados.
+    pub fn events(&self) -> Result<Vec<EventRow>, CoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT batch, seq, kind, subject, payload FROM event ORDER BY id")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(EventRow {
+                batch: r.get(0)?,
+                seq: r.get(1)?,
+                kind: r.get(2)?,
+                subject: r.get(3)?,
+                payload: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
 
     /// Arquivos que não parsearam, em ordem de caminho (spec §2, regra 7).

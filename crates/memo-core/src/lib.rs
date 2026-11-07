@@ -4,6 +4,7 @@ pub mod brief;
 pub mod config;
 pub mod delta;
 pub mod error;
+pub mod events;
 pub mod extract;
 pub mod index;
 pub mod notes;

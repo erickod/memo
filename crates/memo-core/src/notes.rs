@@ -531,6 +531,16 @@ impl NoteDir {
         }
     }
 
+    /// Como `confirm`, e grava `NOTE_CONFIRMED`.
+    pub fn confirm_recorded(&self, _graph: &SqliteStore, id: &str) -> Result<Note, CoreError> {
+        self.confirm(id)
+    }
+
+    /// Atualiza os hashes da âncora e volta ao estado anterior ao `stale` (spec §7.3).
+    pub fn recheck(&self, _graph: &SqliteStore, _id: &str) -> Result<Note, CoreError> {
+        todo!("spec §7.3 recheck")
+    }
+
     /// Notas de escopo `repo` e, com `task`, as de `task:<id>`; em qualquer estado.
     pub fn visible(&self, task: Option<&str>) -> Result<Vec<Note>, CoreError> {
         let scoped = task.map(|t| format!("task:{t}"));

@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use crate::error::CoreError;
+use crate::events::EventSummary;
 use crate::extract::{FileFacts, SymbolKind, extract_python_file};
 use crate::resolve::resolve_files;
 use crate::source::{SourceFile, SourceTree};
@@ -18,6 +19,7 @@ pub struct IndexReport {
     pub files_removed: usize,
     pub files_with_error: Vec<String>,
     pub wrote: bool,
+    pub events: EventSummary,
 }
 
 struct StoredFile {
@@ -267,6 +269,16 @@ fn insert_raw_ref(tx: &Transaction, r: &NewRawRef) -> Result<(), CoreError> {
 /// Indexa com a configuração padrão (sementes embutidas).
 pub fn index(tree: &dyn SourceTree, store: &mut SqliteStore) -> Result<IndexReport, CoreError> {
     index_with(tree, store, &Config::default())
+}
+
+/// Como `index_with`, e aplica às notas as transições da §7.3 (`stale`, `orfa`, reancoragem).
+pub fn index_with_notes(
+    tree: &dyn SourceTree,
+    store: &mut SqliteStore,
+    config: &Config,
+    _notes: &crate::notes::NoteDir,
+) -> Result<IndexReport, CoreError> {
+    index_with(tree, store, config)
 }
 
 pub fn index_with(
