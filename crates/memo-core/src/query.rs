@@ -23,6 +23,67 @@ pub struct SymbolInfo {
     #[serde(flatten)]
     pub addr: SymbolAddr,
     pub sig_hash: String,
+    pub edges: Vec<EdgeView>,
+}
+
+/// Aresta direta de um símbolo: `out` (ele aponta) ou `in` (apontam para ele).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EdgeView {
+    pub dir: String,
+    pub kind: String,
+    /// Nome curto do outro extremo, ou o texto externo/não resolvido.
+    pub other: String,
+    pub attr: Option<String>,
+    pub line: Option<i64>,
+    pub approx: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RelItem {
+    pub addr: SymbolAddr,
+    pub attr: Option<String>,
+    pub line: Option<i64>,
+    pub approx: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Relation {
+    pub target: SymbolAddr,
+    pub items: Vec<RelItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TypeInfo {
+    pub target: SymbolAddr,
+    pub producers: Vec<RelItem>,
+    pub consumers: Vec<RelItem>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Coverage {
+    pub resolvidas: i64,
+    pub aproximadas: i64,
+    pub nao_resolvidas: i64,
+    pub arquivos_com_erro: i64,
+}
+
+/// Símbolos que escrevem o atributo (`ESCREVE`).
+pub fn writers(_store: &SqliteStore, _target: &str) -> Result<Relation, CoreError> {
+    todo!("spec §8.2 query writers")
+}
+
+/// Símbolos que leem o atributo (`LE`).
+pub fn readers(_store: &SqliteStore, _target: &str) -> Result<Relation, CoreError> {
+    todo!("spec §8.2 query readers")
+}
+
+/// Quem produz (`RETORNA`) e quem consome (`RECEBE`) o tipo.
+pub fn type_info(_store: &SqliteStore, _target: &str) -> Result<TypeInfo, CoreError> {
+    todo!("spec §8.2 query type")
+}
+
+pub fn coverage(_store: &SqliteStore) -> Result<Coverage, CoreError> {
+    todo!("spec §4 cobertura")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -89,6 +150,7 @@ pub fn symbol_info(store: &SqliteStore, target: &str) -> Result<SymbolInfo, Core
         Ok(SymbolInfo {
             addr: addr_from_row(r)?,
             sig_hash: r.get(6)?,
+            edges: Vec::new(),
         })
     })?)
 }

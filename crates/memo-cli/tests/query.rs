@@ -93,3 +93,36 @@ fn test_given_small_max_chars_when_query_word_then_last_line_omitidos() {
         "{last}"
     );
 }
+
+/// GIVEN the fixture where two use cases assign 'self._invoice.status'
+/// WHEN  'memo query writers Invoice.status' runs
+/// THEN  the golden output lists AnticipateInvoiceUseCase.execute and CancelInvoiceUseCase.execute
+#[test]
+fn test_given_two_usecases_writing_status_when_writers_then_both_listed() {
+    let repo = Repo::fixture();
+    let out = memo(&repo, &["query", "writers", "Invoice.status"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN the fixture where CalculateLimitUseCase.execute calls 'self._repo.save(limit)'
+/// WHEN  'memo query readers CalculateLimitUseCase._repo' runs
+/// THEN  the golden output lists CalculateLimitUseCase.execute
+#[test]
+fn test_given_attribute_read_in_method_when_readers_then_method_listed() {
+    let repo = Repo::fixture();
+    let out = memo(&repo, &["query", "readers", "CalculateLimitUseCase._repo"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN the fixture where two use cases receive 'invoice: Invoice' in __init__
+/// WHEN  'memo query type Invoice' runs
+/// THEN  the golden output lists both constructors as consumers
+#[test]
+fn test_given_typed_param_when_query_type_then_consumers_listed() {
+    let repo = Repo::fixture();
+    let out = memo(&repo, &["query", "type", "Invoice"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}

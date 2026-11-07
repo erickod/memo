@@ -19,6 +19,50 @@ pub struct SymbolFact {
     pub line_end: usize,
     pub sig_hash: String,
     pub body_hash: String,
+    /// Classe que herda de `Protocol`.
+    pub is_protocol: bool,
+    /// Tipo anotado (texto bruto) de um atributo, quando conhecido.
+    pub type_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefKind {
+    Retorna,
+    Levanta,
+    Especializa,
+    Escreve,
+    Le,
+}
+
+impl RefKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RefKind::Retorna => "RETORNA",
+            RefKind::Levanta => "LEVANTA",
+            RefKind::Especializa => "ESPECIALIZA",
+            RefKind::Escreve => "ESCREVE",
+            RefKind::Le => "LE",
+        }
+    }
+}
+
+/// Referência bruta lida da AST, resolvida depois contra o índice (spec §3, `raw_ref`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefFact {
+    pub src_qname: String,
+    pub kind: RefKind,
+    /// Tipo (RETORNA, LEVANTA, ESPECIALIZA) ou caminho após `self` (ESCREVE, LE: `a.b`).
+    pub text: String,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportFact {
+    pub local_name: String,
+    /// Módulo ou símbolo importado, já com imports relativos resolvidos.
+    pub target: String,
+    pub line: usize,
+    pub type_checking: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,12 +72,16 @@ pub struct ReceiveFact {
     pub attr: String,
     /// `None` quando o parâmetro não tem anotação (spec §5.3).
     pub dst_text: Option<String>,
+    pub pos: usize,
+    pub line: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileFacts {
     pub symbols: Vec<SymbolFact>,
     pub receives: Vec<ReceiveFact>,
+    pub refs: Vec<RefFact>,
+    pub imports: Vec<ImportFact>,
 }
 
 #[derive(Debug)]
@@ -56,6 +104,15 @@ fn hash_of(bytes: &str) -> String {
 
 /// Lê um arquivo Python (`module` é o módulo pontuado) e devolve fatos.
 pub fn extract_python(module: &str, source: &str) -> Result<FileFacts, ExtractError> {
+    extract_python_file(module, false, source)
+}
+
+/// Como `extract_python`; `is_package` (arquivo `__init__.py`) afeta imports relativos.
+pub fn extract_python_file(
+    module: &str,
+    _is_package: bool,
+    source: &str,
+) -> Result<FileFacts, ExtractError> {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_python::LANGUAGE.into())
@@ -78,6 +135,8 @@ pub fn extract_python(module: &str, source: &str) -> Result<FileFacts, ExtractEr
         line_end: root.end_position().row + 1,
         sig_hash: hash_of(""),
         body_hash: hash_of(&serialize(&ctx, root)),
+        is_protocol: false,
+        type_text: None,
     });
     visit_block(&mut ctx, root, module, false);
     Ok(ctx.facts)
@@ -137,6 +196,8 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
         line_end: outer.end_position().row + 1,
         sig_hash: hash_of(&sig),
         body_hash: hash_of(&body_hash),
+        is_protocol: false,
+        type_text: None,
     });
     if let Some(b) = body {
         visit_block(ctx, b, &qname, true);
@@ -179,6 +240,8 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
         line_end: outer.end_position().row + 1,
         sig_hash: hash_of(&sig),
         body_hash: hash_of(&body_hash),
+        is_protocol: false,
+        type_text: None,
     });
     if in_class && let Some(b) = body {
         self_attributes(ctx, b, prefix);
@@ -220,6 +283,8 @@ fn param_signature(ctx: &mut Ctx, p: Node, qname: &str, in_class: bool) -> Optio
             src_qname: qname.to_string(),
             attr: name.clone(),
             dst_text: annotation.as_deref().map(unwrap_type),
+            pos: 0,
+            line: 0,
         });
     }
     Some(format!(
@@ -268,6 +333,8 @@ fn push_attribute(ctx: &mut Ctx, class_qname: &str, name: &str, node: Node) {
         line_end: node.end_position().row + 1,
         sig_hash: hash_of(&rhs),
         body_hash: hash_of(""),
+        is_protocol: false,
+        type_text: None,
     });
 }
 
