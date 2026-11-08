@@ -5,7 +5,6 @@ expression: stdout(&out)
 impact SqlLimitRepository.save  idx=ok
 chamadores:
   M CalculateLimitUseCase.execute   app/billing/application/usecases/calculate_limit_usecase.py:L8-L13  d1 ~ :L12
-  T test_given_amount_when_calculate_then_returns_limit   app/billing/application/tests/unit/test_calculate_limit_usecase.py:L5-L7  d2 ~ :L7
   M CheckoutUseCase.execute   app/billing/application/usecases/checkout_usecase.py:L8-L9  d2 ~ :L9
 consumidores:
   nenhum
@@ -16,6 +15,6 @@ por palavra:
 testes exatos:
   nenhum
 testes ~:
-  T test_given_amount_when_calculate_then_returns_limit   app/billing/application/tests/unit/test_calculate_limit_usecase.py:L5-L7 ~
+  nenhum
 notas: nenhuma
-cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro
+cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro, 2 testes ocultos
