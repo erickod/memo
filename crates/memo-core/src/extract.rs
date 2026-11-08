@@ -33,6 +33,8 @@ pub enum RefKind {
     Especializa,
     Escreve,
     Le,
+    /// Leitura `X.attr` por um nome que não é `self` (TASK-7, D5); resolvida como `LE`.
+    LeAttr,
     Chama,
 }
 
@@ -44,6 +46,7 @@ impl RefKind {
             RefKind::Especializa => "ESPECIALIZA",
             RefKind::Escreve => "ESCREVE",
             RefKind::Le => "LE",
+            RefKind::LeAttr => "LE_ATTR",
             RefKind::Chama => "CHAMA",
         }
     }
@@ -590,7 +593,14 @@ fn write_target(
                     push_ref(ctx, src, RefKind::Escreve, path.join("."), target);
                 }
                 _ => {
-                    if let Some(b) = base {
+                    // `X.attr = v` escreve: só o objeto `X` é lido, não o atributo.
+                    let read = match base {
+                        Some(b) if b.kind() == "attribute" && target.kind() == "attribute" => {
+                            b.child_by_field_name("object")
+                        }
+                        other => other,
+                    };
+                    if let Some(b) = read {
                         scan_effects(ctx, b, src, track_self, locals);
                     }
                 }
@@ -685,6 +695,25 @@ fn scan_effects(
                 && !path.is_empty()
             {
                 push_ref(ctx, src, RefKind::Le, path.join("."), node);
+                return;
+            }
+            if let Some(owner) = node
+                .child_by_field_name("object")
+                .filter(|o| o.kind() == "identifier")
+                .map(|o| ctx.text(o).to_string())
+                .filter(|o| !matches!(o.as_str(), "self" | "cls"))
+            {
+                let attr = node
+                    .child_by_field_name("attribute")
+                    .map(|a| ctx.text(a).to_string())
+                    .unwrap_or_default();
+                ctx.facts.refs.push(RefFact {
+                    src_qname: src.to_string(),
+                    kind: RefKind::LeAttr,
+                    text: format!("{owner}.{attr}"),
+                    receiver: locals.get(&owner).cloned(),
+                    line: node.start_position().row + 1,
+                });
                 return;
             }
         }
