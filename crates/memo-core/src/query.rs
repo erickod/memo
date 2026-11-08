@@ -1,11 +1,12 @@
 //! Consultas sobre o grafo (spec §8.2).
 
 use crate::error::CoreError;
+use crate::evidence::Evidence;
 use crate::index::module_of;
 use crate::store::SqliteStore;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SymbolAddr {
@@ -485,6 +486,15 @@ pub struct ByWordItem {
     #[serde(flatten)]
     pub item: RelItem,
     pub nivel: crate::evidence::Evidence,
+    pub origem: Origem,
+}
+
+/// De onde vem um item do nível por palavra: um uso (`raw_ref`) ou o tipo anotado de um atributo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Origem {
+    Uso,
+    Tipo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -493,11 +503,9 @@ pub struct Impact {
     pub callers: Vec<ChainItem>,
     pub consumers: Vec<RelItem>,
     pub protocol: Vec<RelItem>,
-    /// Usos de produção que contêm todas as palavras do nome do alvo e que nenhuma aresta cobre,
-    /// com evidência `forte` ou `media`: relação por palavra, sempre aproximada.
+    /// Usos e tipos de produção que contêm as palavras do nome do alvo e que nenhuma aresta cobre,
+    /// cada um com a linha e o nível de evidência como rótulo; nada é escondido (TASK-6, D17).
     pub by_word: Vec<ByWordItem>,
-    /// Os mesmos usos sem evidência (`so_nome`): o texto mostra só a contagem.
-    pub by_word_name_only: Vec<ByWordItem>,
     pub tests: TestsInfo,
     pub notes: Vec<crate::notes::Note>,
     /// Itens omitidos por já terem sido entregues nesta task (spec §8.4).
@@ -741,168 +749,322 @@ fn family(store: &SqliteStore, owner: i64) -> Result<BTreeSet<i64>, CoreError> {
     Ok(members)
 }
 
-fn word_texts(store: &SqliteStore, sql: &str, id: i64) -> Result<BTreeSet<String>, CoreError> {
-    Ok(store
-        .conn
-        .prepare(sql)?
-        .query_map([id], |r| r.get(0))?
-        .collect::<Result<_, _>>()?)
+fn id_list(ids: impl IntoIterator<Item = i64>) -> String {
+    ids.into_iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
-const NAME_WORDS: &str = "SELECT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
-     WHERE o.owner_kind = 'symbol' AND o.owner_id = ?1 AND o.source = 'name'";
-
-/// Camada relacional do `impact`: usos de produção cujas palavras de `ref` contêm todas as
-/// palavras do nome do alvo, menos os símbolos que as arestas já cobrem. Cada uso recebe o nível
-/// de evidência (`crate::evidence`); devolve `forte` e `media` numa lista e `so_nome` na outra.
-fn by_word(
-    store: &SqliteStore,
-    id: i64,
-    covered: &HashSet<String>,
-) -> Result<(Vec<ByWordItem>, Vec<ByWordItem>), CoreError> {
-    use crate::evidence::{Anchor, Evidence, classify};
-    let words: Vec<i64> = store
+/// Ids das palavras de nome do alvo.
+fn name_word_ids(store: &SqliteStore, id: i64) -> Result<Vec<i64>, CoreError> {
+    Ok(store
         .conn
         .prepare(
             "SELECT DISTINCT word_id FROM occurrence
              WHERE owner_kind = 'symbol' AND owner_id = ?1 AND source = 'name' ORDER BY word_id",
         )?
         .query_map([id], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    if words.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
-    }
-    let list = words
-        .iter()
-        .map(i64::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
+        .collect::<Result<_, _>>()?)
+}
+
+/// Símbolo candidato do nível por palavra.
+struct Candidate {
+    addr: SymbolAddr,
+    id: i64,
+    file_id: Option<i64>,
+    type_text: Option<String>,
+}
+
+/// Símbolos de produção cujas palavras de uso (`ref` e `type`), somadas, contêm todas as palavras
+/// do nome do alvo: a regra da primeira rodada, que a inferência aditiva preserva (D17).
+fn candidate_symbols(
+    store: &SqliteStore,
+    id: i64,
+    words: &[i64],
+) -> Result<Vec<Candidate>, CoreError> {
+    let list = id_list(words.iter().copied());
     let sql = format!(
-        "SELECT {ADDR_COLUMNS}, r.id, r.file_id, r.line, s.id FROM raw_ref r
-         JOIN symbol s ON s.id = r.src LEFT JOIN file f ON f.id = s.file_id
-         WHERE s.is_test = 0 AND s.id != ?1 AND r.id IN (
-           SELECT owner_id FROM occurrence
-           WHERE owner_kind = 'ref' AND source = 'ref' AND word_id IN ({list})
-           GROUP BY owner_id HAVING COUNT(DISTINCT word_id) = {})
-         ORDER BY s.qname, r.line, r.id",
+        "SELECT {ADDR_COLUMNS}, s.id, s.file_id, s.type_text FROM symbol s
+         LEFT JOIN file f ON f.id = s.file_id
+         WHERE s.is_test = 0 AND s.id != ?1 AND s.id IN (
+           SELECT sym FROM (
+             SELECT r.src AS sym, o.word_id FROM occurrence o
+             JOIN raw_ref r ON o.owner_kind = 'ref' AND o.owner_id = r.id
+             WHERE o.source = 'ref' AND o.word_id IN ({list})
+             UNION
+             SELECT owner_id, word_id FROM occurrence
+             WHERE owner_kind = 'symbol' AND source = 'type' AND word_id IN ({list}))
+           GROUP BY sym HAVING COUNT(DISTINCT word_id) = {})
+         ORDER BY s.qname",
         words.len()
     );
-    type Use = (SymbolAddr, i64, i64, i64, i64);
-    let uses: Vec<Use> = store
+    Ok(store
         .conn
         .prepare(&sql)?
         .query_map([id], |r| {
-            Ok((
-                addr_from_row(r)?,
-                r.get(6)?,
-                r.get(7)?,
-                r.get(8)?,
-                r.get(9)?,
-            ))
+            Ok(Candidate {
+                addr: addr_from_row(r)?,
+                id: r.get(6)?,
+                file_id: r.get(7)?,
+                type_text: r.get(8)?,
+            })
         })?
+        .collect::<Result<_, _>>()?)
+}
+
+/// Um uso de um símbolo candidato: linha, textos e quantas palavras do nome do alvo ele tem.
+struct Use {
+    line: i64,
+    texts: Vec<String>,
+    name_hits: usize,
+}
+
+/// Usos de todos os candidatos, em duas consultas (D20), agrupados pelo símbolo.
+fn uses_of(
+    store: &SqliteStore,
+    symbols: &[i64],
+    words: &[i64],
+) -> Result<HashMap<i64, Vec<Use>>, CoreError> {
+    let syms = id_list(symbols.iter().copied());
+    let hits: HashMap<i64, i64> = store
+        .conn
+        .prepare(&format!(
+            "SELECT r.id, COUNT(DISTINCT o.word_id) FROM raw_ref r
+             JOIN occurrence o ON o.owner_kind = 'ref' AND o.owner_id = r.id AND o.source = 'ref'
+             WHERE r.src IN ({syms}) AND o.word_id IN ({}) GROUP BY r.id",
+            id_list(words.iter().copied())
+        ))?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
+    let mut uses: HashMap<i64, Vec<Use>> = HashMap::new();
+    let mut stmt = store.conn.prepare(&format!(
+        "SELECT src, id, line, callee_text, receiver FROM raw_ref
+         WHERE src IN ({syms}) ORDER BY src, line, id"
+    ))?;
+    let rows = stmt.query_map([], |r| {
+        let texts: Vec<String> = [r.get::<_, Option<String>>(3)?, r.get(4)?]
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get(2)?, texts))
+    })?;
+    for row in rows {
+        let (src, id, line, texts) = row?;
+        let name_hits = usize::try_from(hits.get(&id).copied().unwrap_or(0)).unwrap_or(0);
+        uses.entry(src).or_default().push(Use {
+            line,
+            texts,
+            name_hits,
+        });
+    }
+    Ok(uses)
+}
 
-    let (kind, parent, target_qname, target_path): (String, Option<i64>, String, String) =
-        store.conn.query_row(
-            "SELECT s.kind, s.parent_id, s.qname, COALESCE(f.path, '') FROM symbol s
+/// Candidatos cujo tipo anotado contém todas as palavras do nome do alvo (D19).
+fn typed_with_name(
+    store: &SqliteStore,
+    symbols: &[i64],
+    words: &[i64],
+) -> Result<HashSet<i64>, CoreError> {
+    Ok(store
+        .conn
+        .prepare(&format!(
+            "SELECT owner_id FROM occurrence
+             WHERE owner_kind = 'symbol' AND source = 'type' AND owner_id IN ({})
+               AND word_id IN ({}) GROUP BY owner_id HAVING COUNT(DISTINCT word_id) = {}",
+            id_list(symbols.iter().copied()),
+            id_list(words.iter().copied()),
+            words.len()
+        ))?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?)
+}
+
+/// Dados da evidência para o alvo: nomes da família (método) ou módulo e imports (demais).
+enum AnchorData {
+    Family(Vec<String>),
+    Module {
+        target: String,
+        target_module: String,
+        imports: HashMap<i64, Vec<String>>,
+    },
+}
+
+fn anchor_for(
+    store: &SqliteStore,
+    id: i64,
+    files: &BTreeSet<i64>,
+) -> Result<AnchorData, CoreError> {
+    let (kind, parent, qname, path): (String, Option<i64>, String, String) = store.conn.query_row(
+        "SELECT s.kind, s.parent_id, s.qname, COALESCE(f.path, '') FROM symbol s
              LEFT JOIN file f ON f.id = s.file_id WHERE s.id = ?1",
-            [id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )?;
-    let family_words: Option<Vec<BTreeSet<String>>> = match (kind.as_str(), parent) {
-        ("method", Some(owner)) => Some(
-            family(store, owner)?
-                .into_iter()
-                .map(|class| word_texts(store, NAME_WORDS, class))
-                .collect::<Result<_, _>>()?,
-        ),
-        _ => None,
-    };
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    if let ("method", Some(owner)) = (kind.as_str(), parent) {
+        let names = store
+            .conn
+            .prepare(&format!(
+                "SELECT name FROM symbol WHERE id IN ({}) ORDER BY name",
+                id_list(family(store, owner)?)
+            ))?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        return Ok(AnchorData::Family(names));
+    }
+    let mut imports: HashMap<i64, Vec<String>> = HashMap::new();
+    let mut stmt = store.conn.prepare(&format!(
+        "SELECT file_id, target FROM import WHERE file_id IN ({}) ORDER BY file_id, target",
+        id_list(files.iter().copied())
+    ))?;
+    for row in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get(1)?)))? {
+        let (file, target) = row?;
+        imports.entry(file).or_default().push(target);
+    }
     let target_module = if kind == "module" {
-        target_qname.clone()
+        qname.clone()
     } else {
-        module_of(&target_path)
+        module_of(&path)
     };
+    Ok(AnchorData::Module {
+        target: qname,
+        target_module,
+        imports,
+    })
+}
 
-    let mut best: std::collections::BTreeMap<(String, i64), ByWordItem> =
-        std::collections::BTreeMap::new();
-    for (addr, ref_id, file_id, line, symbol) in uses {
-        if covered.contains(&addr.qname) {
-            continue;
+/// Nível de um item: textos do próprio item (e da mesma linha, D14) contra os demais do símbolo.
+fn item_level(
+    anchor: &AnchorData,
+    c: &Candidate,
+    uses: &[Use],
+    line: i64,
+    own: &[&str],
+) -> Evidence {
+    use crate::evidence::{Anchor, classify};
+    match anchor {
+        AnchorData::Family(names) => {
+            let mut same: Vec<&str> = own.to_vec();
+            let mut rest: Vec<&str> = Vec::new();
+            for u in uses {
+                let texts = u.texts.iter().map(String::as_str);
+                if u.line == line {
+                    same.extend(texts)
+                } else {
+                    rest.extend(texts)
+                }
+            }
+            rest.extend(c.type_text.as_deref().filter(|t| !own.contains(t)));
+            classify(&same, &rest, &Anchor::Family(names))
         }
-        let use_words = word_texts(
-            store,
-            "SELECT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
-             WHERE o.owner_kind = 'ref' AND o.owner_id = ?1 AND o.source = 'ref'",
-            ref_id,
-        )?;
-        let nivel = match &family_words {
-            Some(fam) => {
-                // O extrator divide `Alpha(1).run()` em `?.run` e `Alpha`, na mesma linha: o
-                // "mesmo uso" é a linha do símbolo (D14). O resto do símbolo é a evidência média.
-                let words_where = |cond: &str| -> Result<BTreeSet<String>, CoreError> {
-                    let sql = format!(
-                        "SELECT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
-                         JOIN raw_ref r ON o.owner_kind = 'ref' AND o.owner_id = r.id
-                         WHERE o.source = 'ref' AND r.src = ?1 AND r.id != ?2 AND {cond}"
-                    );
-                    Ok(store
-                        .conn
-                        .prepare(&sql)?
-                        .query_map(params![symbol, ref_id, line], |r| r.get(0))?
-                        .collect::<Result<_, _>>()?)
-                };
-                let mut same_use = use_words.clone();
-                same_use.extend(words_where("r.line = ?3")?);
-                let mut symbol_words = words_where("r.line != ?3")?;
-                symbol_words.extend(word_texts(
-                    store,
-                    "SELECT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
-                     WHERE o.owner_kind = 'symbol' AND o.owner_id = ?1 AND o.source = 'type'",
-                    symbol,
-                )?);
-                classify(&same_use, &symbol_words, &Anchor::Family(fam))
-            }
-            None => {
-                let imports: Vec<String> = store
-                    .conn
-                    .prepare("SELECT target FROM import WHERE file_id = ?1 ORDER BY target")?
-                    .query_map([file_id], |r| r.get(0))?
-                    .collect::<Result<_, _>>()?;
-                let use_module = module_of(&addr.path);
-                let anchor = Anchor::Module {
-                    target: &target_qname,
-                    target_module: &target_module,
-                    use_module: &use_module,
-                    imports: &imports,
-                };
-                classify(&use_words, &BTreeSet::new(), &anchor)
-            }
-        };
-        let key = (addr.qname.clone(), line);
-        let item = ByWordItem {
-            item: RelItem {
-                addr,
-                attr: None,
-                line: Some(line),
-                approx: true,
-            },
-            nivel,
-        };
-        // Dois usos na mesma linha do mesmo símbolo: vale o de evidência mais forte.
-        match best.get(&key) {
-            Some(kept) if kept.nivel <= nivel => {}
-            _ => {
+        AnchorData::Module {
+            target,
+            target_module,
+            imports,
+        } => {
+            let none = Vec::new();
+            let file_imports = c.file_id.and_then(|f| imports.get(&f)).unwrap_or(&none);
+            let use_module = module_of(&c.addr.path);
+            let anchor = Anchor::Module {
+                target,
+                target_module,
+                use_module: &use_module,
+                imports: file_imports,
+            };
+            classify(&[], &[], &anchor)
+        }
+    }
+}
+
+/// Itens de um candidato: cada uso com todas as palavras do nome, o tipo anotado que as tem, e,
+/// se as palavras só aparecem somadas, o primeiro uso que tem alguma (D17).
+fn candidate_items(
+    anchor: &AnchorData,
+    c: &Candidate,
+    uses: &[Use],
+    typed: bool,
+    words: usize,
+) -> Vec<ByWordItem> {
+    let item = |line: i64, origem: Origem, own: &[&str]| ByWordItem {
+        item: RelItem {
+            addr: c.addr.clone(),
+            attr: None,
+            line: Some(line),
+            approx: true,
+        },
+        nivel: item_level(anchor, c, uses, line, own),
+        origem,
+    };
+    let mut items: Vec<ByWordItem> = uses
+        .iter()
+        .filter(|u| u.name_hits == words)
+        .map(|u| item(u.line, Origem::Uso, &[]))
+        .collect();
+    if typed {
+        let own: Vec<&str> = c.type_text.iter().map(String::as_str).collect();
+        items.push(item(c.addr.line_start, Origem::Tipo, &own));
+    }
+    if items.is_empty() {
+        let line = uses
+            .iter()
+            .find(|u| u.name_hits > 0)
+            .map_or(c.addr.line_start, |u| u.line);
+        items.push(item(line, Origem::Uso, &[]));
+    }
+    items
+}
+
+/// Camada relacional do `impact`: todo símbolo de produção cujas palavras de uso contêm as do nome
+/// do alvo, menos os que as arestas cobrem, com um item por uso (e por tipo) e o nível como rótulo
+/// e ordem, nunca como filtro (TASK-6, D17 a D20).
+fn by_word(
+    store: &SqliteStore,
+    id: i64,
+    covered: &HashSet<String>,
+) -> Result<Vec<ByWordItem>, CoreError> {
+    let words = name_word_ids(store, id)?;
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+    let candidates: Vec<Candidate> = candidate_symbols(store, id, &words)?
+        .into_iter()
+        .filter(|c| !covered.contains(&c.addr.qname))
+        .collect();
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<i64> = candidates.iter().map(|c| c.id).collect();
+    let uses = uses_of(store, &ids, &words)?;
+    let typed = typed_with_name(store, &ids, &words)?;
+    let files: BTreeSet<i64> = candidates.iter().filter_map(|c| c.file_id).collect();
+    let anchor = anchor_for(store, id, &files)?;
+    let none = Vec::new();
+    let mut best: BTreeMap<(String, i64, Origem), ByWordItem> = BTreeMap::new();
+    for c in &candidates {
+        let symbol_uses = uses.get(&c.id).unwrap_or(&none);
+        for item in candidate_items(&anchor, c, symbol_uses, typed.contains(&c.id), words.len()) {
+            let key = (
+                c.addr.qname.clone(),
+                item.item.line.unwrap_or(0),
+                item.origem,
+            );
+            // Dois usos na mesma linha do mesmo símbolo: vale o de evidência mais forte.
+            if best.get(&key).is_none_or(|kept| item.nivel < kept.nivel) {
                 best.insert(key, item);
             }
         }
     }
     let mut items: Vec<ByWordItem> = best.into_values().collect();
     items.sort_by(|a, b| {
-        (a.nivel, &a.item.addr.qname, a.item.line).cmp(&(b.nivel, &b.item.addr.qname, b.item.line))
+        (a.nivel, &a.item.addr.qname, a.item.line, a.origem).cmp(&(
+            b.nivel,
+            &b.item.addr.qname,
+            b.item.line,
+            b.origem,
+        ))
     });
-    let (listed, name_only) = items.into_iter().partition(|i| i.nivel != Evidence::SoNome);
-    Ok((listed, name_only))
+    Ok(items)
 }
 
 /// O que muda se o símbolo mudar: chamadores, consumidores do tipo, Protocol, testes.
@@ -927,10 +1089,9 @@ pub fn impact(store: &SqliteStore, target: &str) -> Result<Impact, CoreError> {
                 .map(|c| c.addr.qname.clone()),
         )
         .collect();
-    let (by_word, by_word_name_only) = by_word(store, id, &covered)?;
+    let by_word = by_word(store, id, &covered)?;
     Ok(Impact {
         by_word,
-        by_word_name_only,
         callers,
         consumers,
         protocol,
