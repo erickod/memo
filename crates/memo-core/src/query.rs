@@ -486,15 +486,25 @@ pub struct TestsInfo {
     pub approx: Vec<RelItem>,
 }
 
+/// Um uso do nível por palavra do `impact`: o símbolo que o contém, a linha e o nível.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ByWordItem {
+    #[serde(flatten)]
+    pub item: RelItem,
+    pub nivel: crate::evidence::Evidence,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Impact {
     pub target: SymbolAddr,
     pub callers: Vec<ChainItem>,
     pub consumers: Vec<RelItem>,
     pub protocol: Vec<RelItem>,
-    /// Símbolos de produção cujo texto de uso contém todas as palavras do nome do alvo e que
-    /// nenhuma aresta cobre: relação por palavra, sempre aproximada.
-    pub by_word: Vec<RelItem>,
+    /// Usos de produção que contêm todas as palavras do nome do alvo e que nenhuma aresta cobre,
+    /// com evidência `forte` ou `media`: relação por palavra, sempre aproximada.
+    pub by_word: Vec<ByWordItem>,
+    /// Os mesmos usos sem evidência (`so_nome`): o texto mostra só a contagem.
+    pub by_word_name_only: Vec<ByWordItem>,
     pub tests: TestsInfo,
     pub notes: Vec<crate::notes::Note>,
     /// Itens omitidos por já terem sido entregues nesta task (spec §8.4).
@@ -772,7 +782,14 @@ pub fn impact(store: &SqliteStore, target: &str) -> Result<Impact, CoreError> {
         )
         .collect();
     Ok(Impact {
-        by_word: by_word(store, id, &covered)?,
+        by_word: by_word(store, id, &covered)?
+            .into_iter()
+            .map(|item| ByWordItem {
+                item,
+                nivel: crate::evidence::Evidence::SoNome,
+            })
+            .collect(),
+        by_word_name_only: Vec::new(),
         callers,
         consumers,
         protocol,

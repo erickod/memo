@@ -373,7 +373,7 @@ pub fn impact_text(
     );
     section(
         "por palavra",
-        info.by_word.iter().map(rel_item).collect(),
+        info.by_word.iter().map(|b| rel_item(&b.item)).collect(),
         &mut items,
     );
     tests_sections(&info.tests, &mut items);

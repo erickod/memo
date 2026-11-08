@@ -2,7 +2,9 @@ mod common;
 
 use common::Repo;
 use memo_core::config::Config;
+use memo_core::evidence::Evidence;
 use memo_core::index::index;
+use memo_core::query::Impact;
 use memo_core::source::WorkTree;
 use memo_core::sources::use_words;
 use memo_core::store::SqliteStore;
@@ -235,9 +237,12 @@ fn by_word_names(files: &[(&str, &str)], target: &str) -> (Vec<String>, Vec<Stri
     let mut store = SqliteStore::open_in_memory().unwrap();
     index(&WorkTree::new(repo.path()), &mut store).unwrap();
     let info = memo_core::query::impact(&store, target).unwrap();
-    assert!(info.by_word.iter().all(|i| i.approx));
+    assert!(info.by_word.iter().all(|i| i.item.approx));
     (
-        info.by_word.iter().map(|i| i.addr.qname.clone()).collect(),
+        info.by_word
+            .iter()
+            .map(|i| i.item.addr.qname.clone())
+            .collect(),
         info.consumers
             .iter()
             .map(|i| i.addr.qname.clone())
@@ -247,9 +252,25 @@ fn by_word_names(files: &[(&str, &str)], target: &str) -> (Vec<String>, Vec<Stri
 
 /// GIVEN 'run' defined in two classes and called through a chained instantiation (no edge)
 /// WHEN  impact runs on 'a.Alpha.run'
-/// THEN  the caller appears in the by-word level, approximate; code without the word does not
+/// THEN  the caller appears in the by-word level as strong, approximate; code without the word does not
 #[test]
 fn test_given_unresolved_call_when_impact_then_by_word_lists_caller() {
+    let repo = Repo::empty();
+    repo.write("a.py", TWO_RUNNERS);
+    repo.write(
+        "m.py",
+        "from a import Alpha, Beta\n\ndef go():\n    Alpha(1).run()\n",
+    );
+    let mut store = SqliteStore::open_in_memory().unwrap();
+    index(&WorkTree::new(repo.path()), &mut store).unwrap();
+    let info = memo_core::query::impact(&store, "a.Alpha.run").unwrap();
+    assert!(
+        info.by_word
+            .iter()
+            .any(|i| i.item.addr.qname == "m.go" && i.nivel == Evidence::Forte),
+        "{:?}",
+        info.by_word
+    );
     let (found, _) = by_word_names(
         &[
             ("a.py", TWO_RUNNERS),
@@ -433,4 +454,144 @@ fn test_given_incremental_reindex_when_compared_then_equals_fresh_index() {
     let incremental = use_multiset(&Connection::open(&db).unwrap());
     let fresh = indexed(&[("a.py", &changed), ("m.py", FIXTURE_U_M)]);
     assert_eq!(incremental, use_multiset(&fresh.conn));
+}
+
+fn impact_of(files: &[(&str, &str)], target: &str) -> Impact {
+    let repo = Repo::empty();
+    for (path, source) in files {
+        repo.write(path, source);
+    }
+    let mut store = SqliteStore::open_in_memory().unwrap();
+    index(&WorkTree::new(repo.path()), &mut store).unwrap();
+    memo_core::query::impact(&store, target).unwrap()
+}
+
+/// Símbolos do nível por palavra com o nível pedido (`so_nome` vem da lista à parte).
+fn level(info: &Impact, nivel: Evidence) -> BTreeSet<String> {
+    info.by_word
+        .iter()
+        .chain(&info.by_word_name_only)
+        .filter(|i| i.nivel == nivel)
+        .map(|i| i.item.addr.qname.clone())
+        .collect()
+}
+
+/// Símbolos que as arestas do `impact` já cobrem.
+fn covered(info: &Impact) -> BTreeSet<String> {
+    info.callers
+        .iter()
+        .filter_map(|c| c.addr.as_ref().map(|a| a.qname.clone()))
+        .chain(info.consumers.iter().map(|c| c.addr.qname.clone()))
+        .chain(info.protocol.iter().map(|c| c.addr.qname.clone()))
+        .collect()
+}
+
+fn minus(names: &[&str], drop: &BTreeSet<String>) -> BTreeSet<String> {
+    names
+        .iter()
+        .map(|n| n.to_string())
+        .filter(|n| !drop.contains(n))
+        .collect()
+}
+
+/// GIVEN fixture U
+/// WHEN  impact runs on a.Alpha.run
+/// THEN  uses split into strong, medium and name only, minus whatever edges already cover
+#[test]
+fn test_given_family_uses_when_impact_then_strong_medium_and_name_only_split() {
+    let info = impact_of(
+        &[("a.py", FIXTURE_U_A), ("m.py", FIXTURE_U_M)],
+        "a.Alpha.run",
+    );
+    let edges = covered(&info);
+    assert_eq!(
+        level(&info, Evidence::Forte),
+        minus(&["m.strong_owner", "m.strong_sub"], &edges)
+    );
+    assert_eq!(
+        level(&info, Evidence::Media),
+        minus(&["m.medium_owner", "m.medium_protocol"], &edges)
+    );
+    assert_eq!(
+        level(&info, Evidence::SoNome),
+        minus(&["m.only_beta", "m.only_obj"], &edges)
+    );
+    assert!(info.by_word.iter().all(|i| i.nivel != Evidence::SoNome));
+    assert!(
+        info.by_word_name_only
+            .iter()
+            .all(|i| i.nivel == Evidence::SoNome)
+    );
+}
+
+/// Fixture F (TASK-6, §7): uma função e usos no próprio módulo, com import e sem import.
+const FIXTURE_F: &[(&str, &str)] = &[
+    (
+        "m.py",
+        "def helper():\n    pass\n\ndef local_use():\n    helper()\n",
+    ),
+    (
+        "n.py",
+        "from m import helper\n\ndef imported_use():\n    helper()\n",
+    ),
+    ("k.py", "import m\n\ndef module_use():\n    m.helper()\n"),
+    ("z.py", "def helper():\n    pass\n"),
+    ("y.py", "def helper():\n    pass\n"),
+    ("w.py", "def other_use():\n    helper()\n"),
+];
+
+/// GIVEN fixture F
+/// WHEN  impact runs on m.helper
+/// THEN  other_use is counted as name only and never listed as strong or medium
+#[test]
+fn test_given_homonym_call_when_impact_then_name_only_counted() {
+    let info = impact_of(FIXTURE_F, "m.helper");
+    assert!(
+        level(&info, Evidence::SoNome).contains("w.other_use"),
+        "{:?}",
+        info.by_word_name_only
+    );
+    assert!(
+        info.by_word
+            .iter()
+            .all(|i| i.item.addr.qname != "w.other_use")
+    );
+}
+
+/// GIVEN fixture U
+/// WHEN  impact runs on a.Alpha.run
+/// THEN  each strong and medium item carries the line of a use of 'run' inside its symbol
+#[test]
+fn test_given_by_word_item_when_impact_then_line_is_use_line() {
+    let info = impact_of(
+        &[("a.py", FIXTURE_U_A), ("m.py", FIXTURE_U_M)],
+        "a.Alpha.run",
+    );
+    assert!(!info.by_word.is_empty());
+    let expected = |qname: &str| -> i64 {
+        let body = FIXTURE_U_M
+            .lines()
+            .position(|l| l.starts_with(&format!("def {}(", &qname[2..])))
+            .unwrap();
+        let offset = FIXTURE_U_M
+            .lines()
+            .skip(body)
+            .position(|l| l.contains(".run()"))
+            .unwrap();
+        (body + offset + 1) as i64
+    };
+    for i in &info.by_word {
+        assert_eq!(i.item.line, Some(expected(&i.item.addr.qname)), "{i:?}");
+    }
+}
+
+/// GIVEN fixture U indexed fresh twice into two stores
+/// WHEN  impact on a.Alpha.run is serialized to JSON
+/// THEN  both outputs are byte-identical
+#[test]
+fn test_given_same_tree_twice_when_impact_then_identical_bytes() {
+    let files = [("a.py", FIXTURE_U_A), ("m.py", FIXTURE_U_M)];
+    let first = serde_json::to_string(&impact_of(&files, "a.Alpha.run")).unwrap();
+    let second = serde_json::to_string(&impact_of(&files, "a.Alpha.run")).unwrap();
+    assert_eq!(first, second);
 }

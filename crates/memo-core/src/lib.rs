@@ -7,6 +7,7 @@ pub mod config;
 pub mod delta;
 pub mod error;
 pub mod events;
+pub mod evidence;
 pub mod extract;
 pub mod hide;
 pub mod index;
