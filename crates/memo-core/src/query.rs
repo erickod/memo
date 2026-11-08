@@ -30,6 +30,33 @@ pub struct SymbolInfo {
     pub notes: Vec<crate::notes::Note>,
     /// Trechos que vale ler: o alvo e até 4 chamadores exatos (TASK-7, D4).
     pub ler: Vec<ReadSpot>,
+    /// Membros, quando o símbolo é um Enum (TASK-7, D6).
+    pub membros: Vec<EnumMember>,
+}
+
+/// Membro de Enum: o nome e o valor literal, quando há.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EnumMember {
+    pub name: String,
+    pub value: Option<String>,
+}
+
+fn enum_members(store: &SqliteStore, qname: &str) -> Result<Vec<EnumMember>, CoreError> {
+    Ok(store
+        .conn
+        .prepare(
+            "SELECT m.name, m.value_text FROM symbol m JOIN symbol c ON c.id = m.parent_id
+             WHERE c.qname = ?1 AND m.kind = 'attribute' AND m.value_text IS NOT NULL
+             ORDER BY m.line_start, m.name",
+        )?
+        .query_map([qname], |r| {
+            let value: String = r.get(1)?;
+            Ok(EnumMember {
+                name: r.get(0)?,
+                value: (!value.is_empty()).then_some(value),
+            })
+        })?
+        .collect::<Result<_, _>>()?)
 }
 
 /// Trecho de código para ler, com o motivo como fato (`alvo`, `chama o alvo em :L<n>`, …).
@@ -246,8 +273,10 @@ pub fn symbol_info(store: &SqliteStore, target: &str) -> Result<SymbolInfo, Core
             edges: Vec::new(),
             notes: Vec::new(),
             ler: Vec::new(),
+            membros: Vec::new(),
         })
     })?;
+    info.membros = enum_members(store, &qname)?;
     info.edges = direct_edges(store, &qname)?;
     info.ler = symbol_read_spots(store, &qname, &info.addr)?;
     Ok(info)
