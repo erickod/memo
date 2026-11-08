@@ -52,7 +52,7 @@ fn tools() -> Value {
                 "properties": {
                     "text": { "type": "string", "description": "O pedido em texto livre." },
                     "task": { "type": "string", "description": "Id da task (deltas e notas da task)." },
-                    "no_tests": { "type": "boolean", "description": "Esconde os testes da saída." }
+                    "tests": { "type": "boolean", "description": "Mostra os testes (ocultos por padrão)." }
                 },
                 "required": ["text"]
             }
@@ -67,7 +67,7 @@ fn tools() -> Value {
                     "target": { "type": "string", "description": "Símbolo (qname ou sufixo único), atributo, tipo ou palavra." },
                     "depth": { "type": "integer", "minimum": 1, "maximum": 3, "description": "Só para callers e callees." },
                     "task": { "type": "string" },
-                    "no_tests": { "type": "boolean", "description": "Esconde os testes da saída (erro em kind tests)." }
+                    "tests": { "type": "boolean", "description": "Mostra os testes (ocultos por padrão; kind tests sempre lista)." }
                 },
                 "required": ["kind", "target"]
             }
@@ -140,7 +140,9 @@ impl<B: Backend> Server<B> {
         if let Some(task) = optional(args, "task") {
             argv.extend(["--task".to_string(), task.to_string()]);
         }
-        if args.get("no_tests").and_then(Value::as_bool) == Some(true) {
+        if args.get("tests").and_then(Value::as_bool) == Some(true) {
+            argv.push("--tests".to_string());
+        } else if args.get("no_tests").and_then(Value::as_bool) == Some(true) {
             argv.push("--no-tests".to_string());
         }
         let push = |argv: &mut Vec<String>, items: &[&str]| {
