@@ -25,4 +25,10 @@ escritores:
   CalculateLimitUseCase._repo <- CalculateLimitUseCase.__init__
   CheckoutUseCase._calculate <- CheckoutUseCase.__init__
 notas: nenhuma
+ler:
+  app/billing/application/usecases/calculate_limit_usecase.py:L1-L14 — carrega calculate, limit
+  app/billing/application/usecases/calculate_limit_usecase.py:L4-L13 — carrega calculate, limit
+  app/billing/application/usecases/checkout_usecase.py:L6-L6 — carrega calculate
+  app/billing/domain/protocols/limit_repository.py:L1-L6 — carrega limit
+  app/billing/domain/protocols/limit_repository.py:L4-L5 — carrega limit
 cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro, 3 testes ocultos
