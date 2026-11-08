@@ -78,6 +78,7 @@ O `memo` trata a palavra como o conceito central. Ela nasce de nomes de símbolo
 
 Uma palavra só vira `esqueleto` (nunca âncora de `brief` nem de nota) se estiver na lista `skeleton` do `memo.toml`. O `memo` não decide sozinho se uma palavra é de domínio: `order`, `get` e `data` viram âncora, a menos que você as coloque na lista. Especificidade e coerência aparecem em `query word` só como informação.
 
+No `brief`, os símbolos que carregam a palavra do pedido (no nome, na docstring de teste ou num módulo que a importa) vêm primeiro, até 10, e os que só chegam por vizinhança (chamada ou tipo) vêm depois, até 5 de 15; a vizinhança é amortecida pelo número de ligações do vizinho, para um símbolo chamado por todo mundo (como um `get_events` genérico) não encabeçar a lista. Os valores 10 e 5 são iniciais e ainda não configuráveis.
 `memo query aliases` sugere pares que provavelmente são o mesmo conceito (`cancel`/`canceled`, ou palavras com vizinhança parecida), cada um com o `memo note add --tipo glossario ... --alias ...` pronto. Só lê; quem decide é você.
 
 ### Códigos de saída
