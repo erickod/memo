@@ -1027,3 +1027,58 @@ fn test_given_no_tests_flag_when_query_word_then_representativeness_counts_uncha
     assert!(section.contains("repositório: 6/12"), "{all}");
     assert_eq!(section, representativeness_section(&hidden));
 }
+
+/// Fixture A da TASK-4: `emit` chamado por 4 símbolos da âncora e 6 de ruído, `audit` por 2.
+fn hub_repo() -> Repo {
+    let repo = Repo::empty();
+    let mut body = String::from("def emit():\n    return 1\n\ndef audit():\n    return 1\n\n");
+    body.push_str("def order_a():\n    emit()\n    audit()\n\n");
+    body.push_str("def order_b():\n    emit()\n    audit()\n\n");
+    body.push_str("def order_c():\n    emit()\n\ndef order_d():\n    emit()\n\n");
+    for i in 0..6 {
+        body.push_str(&format!("def noise_{}():\n    emit()\n\n", token(i)));
+    }
+    repo.write("app/o/core.py", &body);
+    repo.commit_all();
+    repo
+}
+
+fn line_of(text: &str, name: &str) -> usize {
+    text.lines()
+        .position(|l| l.contains(&format!(" {name} ")))
+        .unwrap_or_else(|| panic!("{name} not in\n{text}"))
+}
+
+/// GIVEN fixture A committed to a git repository
+/// WHEN  'memo brief order' runs
+/// THEN  the output line for order_a comes before the lines for emit and audit
+#[test]
+fn test_given_hub_fixture_when_brief_then_text_lists_anchor_symbols_before_neighbors() {
+    let out = stdout(&memo(&hub_repo(), &["brief", "order"]));
+    assert!(line_of(&out, "order_a") < line_of(&out, "emit"), "{out}");
+    assert!(line_of(&out, "order_a") < line_of(&out, "audit"), "{out}");
+}
+
+/// GIVEN fixture A plus one test file with test_order_a, committed
+/// WHEN  'memo brief order' runs with and without --no-tests
+/// THEN  the production symbol lines are identical in both outputs
+#[test]
+fn test_given_no_tests_flag_when_brief_hub_fixture_then_production_order_unchanged() {
+    let repo = hub_repo();
+    repo.write(
+        "app/o/tests/test_core.py",
+        "def test_order_a():\n    assert True\n",
+    );
+    repo.commit_all();
+    let production = |args: &[&str]| -> Vec<String> {
+        stdout(&memo(&repo, args))
+            .lines()
+            .filter(|l| l.contains("app/o/core.py"))
+            .map(str::to_string)
+            .collect()
+    };
+    let all = production(&["brief", "order"]);
+    let hidden = production(&["--no-tests", "brief", "order"]);
+    assert!(all.len() >= 4, "{all:?}");
+    assert_eq!(all, hidden);
+}
