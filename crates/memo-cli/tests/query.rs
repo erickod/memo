@@ -721,7 +721,10 @@ fn test_given_brief_when_run_then_symbols_show_bridge_tags() {
 /// THEN  no 'T' line appears before the 'testes:' section, and that section is after 'escritores:'
 #[test]
 fn test_given_tests_in_results_when_brief_then_tests_listed_in_final_section() {
-    let out = stdout(&memo(&open_repo(), &["brief", "calculate limit"]));
+    let out = stdout(&memo(
+        &open_repo(),
+        &["--tests", "brief", "calculate limit"],
+    ));
     let tests_at = out.lines().position(|l| l == "testes:").expect(&out);
     let writers_at = out.lines().position(|l| l == "escritores:").expect(&out);
     assert!(tests_at > writers_at, "{out}");
@@ -748,7 +751,10 @@ fn test_given_tests_in_results_when_brief_then_tests_listed_in_final_section() {
 ///       and the last line is '+N omitidos' with N counting the cut tests
 #[test]
 fn test_given_small_max_chars_when_brief_then_tests_cut_first_and_omitidos_per_section() {
-    let full = stdout(&memo(&open_repo(), &["brief", "calculate limit"]));
+    let full = stdout(&memo(
+        &open_repo(),
+        &["--tests", "brief", "calculate limit"],
+    ));
     let production: Vec<&str> = full
         .lines()
         .skip_while(|l| *l != "símbolos:")
@@ -759,6 +765,7 @@ fn test_given_small_max_chars_when_brief_then_tests_cut_first_and_omitidos_per_s
     let out = stdout(&memo(
         &open_repo(),
         &[
+            "--tests",
             "--max-chars",
             &limit.to_string(),
             "brief",
@@ -789,7 +796,9 @@ fn test_given_no_tests_flag_when_query_callers_then_test_callers_hidden() {
         "--depth",
         "2",
     ];
-    let full = stdout(&memo(&open_repo(), &args));
+    let mut shown_args = vec!["--tests"];
+    shown_args.extend(args);
+    let full = stdout(&memo(&open_repo(), &shown_args));
     assert!(full.contains("test_given_amount"), "{full}");
     let mut hidden_args = vec!["--no-tests"];
     hidden_args.extend(args);
@@ -829,7 +838,7 @@ fn test_given_no_tests_flag_when_word_stats_read_then_same_as_without_flag() {
         args.extend(["query", "word", "limit"]);
         serde_json::from_str(&stdout(&memo(&open_repo(), &args))).unwrap()
     };
-    let (full, hidden) = (run(&[]), run(&["--no-tests"]));
+    let (full, hidden) = (run(&["--tests"]), run(&["--no-tests"]));
     assert_eq!(full["data"]["stats"], hidden["data"]["stats"]);
     let count = |v: &serde_json::Value| v["data"]["symbols"].as_array().unwrap().len();
     assert!(count(&hidden) < count(&full));
