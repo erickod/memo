@@ -61,9 +61,9 @@ fn test_given_untyped_attr_read_when_readers_then_approx_reader() {
 
 /// GIVEN 'x.flag' read with 'x' untyped, and 'flag' declared in two classes
 /// WHEN  readers of each class's flag run
-/// THEN  the function is listed with '~' in both (TASK-7, D5)
+/// THEN  the function is in neither: an approximate read needs a name unique in the repository (TASK-7, D5a)
 #[test]
-fn test_given_attr_in_two_classes_when_readers_then_approx_in_both() {
+fn test_given_attr_in_two_classes_when_readers_then_no_relation() {
     let (_repo, store) = store_of(&[
         (
             "models.py",
@@ -74,7 +74,7 @@ fn test_given_attr_in_two_classes_when_readers_then_approx_in_both() {
     for attr in ["models.A.flag", "models.B.flag"] {
         let list = reader_list(&store, attr);
         assert!(
-            list.contains(&("svc.check".to_string(), true)),
+            !list.iter().any(|(q, _)| q == "svc.check"),
             "{attr}: {list:?}"
         );
     }
