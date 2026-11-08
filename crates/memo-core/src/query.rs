@@ -445,6 +445,74 @@ pub fn word_info(
     word_core(store, word, Some(weights))
 }
 
+/// Partes de uma entrada de `query word` (TASK-7, D7): o mesmo classificador das palavras de
+/// nome, que divide em `_`, `.` e caixa e descarta os `_` do começo e do fim; sem repetição.
+pub fn word_parts(input: &str, config: &crate::config::Config) -> Vec<String> {
+    // `__init__` e `_order_`: o classificador ignora nomes com `_` nas pontas; tirá-los antes.
+    let trimmed: Vec<&str> = input.split('.').map(|p| p.trim_matches('_')).collect();
+    let mut parts: Vec<String> = Vec::new();
+    for occ in crate::sources::use_words(&trimmed.join("."), config) {
+        if !parts.contains(&occ.text) {
+            parts.push(occ.text);
+        }
+    }
+    parts
+}
+
+/// Palavra composta: a ficha curta de cada parte conhecida, as partes desconhecidas e os
+/// símbolos cujo nome tem todas as partes conhecidas.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CompositeWord {
+    pub input: String,
+    pub parts: Vec<String>,
+    pub cards: Vec<WordInfo>,
+    pub unknown: Vec<String>,
+    pub symbols: Vec<SymbolAddr>,
+}
+
+/// Cruza as partes de uma palavra composta; nenhuma parte conhecida → `NotFound`.
+pub fn composite_word(
+    store: &SqliteStore,
+    input: &str,
+    parts: &[String],
+) -> Result<CompositeWord, CoreError> {
+    let mut cards = Vec::new();
+    let mut unknown = Vec::new();
+    for part in parts {
+        match word_pattern(store, part) {
+            Ok(card) => cards.push(card),
+            Err(CoreError::NotFound(_)) => unknown.push(part.clone()),
+            Err(e) => return Err(e),
+        }
+    }
+    if cards.is_empty() {
+        return Err(CoreError::NotFound(input.to_string()));
+    }
+    let placeholders = vec!["?"; cards.len()].join(",");
+    let sql = format!(
+        "SELECT {ADDR_COLUMNS} FROM symbol s LEFT JOIN file f ON f.id = s.file_id
+         WHERE s.id IN (
+           SELECT o.owner_id FROM occurrence o JOIN word w ON w.id = o.word_id
+           WHERE o.owner_kind = 'symbol' AND o.source = 'name' AND w.text IN ({placeholders})
+           GROUP BY o.owner_id HAVING COUNT(DISTINCT w.text) = {})
+         ORDER BY s.qname",
+        cards.len()
+    );
+    let words: Vec<&str> = cards.iter().map(|c| c.word.as_str()).collect();
+    let symbols = store
+        .conn
+        .prepare(&sql)?
+        .query_map(rusqlite::params_from_iter(words), addr_from_row)?
+        .collect::<Result<_, _>>()?;
+    Ok(CompositeWord {
+        input: input.to_string(),
+        parts: parts.to_vec(),
+        cards,
+        unknown,
+        symbols,
+    })
+}
+
 /// Só verbos, papéis, camadas e vizinhas de símbolo da palavra, sem a ficha de pontes nem os
 /// símbolos etiquetados: barato em repositório grande (o `brief` usa para o padrão).
 pub fn word_pattern(store: &SqliteStore, word: &str) -> Result<WordInfo, CoreError> {
