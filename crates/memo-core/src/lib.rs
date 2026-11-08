@@ -13,6 +13,7 @@ pub mod index;
 pub mod lock;
 pub mod notes;
 pub mod query;
+pub mod representativeness;
 pub mod resolve;
 pub mod source;
 pub mod sources;

@@ -52,6 +52,21 @@ impl Repo {
         Self { root }
     }
 
+    /// Repositório git vazio, sem a fixture e sem commit, para testes com poucos arquivos.
+    pub fn empty() -> Self {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let root = std::env::temp_dir().join(format!("memo-test-{}-{n}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let status = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        Self { root }
+    }
+
     pub fn path(&self) -> &Path {
         &self.root
     }

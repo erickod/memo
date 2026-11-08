@@ -919,3 +919,111 @@ fn test_given_alias_report_cli_when_run_then_note_add_command_ready() {
     assert_eq!(out.status.code(), Some(0));
     insta::assert_snapshot!(stdout(&out));
 }
+
+/// Fixture da TASK-3 §7: 11 arquivos, contexto = segmento depois de `app/`.
+fn representativeness_repo() -> Repo {
+    let repo = Repo::empty();
+    for (path, words) in [
+        ("app/a/a1.py", vec!["alpha", "beta", "gamma"]),
+        ("app/a/a2.py", vec!["alpha", "beta", "gamma"]),
+        ("app/a/a3.py", vec!["alpha", "beta"]),
+        ("app/a/a4.py", vec!["delta"]),
+        ("app/b/b1.py", vec!["alpha"]),
+        ("app/b/b2.py", vec!["beta"]),
+        ("app/b/b3.py", vec!["beta"]),
+        ("app/b/b4.py", vec!["beta"]),
+        ("app/b/b5.py", vec!["gamma"]),
+        ("app/b/b6.py", vec!["delta"]),
+        ("app/raiz.py", vec!["alpha"]),
+    ] {
+        let body: String = words
+            .iter()
+            .map(|w| format!("def {w}():\n    return 1\n\n"))
+            .collect();
+        repo.write(path, &body);
+    }
+    repo.commit_all();
+    repo
+}
+
+fn representativeness_section(text: &str) -> String {
+    let mut lines = text
+        .lines()
+        .skip_while(|l| !l.starts_with("representatividade"));
+    let mut out: Vec<&str> = lines.next().into_iter().collect();
+    out.extend(lines.take_while(|l| l.starts_with("  ")));
+    out.join("\n")
+}
+
+/// GIVEN the representativeness fixture
+/// WHEN  'memo query word alpha' runs
+/// THEN  the output has the representativeness section with the repository, context and neighbor lines
+#[test]
+fn test_given_fixture_when_query_word_then_representativeness_section_matches_golden() {
+    let out = stdout(&memo(
+        &representativeness_repo(),
+        &["query", "word", "alpha"],
+    ));
+    insta::assert_snapshot!(representativeness_section(&out), @r"
+    representatividade (arquivos):
+      repositório: 5/11 (0.45)
+      contexto a: 3/4 (0.75)
+      contexto b: 1/6 (0.17)
+      vizinha beta: alpha|beta=0.50 beta|alpha=0.60 comum=3
+    ");
+}
+
+/// GIVEN the representativeness fixture
+/// WHEN  'memo --json query word alpha' runs
+/// THEN  the JSON has repository, contexts and neighbors with the counts above
+#[test]
+fn test_given_fixture_when_query_word_json_then_representativeness_fields_present() {
+    let out = memo(
+        &representativeness_repo(),
+        &["--json", "query", "word", "alpha"],
+    );
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let r = &json["data"]["representativeness"];
+    assert_eq!(r["repository"]["files"], 5);
+    assert_eq!(r["repository"]["total"], 11);
+    assert_eq!(r["contexts"][0]["context"], "a");
+    assert_eq!(r["contexts"][0]["files"], 3);
+    assert_eq!(r["contexts"][0]["total"], 4);
+    assert_eq!(r["neighbors"][0]["word"], "beta");
+    assert_eq!(r["neighbors"][0]["shared"], 3);
+}
+
+/// GIVEN the representativeness fixture indexed twice from scratch
+/// WHEN  'memo query word alpha' runs on each
+/// THEN  both outputs are byte-identical
+#[test]
+fn test_given_same_tree_twice_when_query_word_then_output_is_byte_identical() {
+    let first = stdout(&memo(
+        &representativeness_repo(),
+        &["query", "word", "alpha"],
+    ));
+    let second = stdout(&memo(
+        &representativeness_repo(),
+        &["query", "word", "alpha"],
+    ));
+    assert!(first.contains("representatividade"), "{first}");
+    assert_eq!(first, second);
+}
+
+/// GIVEN the representativeness fixture with one test file containing alpha
+/// WHEN  'memo query word alpha' runs with and without --no-tests
+/// THEN  the representativeness counts are equal in both outputs
+#[test]
+fn test_given_no_tests_flag_when_query_word_then_representativeness_counts_unchanged() {
+    let repo = representativeness_repo();
+    repo.write(
+        "app/a/tests/test_alpha.py",
+        "def test_alpha():\n    assert True\n",
+    );
+    repo.commit_all();
+    let all = stdout(&memo(&repo, &["query", "word", "alpha"]));
+    let hidden = stdout(&memo(&repo, &["--no-tests", "query", "word", "alpha"]));
+    let section = representativeness_section(&all);
+    assert!(section.contains("repositório: 6/12"), "{all}");
+    assert_eq!(section, representativeness_section(&hidden));
+}

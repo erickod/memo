@@ -49,6 +49,8 @@ pub struct WordInfo {
     /// Palavras vizinhas marcadas `esqueleto`, fora de verbos, papéis e vizinhas.
     pub ignored: Vec<String>,
     pub stats: Option<WordStats>,
+    /// Representatividade em arquivos (só na ficha completa, não no padrão do `brief`).
+    pub representativeness: Option<crate::representativeness::Representativeness>,
 }
 
 /// Aresta direta de um símbolo: `out` (ele aponta) ou `in` (apontam para ele).
@@ -432,6 +434,12 @@ fn word_core(
         Some(w) => crate::bridges::word_bridges(store, &word, w)?,
         None => Vec::new(),
     };
+    let representativeness = match weights {
+        Some(_) => Some(crate::representativeness::representativeness(
+            store, word_id,
+        )?),
+        None => None,
+    };
     Ok(WordInfo {
         word,
         verbs,
@@ -442,6 +450,7 @@ fn word_core(
         bridges,
         ignored,
         stats,
+        representativeness,
     })
 }
 
