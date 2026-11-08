@@ -2,13 +2,12 @@
 
 O que o `memo` não faz, faz mal ou não foi verificado. Cada item diz de onde vem a evidência. As funcionalidades estão em [Funcionalidades](funcionalidades.md), e o que pode vir depois em [Possíveis caminhos](caminhos.md).
 
-## O `brief` ainda não mostra o que é central
+## Ranking e centralidade do `brief`
 
-- **No `brief order` de um repositório real, os 10 lugares dos símbolos que carregam a palavra foram todos para módulos** (`mod ... [nome, import]`). A classe `OrderEntity` nem aparece entre eles. Um módulo soma nome e import e passa a classe, que só tem o nome. (medido no repositório real)
-- **Entre os símbolos que carregam a palavra não há critério que distinga o central.** `order` tem 421 símbolos diretos, quase todos com a mesma pontuação; o desempate é alfabético. (medido; a explicação é uma hipótese, ainda não testada)
-- **O `contorno` pode vir vazio**, porque ele resume as chamadas dos 5 primeiros símbolos de produção, e módulos não têm arestas de chamada. (medido)
+- A TASK-8 prioriza alvos estruturais explícitos e código que carrega a palavra antes de módulos e imports. Isso evita a dominância de módulos nas fixtures; ainda não é uma classificação de centralidade de domínio nem uma calibração em vários repositórios.
+- **O `contorno` pode vir vazio** quando os símbolos selecionados não têm chamadas conhecidas.
 - Os métodos de `OrderEntity` aparecem, mas como vizinhos (nível 2, 5 vagas). Os valores 10 e 5 são iniciais, sem calibração, e não são configuráveis.
-- O `score` no JSON do `brief` não é mais monotônico na lista: há uma subida na fronteira entre os dois níveis.
+- O `score` no JSON não é monotônico entre grupos de evidência. A prioridade do grupo precede a pontuação.
 
 ## Ruído e calibração
 
@@ -22,11 +21,14 @@ O que o `memo` não faz, faz mal ou não foi verificado. Cada item diz de onde v
 
 - Num repositório real, a cobertura foi de 4.450 chamadas resolvidas, 1.492 aproximadas e 1.740 **não resolvidas** (cerca de 23% do total). O resultado vazio nunca prova ausência.
 - Escrita em variável de módulo ou `global` ainda não gera a aresta `ESCREVE`.
+- Escritas SQLAlchemy reconhecem cadeias diretas `update/insert(Model)…values(attr=...)` com import verificável e atributo indexado. Builders guardados em variáveis, argumentos em dicionários/`**kwargs`, SQL textual e APIs de outros ORMs ficam fora. Inicialização e construção de comando SQL não comprovam persistência ou execução.
+- Factories, metaclasses, monkey-patching e callbacks de dependências externas não têm execução inferida. Herança externa não comprova que a biblioteca chama um método sobrescrito. A proteção contra nomes importados ocultados cobre parâmetros e locais de tipo conhecido; não há análise completa de escopo e fluxo de nomes.
+- `ler:` completa blocos curtos que cruzam a janela até 40 linhas; não segue o valor até decisões posteriores nem faz análise de fluxo de dados. Símbolos grandes continuam sujeitos ao orçamento.
 - Quando outro arquivo ganha um homônimo de uma função já chamada, quem a chamava não é resolvido de novo até o próprio arquivo mudar: a chamada segue apontando para a definição antiga. (achado na TASK-6, não corrigido)
 
 ## `impact` por palavra
 
-- **O "mesmo uso" é a linha do símbolo.** O extrator divide `Alpha(1).run()` em `?.run` (sem receptor) e `Alpha`; por isso a evidência `forte` olha os usos da mesma linha, e `x = Alpha(); y.run()` numa linha só também vira `forte`. (teste; decisão D14 da TASK-6)
+- **O "mesmo uso" ainda é a linha do símbolo.** Chamadas diretas `Classe(...).metodo()` agora preservam o receptor e podem ser exatas; o fallback lexical continua usando coincidências na mesma linha, portanto `x = Alpha(); y.run()` numa linha só também pode virar evidência `forte` aproximada. (TASK-8; decisão D14 da TASK-6)
 - **Usos de teste nunca aparecem**, com ou sem `--no-tests`; chamadas no nível do módulo não são extraídas. (teste)
 - **Nome de alvo genérico** (`run`, `execute`) lista centenas de usos `só nome` (no `bope`, 384 para um `execute`); o nível ordena, mas dentro dele a ordem é alfabética, sem ranking por pontes.
 - **A evidência quase nunca passa de `só nome` em código com injeção de dependência**: o receptor (`self._repo.run()`) não cita a classe. No `bope`, um único `forte` em seis alvos medidos, e ele era verdadeiro.

@@ -27,6 +27,8 @@ O que o `memo` faz hoje. Cada item diz como foi verificado: **teste** (coberto p
 - `--no-tests`, `--limit`, `--max-chars`, `--json`, `--no-index`, e os deltas por task (`--since-last`, `--full`). (teste)
 - Saída compacta, sempre com endereços `caminho:Linicio-Lfim`, e a linha final `cobertura`. (teste)
 
+As correções de estrutura e relevância (TASK-8) acrescentam resolução de chamadas `Classe(...).metodo()`, origens distintas para escrita/inicialização/SQLAlchemy, âncoras de símbolo e arquivo no `brief`, contexto de mudanças base × feature e ranking por evidência antes do agrupamento. Fixtures sintéticas cobrem aliases, herança, factories, homônimos, imports ocultados por parâmetros, proximidade e propagação de confiança entre caminhos. Os trechos de leitura evitam sobreposição e completam blocos curtos até 40 linhas. Consulte o [contrato e os limites no README](../README.md#consultas).
+
 ## Notas
 
 - Uma afirmação durável por nota, em arquivo Markdown, ancorada em símbolo, palavra, aresta ou arquivo. Tipos `decisao`, `regra`, `restricao`, `descartado` e `glossario` (com `--alias`). (teste)
