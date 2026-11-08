@@ -223,30 +223,26 @@ fn rebuild_doc_words(tx: &Transaction, config: &Config) -> Result<(), CoreError>
 }
 
 /// Reconstrói as palavras de uso: o texto de cada referência (chamada, receptor, tipo recebido ou
-/// devolvido) e o tipo anotado de cada símbolo. Não dependem de a referência ter sido resolvida,
-/// e ficam sem `symbol_id` para as estatísticas e o `brief` não as verem.
+/// devolvido), com a própria referência como dono, e o tipo anotado de cada símbolo. Não dependem
+/// de a referência ter sido resolvida, e ficam sem `symbol_id` para as estatísticas e o `brief`
+/// não as verem.
 fn rebuild_use_words(tx: &Transaction, config: &Config) -> Result<(), CoreError> {
     tx.execute("DELETE FROM occurrence WHERE source IN ('ref', 'type')", [])?;
     let mut stmt = tx.prepare(
-        "SELECT src, callee_text, receiver FROM raw_ref
-         WHERE callee_text IS NOT NULL OR receiver IS NOT NULL ORDER BY src, rowid",
+        "SELECT id, callee_text, receiver FROM raw_ref
+         WHERE callee_text IS NOT NULL OR receiver IS NOT NULL ORDER BY id",
     )?;
     let rows: Vec<(i64, Option<String>, Option<String>)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<Result<_, _>>()?;
-    let mut by_owner: Vec<(i64, Vec<WordOcc>)> = Vec::new();
-    for (src, text, receiver) in rows {
-        if by_owner.last().is_none_or(|(owner, _)| *owner != src) {
-            by_owner.push((src, Vec::new()));
-        }
-        let words = &mut by_owner.last_mut().expect("just pushed").1;
-        for part in [text, receiver].into_iter().flatten() {
-            words.extend(use_words(&part, config));
-        }
-    }
-    for (owner_id, words) in by_owner {
+    for (owner_id, text, receiver) in rows {
+        let words: Vec<WordOcc> = [text, receiver]
+            .into_iter()
+            .flatten()
+            .flat_map(|part| use_words(&part, config))
+            .collect();
         let owner = OwnedWords {
-            owner_kind: "symbol",
+            owner_kind: "ref",
             owner_id,
             symbol_id: None,
             source: "ref",

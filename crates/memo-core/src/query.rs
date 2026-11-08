@@ -291,7 +291,7 @@ pub fn coverage(store: &SqliteStore) -> Result<Coverage, CoreError> {
         nao_resolvidas_por_palavra: count(
             "SELECT COUNT(*) FROM raw_ref r WHERE r.resolved = 0 AND EXISTS (
                SELECT 1 FROM occurrence o
-               WHERE o.owner_kind = 'symbol' AND o.owner_id = r.src AND o.source = 'ref')",
+               WHERE o.owner_kind = 'ref' AND o.owner_id = r.id AND o.source = 'ref')",
         )?,
         arquivos_com_erro: count("SELECT COUNT(*) FROM file WHERE parse_error IS NOT NULL")?,
         notas_com_erro: 0,
@@ -721,9 +721,14 @@ fn by_word(
     let sql = format!(
         "SELECT {ADDR_COLUMNS} FROM symbol s LEFT JOIN file f ON f.id = s.file_id
          WHERE s.is_test = 0 AND s.id != ?1 AND s.id IN (
-           SELECT owner_id FROM occurrence
-           WHERE owner_kind = 'symbol' AND source IN ('ref', 'type') AND word_id IN ({list})
-           GROUP BY owner_id HAVING COUNT(DISTINCT word_id) = {})
+           SELECT owner FROM (
+             SELECT r.src AS owner, o.word_id FROM occurrence o
+             JOIN raw_ref r ON o.owner_kind = 'ref' AND o.owner_id = r.id AND o.source = 'ref'
+             UNION ALL
+             SELECT owner_id, word_id FROM occurrence
+             WHERE owner_kind = 'symbol' AND source = 'type')
+           WHERE word_id IN ({list})
+           GROUP BY owner HAVING COUNT(DISTINCT word_id) = {})
          ORDER BY s.qname",
         words.len()
     );
