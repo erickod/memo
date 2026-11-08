@@ -93,7 +93,7 @@ Revistos na revisão do merge (§10, 2026-11-08): os desmarcados não tinham tes
 - [ ] **C5b, alvo sem família:** para a função `m.helper`: `helper()` no próprio módulo `m`, e `from m import helper; helper()` ou `import m; m.helper()` em outro arquivo, são `forte`; `helper()` num arquivo que não importa `m` nem `m.helper` é `só nome`
 - [ ] **C6, linha:** cada item `forte` e `média` traz a linha do uso
 - [ ] **C7, só nome:** os usos `só nome` aparecem no texto só como `+N só pelo nome`, e no JSON como lista
-- [ ] **C8:** o `por palavra` respeita `--limit`, `--max-chars` e o `+N omitidos`, não repete o que as arestas já cobrem, e some com `--no-tests` quando o uso é de teste
+- [ ] **C8:** o `por palavra` respeita `--limit`, `--max-chars` e o `+N omitidos`, não repete o que as arestas já cobrem, e nunca lista nem conta usos de teste, com ou sem `--no-tests` (revisto na ENGINEERING, D15)
 - [ ] **C9:** mesma árvore e mesma config dão a mesma saída do `impact`, byte a byte, entre duas indexações do zero
 - [ ] **C10:** `nao_resolvidas_por_palavra` não existe mais na `cobertura` nem no JSON; goldens revistos um a um
 - [ ] **C11:** estatísticas, pontes, `brief` e `query word` não mudam (goldens desses comandos sem revisão)
@@ -139,7 +139,7 @@ escritor: test-analyst (segunda rodada; a primeira não preencheu este §)
 - C5b → os unitários `function_target_same_module`, `function_target_imported`, `module_of_target_imported`, `function_target_not_imported`, e o de integração `homonym_call_when_impact`
 - C6 → `by_word_item_when_impact_then_line`
 - C7 → `name_only_uses_when_impact_text` (golden), `name_only_uses_when_impact_json`
-- C8 → `edge_consumer_when_impact` (existente), `max_chars_when_impact_by_word`, `use_in_test_file_when_no_tests`
+- C8 → `edge_consumer_when_impact` (existente), `max_chars_when_impact_by_word`, `use_in_test_file_when_impact_then_never_listed`
 - C9 → `same_tree_twice_when_impact`
 - C10 → golden `index_command` revisto, `coverage_json_when_rendered_then_no_by_word_field`
 - C11 → não há teste novo: os goldens de `brief`, `query word`, `status` e as estatísticas não podem mudar (a revisão rejeita diff neles)
@@ -208,8 +208,8 @@ Função pura de evidência (`memo-core`). Ela recebe as palavras do uso, as pal
     - GIVEN fixture U; WHEN impact runs with --json; THEN data.by_word has each item with its level and line, and the name-only items are listed
 - [ ] test_given_max_chars_when_impact_by_word_then_cut_with_omitted  (63 chars)
     - GIVEN fixture U; WHEN impact runs with a --max-chars that cuts inside 'por palavra'; THEN the output ends with '+N omitidos' and stays under the limit
-- [ ] test_given_use_in_test_file_when_no_tests_then_by_word_hides_it  (64 chars)
-    - GIVEN fixture U plus tests/test_m.py with 'Alpha(1).run()'; WHEN impact runs with --no-tests; THEN that use is not listed and cobertura reports hidden tests
+- [ ] test_given_use_in_test_file_when_impact_then_never_listed  (62 chars) — substitui `use_in_test_file_when_no_tests_then_by_word_hides_it` (D15)
+    - GIVEN fixture U plus tests/test_m.py with a helper calling 'Alpha(1).run()'; WHEN impact runs with and without --no-tests; THEN the test use is never listed nor counted as name only
 - [ ] test_given_coverage_json_when_rendered_then_no_by_word_field  (61 chars)
     - GIVEN any repository; WHEN a query runs with --json; THEN cobertura has no 'nao_resolvidas_por_palavra' key
 
@@ -243,6 +243,7 @@ Função pura de evidência (`memo-core`). Ela recebe as palavras do uso, as pal
 - Decidido D9 (humano, recomendação aceita): a família de evidência é a classe dona, as bases e as subclasses (`ESPECIALIZA` exata, nos dois sentidos) e os Protocols que ela implementa.
 - Decidido D9a (humano, recomendação aceita, na ENGINEERING): o Protocol que a classe implementa só por estrutura entra na família. Essa ligação é uma `ESPECIALIZA` aproximada (`resolve.rs:333`); sem ela, a fixture U contradizia o C5. Bases e subclasses continuam só por aresta exata.
 - Decidido D14 (humano, recomendação aceita, na ENGINEERING): o "mesmo uso" da evidência `forte` é a linha do símbolo. O extrator divide `Alpha(1).run()` em duas `raw_ref` na mesma linha, `?.run` (sem receptor) e `Alpha`, e por isso a classe nunca aparecia no mesmo uso que o método. A alternativa de gravar o receptor no extrator foi recusada: o resolvedor lê o receptor e passaria a criar arestas novas. Efeito colateral aceito: `x = Alpha(); y.run()` numa linha só vira `forte`.
+- Decidido D15 (humano, recomendação aceita, na ENGINEERING): o `por palavra` só mostra usos de produção, como já fazia desde o PR #1 (`s.is_test = 0` no SQL), e o teste do C8 afirma isso. O extrator não grava chamadas no nível do módulo, e toda função em arquivo de teste é `is_test = 1`, então um uso de teste nunca chega à seção; o `--no-tests` não tem efeito nela.
 - Decidido D10 (humano, recomendação aceita): `nao_resolvidas_por_palavra` sai da `cobertura` e do JSON; a completude vira teste de propriedade (C1, C2).
 - Decidido D11 (humano, recomendação aceita): a reconstrução das palavras de uso fica incremental, com medição antes e depois.
 - Decidido D12 (humano): plano aprovado; fluxo DEFINITION → TEST_ANALYSIS → ENGINEERING (`test:` red, depois `feat:` green, sem `Co-Authored-By`, cada alteração aprovada antes) → medição → docs.
