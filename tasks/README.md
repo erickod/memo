@@ -16,6 +16,7 @@ Estas são as TASKs do `memo`, em ordem. Cada arquivo é um registro completo e 
 | [TASK-4](TASK-4-brief-sem-dominancia-de-hubs_2026-11-09.md) | done | `brief` com dois níveis (quem carrega a âncora antes; vizinhos depois, com cota 10/5) e amortecimento do salto pelo grau do vizinho | `a691499` a `d0871b0` |
 | [TASK-5](TASK-5-brief-centralidade-no-nivel-1_2026-11-08.md) | **draft** | Nada ainda. Rascunho: o nível 1 do `brief order` virou uma lista de módulos; falta medir três candidatos antes de definir | nenhum |
 | [TASK-6](TASK-6-camada-relacional-palavra-item_2026-11-08.md) | **review** | Camada relacional palavra ↔ item: cada uso (`raw_ref`) é dono das próprias palavras, gravadas por arquivo e independentes da resolução; `impact` com a seção `por palavra` aditiva (tudo o que contém o nome do alvo, por uso e por tipo, com linha e evidência como rótulo). Três rodadas: PR #1 (mergeado sem revisão) e a branch `feat/task-6-completion` (rodadas 2 e 3); falta a re-revisão da rodada 3 | `12359d6` a `819c122` (PR #1); `d8d95f8` a `e916d5d` e docs seguintes |
+| [TASK-7](TASK-7-localizador-compacto_2026-11-08.md) | **DEFINITION** | O memo como localizador: notas inteiras pelo MCP, testes ocultos por padrão, listas longas agrupadas, seção `ler:`, `LE` para `X.attr`, membros de Enum, `query word` composta | — |
 
 (Os nomes dos arquivos têm datas de criação; a TASK-4 saiu com a data 2026-11-09 e a TASK-5 com 2026-11-08 por causa do relógio da máquina na época. A numeração é a ordem real.)
 
