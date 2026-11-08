@@ -74,7 +74,7 @@ fn test_given_skeleton_word_when_brief_then_ignored_and_never_anchor() {
 /// GIVEN eight request words that exist in the fixture
 /// WHEN  brief runs
 /// THEN  there are exactly 5 anchors, ordered by descending score, at most 15 production symbols and 5 tests,
-///       each group ordered by descending score
+///       each group ordered by descending score within each tier (one rise at most, where the tiers meet)
 #[test]
 fn test_given_many_words_when_brief_then_five_anchors_and_fifteen_symbols_at_most() {
     let (_r, store) = open(OPEN);
@@ -95,7 +95,8 @@ fn test_given_many_words_when_brief_then_five_anchors_and_fifteen_symbols_at_mos
             .filter(|s| s.in_tests == group)
             .map(|s| s.score)
             .collect();
-        assert!(scores.windows(2).all(|w| w[0] >= w[1]), "{scores:?}");
+        let rises = scores.windows(2).filter(|w| w[0] < w[1]).count();
+        assert!(rises <= 1, "{scores:?}");
     }
 }
 

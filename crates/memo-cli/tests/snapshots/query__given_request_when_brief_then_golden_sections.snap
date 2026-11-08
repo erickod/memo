@@ -8,19 +8,18 @@ símbolos:
   mod calculate_limit_usecase   app/billing/application/usecases/calculate_limit_usecase.py:L1-L14 [nome, import]
   C CalculateLimitUseCase   app/billing/application/usecases/calculate_limit_usecase.py:L4-L13 [nome, teste]
   A CheckoutUseCase._calculate   app/billing/application/usecases/checkout_usecase.py:L6-L6 [nome]
-  M CalculateLimitUseCase.execute   app/billing/application/usecases/calculate_limit_usecase.py:L8-L13 [vizinho]
-  M CheckoutUseCase.__init__   app/billing/application/usecases/checkout_usecase.py:L5-L6 [tipo]
   mod limit_repository   app/billing/domain/protocols/limit_repository.py:L1-L6 [nome]
   C LimitRepository   app/billing/domain/protocols/limit_repository.py:L4-L5 [nome]
   mod limit_repository   app/billing/infra/repositories/limit_repository.py:L1-L4 [nome]
   C SqlLimitRepository   app/billing/infra/repositories/limit_repository.py:L1-L3 [nome, teste]
-  M CalculateLimitUseCase.__init__   app/billing/application/usecases/calculate_limit_usecase.py:L5-L6 [tipo]
-  M ChargeUseCase.execute   app/collections/application/usecases/charge_usecase.py:L5-L6 [chamada, tipo]
   mod checkout_usecase   app/billing/application/usecases/checkout_usecase.py:L1-L10 [import]
   mod charge_usecase   app/collections/application/usecases/charge_usecase.py:L1-L7 [import]
+  M CheckoutUseCase.__init__   app/billing/application/usecases/checkout_usecase.py:L5-L6 [tipo]
+  M CalculateLimitUseCase.__init__   app/billing/application/usecases/calculate_limit_usecase.py:L5-L6 [tipo]
+  M ChargeUseCase.execute   app/collections/application/usecases/charge_usecase.py:L5-L6 [chamada, tipo]
+  M CalculateLimitUseCase.execute   app/billing/application/usecases/calculate_limit_usecase.py:L8-L13 [vizinho]
 contorno:
   CalculateLimitUseCase <- +1 testes
-  CalculateLimitUseCase.execute -> LimitRepository.save :L12 ; -> SqlLimitRepository.save ~ :L12 ; <- CheckoutUseCase.execute :L9 ; <- +1 testes
 padrão(calculate): verbos - · papéis usecase · camadas application
 escritores:
   CalculateLimitUseCase._repo <- CalculateLimitUseCase.__init__

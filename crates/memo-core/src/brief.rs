@@ -18,6 +18,8 @@ const WEAK_SIGNAL: f64 = 0.2;
 const OUTLINE_SYMBOLS: usize = 5;
 const MIN_PREFIX: usize = 5;
 const HOP_FACTOR: f64 = 0.5;
+/// Vagas de produção reservadas aos símbolos que só chegam por salto (TASK-4, D4).
+const NEIGHBOR_SLOTS: usize = 5;
 
 const STOPWORDS: &[&str] = &[
     // pt
@@ -319,6 +321,52 @@ pub fn brief_with(store: &SqliteStore, request: &str, notes: &[Note]) -> Result<
 }
 
 /// Como `brief_with`, com os pesos de ponte do repositório (`[bridges]` do `memo.toml`).
+type Ranked = Vec<(i64, f64, SymbolAddr)>;
+
+/// Arestas `CHAMA`, `RECEBE` e `RETORNA` resolvidas que tocam cada símbolo, nos dois sentidos.
+fn link_degrees(store: &SqliteStore) -> Result<BTreeMap<i64, usize>, CoreError> {
+    let mut stmt = store.conn.prepare(
+        "SELECT id, COUNT(*) FROM (
+             SELECT src AS id FROM edge WHERE dst IS NOT NULL AND kind IN ('CHAMA', 'RECEBE', 'RETORNA')
+             UNION ALL
+             SELECT dst AS id FROM edge WHERE dst IS NOT NULL AND kind IN ('CHAMA', 'RECEBE', 'RETORNA'))
+         GROUP BY id",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+    let mut degrees = BTreeMap::new();
+    for row in rows {
+        let (id, n) = row?;
+        degrees.insert(id, n as usize);
+    }
+    Ok(degrees)
+}
+
+fn degree_of(degrees: &BTreeMap<i64, usize>, id: i64) -> f64 {
+    degrees.get(&id).copied().unwrap_or(1).max(1) as f64
+}
+
+/// Ordena um nível (pontuação decrescente, depois nome) e separa produção de testes.
+fn rank_tier(store: &SqliteStore, tier: Vec<(i64, f64)>) -> Result<(Ranked, Ranked), CoreError> {
+    let mut ranked: Ranked = tier
+        .into_iter()
+        .map(|(id, s)| addr_by_id(store, id).map(|a| (id, s, a)))
+        .collect::<Result<_, _>>()?;
+    ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.2.qname.cmp(&b.2.qname)));
+    Ok(ranked.into_iter().partition(|r| !r.2.in_tests()))
+}
+
+/// Preenche `total` vagas: o primeiro nível leva o que sobrar depois de `reserved` vagas para o
+/// segundo; a vaga que um nível não usa passa ao outro.
+fn pick_slots(first: Ranked, second: Ranked, total: usize, reserved: usize) -> Ranked {
+    let take_first = first.len().min(total - second.len().min(reserved));
+    let take_second = second.len().min(total - take_first);
+    first
+        .into_iter()
+        .take(take_first)
+        .chain(second.into_iter().take(take_second))
+        .collect()
+}
+
 pub fn brief_weighted(
     store: &SqliteStore,
     request: &str,
@@ -395,22 +443,37 @@ pub fn brief_weighted(
             *scores.entry(symbol).or_insert(0.0) += share * weights.import * WEAK_SIGNAL;
         }
     }
-    let direct = scores.clone();
+    // D1: quem carrega a âncora (pontuação direta) vem antes de quem só chega por salto; o salto
+    // é amortecido pelo grau do vizinho (D5), para um hub não encabeçar a lista.
+    let direct = scores;
+    let mut hop: BTreeMap<i64, f64> = BTreeMap::new();
     for (&id, &score) in &direct {
         for n in neighbors(store, id)? {
-            *scores.entry(n).or_insert(0.0) += HOP_FACTOR * score;
+            *hop.entry(n).or_insert(0.0) += HOP_FACTOR * score;
         }
     }
-    let mut ranked: Vec<(i64, f64, SymbolAddr)> = scores
-        .into_iter()
-        .map(|(id, s)| addr_by_id(store, id).map(|a| (id, s, a)))
-        .collect::<Result<_, _>>()?;
-    ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.2.qname.cmp(&b.2.qname)));
+    let degrees = link_degrees(store)?;
+    let mut first: Vec<(i64, f64)> = Vec::new();
+    let mut second: Vec<(i64, f64)> = Vec::new();
+    for (&id, &score) in &direct {
+        let damped = hop.get(&id).map_or(0.0, |h| h / degree_of(&degrees, id));
+        first.push((id, score + damped));
+    }
+    for (&id, &h) in &hop {
+        if !direct.contains_key(&id) {
+            second.push((id, h / degree_of(&degrees, id)));
+        }
+    }
+    let (first_production, first_tests) = rank_tier(store, first)?;
+    let (second_production, second_tests) = rank_tier(store, second)?;
     // Produção primeiro: os testes não disputam as vagas do código (D7), têm as suas.
-    let (tests, production): (Vec<_>, Vec<_>) = ranked.into_iter().partition(|r| r.2.in_tests());
-    let mut ranked: Vec<(i64, f64, SymbolAddr)> =
-        production.into_iter().take(MAX_SYMBOLS).collect();
-    ranked.extend(tests.into_iter().take(MAX_TEST_SYMBOLS));
+    let mut ranked = pick_slots(
+        first_production,
+        second_production,
+        MAX_SYMBOLS,
+        NEIGHBOR_SLOTS,
+    );
+    ranked.extend(pick_slots(first_tests, second_tests, MAX_TEST_SYMBOLS, 0));
 
     let mut outline = Vec::new();
     for (id, _, addr) in ranked
