@@ -54,6 +54,9 @@ struct Cli {
     /// Mostra os testes na saída (por padrão ficam ocultos; as estatísticas contam tudo).
     #[arg(long, global = true)]
     tests: bool,
+    /// Lista todos os itens, sem agrupar por módulo as seções com mais de 10 itens.
+    #[arg(long, global = true)]
+    all: bool,
     /// Só o que é novo desde a última chamada, mesmo sem `--task`.
     #[arg(long, global = true)]
     since_last: bool,
@@ -366,7 +369,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
                 (
                     "query symbol",
                     json_value(&info)?,
-                    render::symbol_text(&info, "ok", &cov, max, limit),
+                    render::symbol_text(&info, "ok", &cov, max, limit, cli.all),
                 )
             }
             Err(CoreError::Ambiguous { target, candidates }) => {
@@ -385,7 +388,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             (
                 "query word",
                 json_value(&info)?,
-                render::word_text(&info, "ok", &cov, max, limit),
+                render::word_text(&info, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Writers { attr } => {
@@ -396,7 +399,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             (
                 "query writers",
                 json_value(&rel)?,
-                render::relation_text("writers", &rel, "ok", &cov, max, limit),
+                render::relation_text("writers", &rel, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Readers { attr } => {
@@ -407,7 +410,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             (
                 "query readers",
                 json_value(&rel)?,
-                render::relation_text("readers", &rel, "ok", &cov, max, limit),
+                render::relation_text("readers", &rel, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Callers { target, depth } => {
@@ -418,7 +421,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             (
                 "query callers",
                 json_value(&chain)?,
-                render::chain_text("callers", &chain, "ok", &cov, max, limit),
+                render::chain_text("callers", &chain, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Callees { target, depth } => {
@@ -429,7 +432,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             (
                 "query callees",
                 json_value(&chain)?,
-                render::chain_text("callees", &chain, "ok", &cov, max, limit),
+                render::chain_text("callees", &chain, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Impact { target } => {
@@ -445,7 +448,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             (
                 "query impact",
                 json_value(&info)?,
-                render::impact_text(&info, "ok", &cov, max, limit),
+                render::impact_text(&info, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Tests { target } => {
@@ -459,7 +462,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             (
                 "query tests",
                 json_value(&tests)?,
-                render::tests_text(&addr, &tests, "ok", &cov, max, limit),
+                render::tests_text(&addr, &tests, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Aliases => {
@@ -482,7 +485,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             (
                 "query type",
                 json_value(&info)?,
-                render::type_text(&info, "ok", &cov, max, limit),
+                render::type_text(&info, "ok", &cov, max, limit, cli.all),
             )
         }
     };
