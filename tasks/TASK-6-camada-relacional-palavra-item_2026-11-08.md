@@ -54,7 +54,7 @@ Garantir, por construção do índice, que toda palavra que aparece em um item d
   - `forte`: o mesmo uso contém as palavras de uma classe da família do dono do alvo;
   - `média`: as palavras de uma classe da família estão em outro uso ou no tipo do mesmo símbolo;
   - `só nome`: nenhuma evidência; aparece só como contagem (`+N só pelo nome`), e a lista completa sai no JSON.
-  A família é a classe dona, as bases e as subclasses (arestas `ESPECIALIZA` exatas, nos dois sentidos) e os Protocols que ela implementa. Alvo que não é método (função, classe, módulo) não tem família; a evidência é o módulo (D13): o uso é `forte` se está no mesmo módulo do alvo ou se o arquivo do uso importa o alvo ou o módulo dele (`import.target` igual ao `qname` do alvo ou ao módulo); sem isso, é `só nome`. Não existe `média` para esses alvos.
+  A família é a classe dona, as bases e as subclasses (arestas `ESPECIALIZA` exatas, nos dois sentidos) e os Protocols que ela implementa (`ESPECIALIZA` exata ou estrutural, D9a). Alvo que não é método (função, classe, módulo) não tem família; a evidência é o módulo (D13): o uso é `forte` se está no mesmo módulo do alvo ou se o arquivo do uso importa o alvo ou o módulo dele (`import.target` igual ao `qname` do alvo ou ao módulo); sem isso, é `só nome`. Não existe `média` para esses alvos.
 - *Inferência:* o campo `nao_resolvidas_por_palavra` sai da `cobertura` e do JSON; a completude da camada relacional passa a ser garantida por teste de propriedade.
 
 ### Fora do escopo
@@ -145,7 +145,7 @@ escritor: test-analyst (segunda rodada; a primeira não preencheu este §)
 - C11 → não há teste novo: os goldens de `brief`, `query word`, `status` e as estatísticas não podem mudar (a revisão rejeita diff neles)
 - C12 → não coberto por teste: medição no §10 (não bloqueia)
 - schema → `old_schema_version_when_opened` (existente, passa a esperar `'4'`)
-- não coberto: Protocol implementado só por aresta aproximada (D9 usa só `ESPECIALIZA` exata); hierarquia com mais de um nível (o teste usa um nível e a consulta é recursiva por construção, a conferir na revisão)
+- não coberto: base ou subclasse ligada só por aresta aproximada (D9 usa só `ESPECIALIZA` exata para elas); hierarquia com mais de um nível (o teste usa um nível e a consulta é recursiva por construção, a conferir na revisão)
 
 **Lifecycle Coverage**
 - [ ] Uso (`raw_ref`): nasce na inserção do arquivo, morre quando o arquivo é reindexado ou removido; as palavras nascem e morrem junto → `stale_use_words_removed` (existente, adaptado ao dono `ref`), `other_files_use_rows_untouched`
@@ -241,6 +241,7 @@ Função pura de evidência (`memo-core`). Ela recebe as palavras do uso, as pal
 - Decidido D7 (Q6, humano, recomendação aceita): o ponto de uso (`raw_ref`) vira item da camada relacional, e o `por palavra` classifica cada uso por evidência (`forte`, `média`, `só nome`) em vez de filtrar. Revê, com aval explícito, o "menor passo" (D de 2026-11-08) e a Q1 (a linha continua sem coluna nova: vem do item uso, por `raw_ref.line`).
 - Decidido D8 (humano, recomendação aceita): os usos `só nome` aparecem só como contagem `+N só pelo nome`; o JSON traz a lista.
 - Decidido D9 (humano, recomendação aceita): a família de evidência é a classe dona, as bases e as subclasses (`ESPECIALIZA` exata, nos dois sentidos) e os Protocols que ela implementa.
+- Decidido D9a (humano, recomendação aceita, na ENGINEERING): o Protocol que a classe implementa só por estrutura entra na família. Essa ligação é uma `ESPECIALIZA` aproximada (`resolve.rs:333`); sem ela, a fixture U contradizia o C5. Bases e subclasses continuam só por aresta exata.
 - Decidido D10 (humano, recomendação aceita): `nao_resolvidas_por_palavra` sai da `cobertura` e do JSON; a completude vira teste de propriedade (C1, C2).
 - Decidido D11 (humano, recomendação aceita): a reconstrução das palavras de uso fica incremental, com medição antes e depois.
 - Decidido D12 (humano): plano aprovado; fluxo DEFINITION → TEST_ANALYSIS → ENGINEERING (`test:` red, depois `feat:` green, sem `Co-Authored-By`, cada alteração aprovada antes) → medição → docs.
@@ -266,6 +267,14 @@ Segunda rodada, na branch `feat/task-6-completion`:
 (vazio)
 
 ## 10. Log de Decisões e Alterações
+
+### [2026-11-08] — ENGINEERING, passos (a) a (c)
+- Tipo: implementação
+- Feito: (a) `raw_ref.id` explícito e `schema_version` 4 (`8e0f703` red, `e01febd` green); (b) cada referência é dona das próprias palavras de uso (`1214873`, `f780582`); (c) palavras de uso gravadas por arquivo, sem reconstrução global (`e4915c7`, `45e2d6c`). 316 testes, `fmt` e `clippy` verdes.
+- Ajuste de fixture no red do passo (c): `type_text` só é gravado em atributos anotados (`extract.rs:426-473`). Por isso, a fixture U não tinha nenhum símbolo com tipo, e o C2 ganhou uma classe `Holder` com atributos anotados.
+- Achado (anterior à TASK, fora do escopo): quando outro arquivo ganha um homônimo (`def helper()`), quem já chamava `helper` não é resolvido de novo; a chamada segue `resolved = 1`, apontando para a definição antiga. O C3 passou a usar a remoção de `helper` em `h.py`, que faz o resolvedor refazer a resolução de quem a chamava (`resolved` 1 → 2).
+- Achado (anterior, do PR #1): `events.rs:75` e `notes.rs:750/829` não filtram por `source`. Desde o PR #1, uma palavra que só aparece em texto de uso conta como existente para a âncora `word:` de nota e para o snapshot de eventos. Ainda não decidido se é desejado.
+- Decisão tomada: D9a (§9).
 
 ### [2026-11-08] — Revisão do merge do PR #1 e reabertura em DEFINITION
 - Tipo: revisão e decisão
