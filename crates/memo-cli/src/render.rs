@@ -278,8 +278,11 @@ pub fn symbol_text(
             "assinatura: sig={}",
             &info.sig_hash[..info.sig_hash.len().min(6)]
         ),
-        "arestas:".to_string(),
     ];
+    if !info.membros.is_empty() {
+        head.push(members_line(&info.membros, all));
+    }
+    head.push("arestas:".to_string());
     if info.edges.is_empty() {
         head.push("  nenhuma".to_string());
     }
@@ -484,6 +487,26 @@ pub fn impact_text(
     tail.extend(unchanged_line(info.unchanged));
     tail.push(coverage_line(cov));
     fit(&head, &items, &tail, max_chars, limit)
+}
+
+/// `membros: A = "a" · B · …` (TASK-7, D6); acima de 10, os 10 primeiros e `+N`, salvo `--all`.
+fn members_line(members: &[memo_core::query::EnumMember], all: bool) -> String {
+    let shown = if all {
+        members.len()
+    } else {
+        members.len().min(GROUP_AFTER)
+    };
+    let mut parts: Vec<String> = members[..shown]
+        .iter()
+        .map(|m| match &m.value {
+            Some(v) => format!("{} = {v}", m.name),
+            None => m.name.clone(),
+        })
+        .collect();
+    if shown < members.len() {
+        parts.push(format!("+{}", members.len() - shown));
+    }
+    format!("membros: {}", parts.join(" · "))
 }
 
 /// Seção `ler:` (TASK-7, D4): um trecho por linha, `caminho:Lini-Lfim — motivo`.
