@@ -9,7 +9,7 @@ use memo_core::brief::{apply_delta, brief_weighted};
 use memo_core::delta::apply_impact_delta;
 use memo_core::error::CoreError;
 use memo_core::hide;
-use memo_core::notes::{NewNote, NoteDir, format_utc, notes_for};
+use memo_core::notes::{NewNote, NoteDir, format_utc, is_generic_anchor, notes_for};
 use memo_core::query::{
     callees, callers, coverage, impact, readers, symbol_info, tests_for, type_info, word_info,
     writers,
@@ -211,6 +211,18 @@ fn now_stamp() -> String {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
     format_utc(secs)
+}
+
+/// A nota em JSON, com o campo calculado `ancora_generica`.
+fn with_flag(note: &memo_core::notes::Note, generic: bool) -> Result<serde_json::Value, Failure> {
+    let mut value = json_value(note)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "ancora_generica".to_string(),
+            serde_json::Value::Bool(generic),
+        );
+    }
+    Ok(value)
 }
 
 fn count(hidden: usize) -> i64 {
@@ -497,11 +509,29 @@ fn run_note(
         }
         NoteCmd::List => {
             let all = notes.visible(cli.task.as_deref())?;
-            ("note list", json_value(&all)?, render::note_list_text(&all))
+            let mut generic = Vec::new();
+            let mut listed = Vec::new();
+            for note in &all {
+                let is_generic = is_generic_anchor(store, note)?;
+                if is_generic {
+                    generic.push(note.id.clone());
+                }
+                listed.push(with_flag(note, is_generic)?);
+            }
+            (
+                "note list",
+                serde_json::Value::Array(listed),
+                render::note_list_text(&all, &generic),
+            )
         }
         NoteCmd::Show { id } => {
             let note = notes.get(id)?;
-            ("note show", json_value(&note)?, note.render())
+            let is_generic = is_generic_anchor(store, &note)?;
+            let mut text = note.render();
+            if is_generic {
+                text.push_str("âncora genérica: sim\n");
+            }
+            ("note show", with_flag(&note, is_generic)?, text)
         }
         NoteCmd::Recheck { id } => {
             let note = notes.recheck(store, id)?;

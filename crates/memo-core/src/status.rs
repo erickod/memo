@@ -1,7 +1,7 @@
 //! Resumo de base, features, notas e tasks promovíveis (spec §8.2, `status`).
 
 use crate::error::CoreError;
-use crate::notes::NoteDir;
+use crate::notes::{NoteDir, is_generic_anchor};
 use crate::store::SqliteStore;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -25,6 +25,8 @@ pub struct Status {
     pub notes: BTreeMap<String, usize>,
     /// Tasks cujo branch já foi mergeado na principal.
     pub promotable: Vec<String>,
+    /// Notas ativas ancoradas numa palavra que virou `esqueleto` (marca `âncora genérica`).
+    pub generic_anchors: Vec<String>,
 }
 
 fn info(path: &Path) -> Result<GraphInfo, CoreError> {
@@ -60,6 +62,15 @@ pub fn status(memo_dir: &Path, merged: &[String]) -> Result<Status, CoreError> {
     for note in NoteDir::new(&memo_dir.join("notes")).list()? {
         *notes.entry(note.estado).or_insert(0) += 1;
     }
+    let mut generic_anchors = Vec::new();
+    if base.is_some() {
+        let graph = SqliteStore::open(&base_path)?;
+        for note in NoteDir::new(&memo_dir.join("notes")).list()? {
+            if is_generic_anchor(&graph, &note)? {
+                generic_anchors.push(note.id);
+            }
+        }
+    }
     let promotable = features
         .iter()
         .map(|(task, _)| task.clone())
@@ -70,5 +81,6 @@ pub fn status(memo_dir: &Path, merged: &[String]) -> Result<Status, CoreError> {
         features,
         notes,
         promotable,
+        generic_anchors,
     })
 }

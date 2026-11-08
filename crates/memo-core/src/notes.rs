@@ -939,6 +939,16 @@ fn note_event(kind: &'static str, note: &Note, before: &str) -> NewEvent {
 
 /// A nota ancora (principal ou secundária) numa palavra que hoje é `esqueleto`. A nota segue
 /// ativa e sem evento (D15); isto só alimenta a marca `âncora genérica`.
-pub fn is_generic_anchor(_graph: &SqliteStore, _note: &Note) -> Result<bool, CoreError> {
-    todo!("etapa 8")
+pub fn is_generic_anchor(graph: &SqliteStore, note: &Note) -> Result<bool, CoreError> {
+    if !is_active(note) {
+        return Ok(false);
+    }
+    for anchor in std::iter::once(&note.ancora).chain(note.secundarias.iter()) {
+        if let Some(word) = anchor.strip_prefix("word:")
+            && word_stats(graph, word)?.is_some_and(|s| s.esqueleto)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

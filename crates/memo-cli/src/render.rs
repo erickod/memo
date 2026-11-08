@@ -406,6 +406,12 @@ pub fn status_text(s: &memo_core::status::Status, cov: Option<&Coverage>) -> Str
         s.promotable.join(",")
     };
     out.push_str(&format!("promovíveis: {promotable}\n"));
+    if !s.generic_anchors.is_empty() {
+        out.push_str(&format!(
+            "âncoras genéricas: {}\n",
+            s.generic_anchors.join(",")
+        ));
+    }
     if let Some(c) = cov {
         out.push_str(&format!("{}\n", coverage_line(c)));
     }
@@ -423,15 +429,20 @@ pub fn note_added_text(note: &Note, conflicts: &[Note]) -> String {
     out
 }
 
-pub fn note_list_text(notes: &[Note]) -> String {
+pub fn note_list_text(notes: &[Note], generic: &[String]) -> String {
     if notes.is_empty() {
         return "nenhuma nota\n".to_string();
     }
     notes
         .iter()
         .map(|n| {
+            let mark = if generic.contains(&n.id) {
+                " âncora genérica"
+            } else {
+                ""
+            };
             format!(
-                "{} {} {} {}  {}\n",
+                "{} {} {} {}  {}{mark}\n",
                 n.id, n.tipo, n.estado, n.escopo, n.ancora
             )
         })
