@@ -213,3 +213,52 @@ fn test_given_import_removed_when_reindexed_then_import_evidence_edge_disappears
     index_with(&WorkTree::new(repo.path()), &mut s, &Config::default()).unwrap();
     assert!(out_edges(&s, "c.run", "CHAMA").is_empty());
 }
+
+/// GIVEN 'def go(): Alpha(1).run()' where 'run' exists in both Alpha and Beta
+/// WHEN  the repository is indexed
+/// THEN  go has an approximate CHAMA edge to Alpha.run only (the creation names the class)
+#[test]
+fn test_given_call_on_creation_when_indexed_then_chama_approx_to_created_class() {
+    let (_r, s) = indexed(&[
+        (
+            "a.py",
+            "class Alpha:\n    def run(self):\n        pass\n\nclass Beta:\n    def run(self):\n        pass\n",
+        ),
+        (
+            "m.py",
+            "from a import Alpha, Beta\n\ndef go():\n    Alpha(1).run()\n",
+        ),
+    ]);
+    let edges = out_edges(&s, "m.go", "CHAMA");
+    assert!(has(&edges, "Alpha.run", true), "{edges:?}");
+    assert!(!edges.iter().any(|e| e.other == "Beta.run"), "{edges:?}");
+}
+
+/// GIVEN 'Child(Base)' where only Base defines 'run', and 'def go(): Child().run()'
+/// WHEN  the repository is indexed
+/// THEN  go has an approximate CHAMA edge to Base.run
+#[test]
+fn test_given_call_on_creation_of_subclass_when_indexed_then_inherited_method_found() {
+    let (_r, s) = indexed(&[(
+        "m.py",
+        "class Base:\n    def run(self):\n        pass\n\nclass Other:\n    def run(self):\n        pass\n\nclass Child(Base):\n    pass\n\ndef go():\n    Child().run()\n",
+    )]);
+    assert!(has(&out_edges(&s, "m.go", "CHAMA"), "Base.run", true));
+}
+
+/// GIVEN 'Alpha(Beta()).run()' where both classes define 'run'
+/// WHEN  the repository is indexed
+/// THEN  no edge is created for run (two creations on the line have the method) and it stays unresolved
+#[test]
+fn test_given_two_creations_with_method_when_indexed_then_call_stays_unresolved() {
+    let (_r, s) = indexed(&[(
+        "m.py",
+        "class Alpha:\n    def __init__(self, b):\n        pass\n    def run(self):\n        pass\n\nclass Beta:\n    def run(self):\n        pass\n\nclass Gamma:\n    def run(self):\n        pass\n\ndef go():\n    Alpha(Beta()).run()\n",
+    )]);
+    let edges = out_edges(&s, "m.go", "CHAMA");
+    assert!(
+        !edges.iter().any(|e| e.other.ends_with(".run")),
+        "{edges:?}"
+    );
+    assert!(coverage(&s).unwrap().nao_resolvidas >= 1);
+}
