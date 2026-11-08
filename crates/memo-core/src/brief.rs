@@ -4,7 +4,7 @@ use crate::config::BridgeWeights;
 use crate::delta::filter_new;
 use crate::error::CoreError;
 use crate::notes::{Note, notes_for};
-use crate::query::{SymbolAddr, addr_by_id, short_name, word_pattern};
+use crate::query::{ReadSpot, SymbolAddr, addr_by_id, read_spot, short_name, word_pattern};
 use crate::store::SqliteStore;
 use crate::tags::bridge_tags;
 use serde::Serialize;
@@ -84,6 +84,8 @@ pub struct Brief {
     pub notes: Vec<String>,
     /// Itens omitidos por já terem sido entregues nesta task (spec §8.4).
     pub unchanged: Option<usize>,
+    /// Trechos que vale ler: os 5 primeiros símbolos de produção (TASK-7, D4).
+    pub ler: Vec<ReadSpot>,
 }
 
 fn strip_accent(c: char) -> char {
@@ -519,6 +521,7 @@ pub fn brief_weighted(
         });
     }
     let notes_lines = related_notes(notes, &ranked_addrs, &anchors);
+    let ler = brief_read_spots(store, &tagged, &anchors)?;
     Ok(Brief {
         request: request.to_string(),
         anchors,
@@ -529,7 +532,44 @@ pub fn brief_weighted(
         pattern,
         notes: notes_lines,
         unchanged: None,
+        ler,
     })
+}
+
+/// Símbolos de produção lidos como trecho no `brief`.
+const READ_SYMBOLS: usize = 5;
+
+/// `ler:` do `brief`: os 5 primeiros símbolos de produção da lista; o motivo diz quais palavras
+/// do pedido o nome carrega, ou `vizinho` quando chegou só por vizinhança.
+fn brief_read_spots(
+    store: &SqliteStore,
+    symbols: &[ScoredSymbol],
+    anchors: &[Anchor],
+) -> Result<Vec<ReadSpot>, CoreError> {
+    let mut stmt = store.conn.prepare(
+        "SELECT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
+         JOIN symbol s ON o.owner_kind = 'symbol' AND o.owner_id = s.id
+         WHERE s.qname = ?1 AND o.source = 'name' ORDER BY o.pos",
+    )?;
+    let mut spots = Vec::new();
+    for s in symbols.iter().filter(|s| !s.in_tests).take(READ_SYMBOLS) {
+        let names: Vec<String> = stmt
+            .query_map([&s.addr.qname], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        let mut carried: Vec<&str> = anchors
+            .iter()
+            .map(|a| a.word.as_str())
+            .filter(|w| names.iter().any(|n| n == w))
+            .collect();
+        carried.dedup();
+        let motivo = if carried.is_empty() {
+            "vizinho".to_string()
+        } else {
+            format!("carrega {}", carried.join(", "))
+        };
+        spots.push(read_spot(&s.addr, None, motivo));
+    }
+    Ok(spots)
 }
 
 /// Notas dos nós listados e das palavras âncora, como linhas curtas.
@@ -565,6 +605,12 @@ pub fn apply_delta(
         },
         full,
     )?;
+    // `ler:` acompanha os símbolos: só ficam os trechos de símbolos ainda listados (TASK-7, D4).
+    brief.ler.retain(|spot| {
+        symbols
+            .iter()
+            .any(|s| s.addr.path == spot.path && s.addr.line_start == spot.start)
+    });
     let (outline, b) = filter_new(
         store,
         task,
