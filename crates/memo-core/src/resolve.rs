@@ -483,6 +483,38 @@ fn call_on_type(
     Ok(true)
 }
 
+/// O método `name` da única classe importada pelo arquivo que o tem (herança incluída). Com duas
+/// ou mais candidatas diferentes, ou nenhuma, devolve `None`: o import não decide.
+fn imported_method(
+    resolver: &mut Resolver,
+    file_id: i64,
+    name: &str,
+) -> Result<Option<i64>, CoreError> {
+    let targets: Vec<String> = resolver
+        .file_ctx(file_id)?
+        .imports
+        .iter()
+        .map(|(_, target)| target.clone())
+        .collect();
+    let mut methods = std::collections::BTreeSet::new();
+    for target in targets {
+        let Some((class_id, kind)) = resolver.symbol(&target)? else {
+            continue;
+        };
+        if kind != "class" {
+            continue;
+        }
+        if let Some(method) = resolver.method_in_class(class_id, name, 3)? {
+            methods.insert(method);
+        }
+    }
+    let mut found = methods.into_iter();
+    Ok(match (found.next(), found.next()) {
+        (Some(only), None) => Some(only),
+        _ => None,
+    })
+}
+
 fn resolve_call(
     tx: &Transaction,
     resolver: &mut Resolver,
@@ -527,6 +559,14 @@ fn resolve_call(
         false
     };
     if handled {
+        return mark(tx, raw, 1);
+    }
+
+    // Evidência de import (TASK-2, D4): o arquivo importa uma única classe que tem o método.
+    if segs.len() >= 2
+        && let Some(method) = imported_method(resolver, file_id, last)?
+    {
+        insert_edge(tx, &call_edge(raw, "CHAMA", Some(method), None, true))?;
         return mark(tx, raw, 1);
     }
 
