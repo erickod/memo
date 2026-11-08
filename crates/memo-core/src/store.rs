@@ -7,6 +7,10 @@ use std::path::Path;
 
 const SCHEMA_VERSION: &str = "4";
 
+/// Fontes de palavra que formam o vocabulário (TASK-6, D16): as de uso (`ref`, `type`) ficam fora
+/// das âncoras de nota e dos eventos de palavra.
+pub(crate) const VOCABULARY_SOURCES: &str = "('name', 'path', 'import', 'test_doc')";
+
 const SCHEMA: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE file(
