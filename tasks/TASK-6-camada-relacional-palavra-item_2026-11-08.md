@@ -4,7 +4,7 @@ workdir: raiz do repositório (onde está o `Cargo.toml`)
 created_at: 2026-11-08
 
 ## Status
-- Estado: review (segunda rodada implementada na branch `feat/task-6-completion`; falta a CODE_REVIEW. A primeira rodada foi mergeada no PR #1 sem revisão, ver §10)
+- Estado: review — Requer alterações (CODE_REVIEW 2026-11-08: 🔴 R1, ver §9). A primeira rodada foi mergeada no PR #1 sem revisão (ver §10).
 - Owner: Erick Duarte
 - ROLE requerida: eng (começa em DEFINITION)
 
@@ -244,6 +244,7 @@ Função pura de evidência (`memo-core`). Ela recebe as palavras do uso, as pal
 - Decidido D9a (humano, recomendação aceita, na ENGINEERING): o Protocol que a classe implementa só por estrutura entra na família. Essa ligação é uma `ESPECIALIZA` aproximada (`resolve.rs:333`); sem ela, a fixture U contradizia o C5. Bases e subclasses continuam só por aresta exata.
 - Decidido D14 (humano, recomendação aceita, na ENGINEERING): o "mesmo uso" da evidência `forte` é a linha do símbolo. O extrator divide `Alpha(1).run()` em duas `raw_ref` na mesma linha, `?.run` (sem receptor) e `Alpha`, e por isso a classe nunca aparecia no mesmo uso que o método. A alternativa de gravar o receptor no extrator foi recusada: o resolvedor lê o receptor e passaria a criar arestas novas. Efeito colateral aceito: `x = Alpha(); y.run()` numa linha só vira `forte`.
 - Decidido D15 (humano, recomendação aceita, na ENGINEERING): o `por palavra` só mostra usos de produção, como já fazia desde o PR #1 (`s.is_test = 0` no SQL), e o teste do C8 afirma isso. O extrator não grava chamadas no nível do módulo, e toda função em arquivo de teste é `is_test = 1`, então um uso de teste nunca chega à seção; o `--no-tests` não tem efeito nela.
+- Decidido D16 (humano, recomendação aceita, na CODE_REVIEW [2026-11-08T15:37-0300]): a palavra de uma nota `word:` e do snapshot de eventos vem só do vocabulário (`name`, `path`, `import`, `test_doc`), como em estatísticas, pontes e `brief`; as fontes de uso (`ref`, `type`) não contam.
 - Decidido D10 (humano, recomendação aceita): `nao_resolvidas_por_palavra` sai da `cobertura` e do JSON; a completude vira teste de propriedade (C1, C2).
 - Decidido D11 (humano, recomendação aceita): a reconstrução das palavras de uso fica incremental, com medição antes e depois.
 - Decidido D12 (humano): plano aprovado; fluxo DEFINITION → TEST_ANALYSIS → ENGINEERING (`test:` red, depois `feat:` green, sem `Co-Authored-By`, cada alteração aprovada antes) → medição → docs.
@@ -266,9 +267,148 @@ Segunda rodada, na branch `feat/task-6-completion`:
 7. Depois: task de reestruturação do código pelos conceitos (item, linha, cluster, palavra ↔ palavra) e do ranking do nível por palavra.
 
 ### Code Review
-(vazio)
+#### [2026-11-08T15:37-0300] — [c144bd45](https://github.com/erickod/memo/commit/c144bd45c3b840a93b9ebc9482a53fc27c29add3)
+WT: `/Users/erick.duartelend.tech/Documents/dev/memo` (checkout do usuário, branch `feat/task-6-completion`, árvore limpa) · base `origin/master` = merge-base `8835ee4` · escopo: segunda rodada da TASK-6 (22 commits)
+
+**SUMMARY**
+- Veredito: **Requer alterações**. STATE: BLOCKED → REQUEST CHANGES: eng.
+- Positivos: fluxo red → green em todos os passos de código; a camada relacional ficou com ponto único de escrita (`insert_raw_ref`), testada por propriedade (C1, C2) e por equivalência incremental × do zero (C4); a inferência ficou numa função pura (`evidence::classify`) com 9 unitários; decisões D9a, D13, D14 e D15 registradas antes do código que as usa; 334 testes, `fmt` e `clippy` verdes.
+- Preocupações: 🔴 R1, a palavra das notas `word:` e dos eventos aceita as fontes `ref` e `type`, contra a D16 (decidida nesta revisão); 🟡 Y1, consultas por uso sem índice em `raw_ref.src` (N+1 sem medição, C12 pulado); 🟡 Y2, `by_word` com 149 linhas.
+
+**ANALYSIS**
+CRITERIA
+- [ ] design: `by_word` concentra busca de candidatos, montagem da âncora, classificação e deduplicação (crates/memo-core/src/query.rs:758-906) → Y2
+- [ ] DDD: não identificado — verificado em: EXTRACT módulos `evidence.rs`, `query.rs`, `index.rs` (CLI sem modelo de domínio de negócio)
+- [ ] reliability: não identificado — verificado em: `run_index` numa única transação (crates/memo-core/src/index.rs, `insert_raw_ref` e `delete_file_symbols` dentro de `tx`); idempotência coberta por `incremental_equals_fresh_index`
+- [ ] data: não identificado — verificado em: EXTRACT sem valores monetários, PII ou trilha financeira
+- [ ] contract: JSON do `impact` muda de forma (`by_word` vira objeto com `nivel`, entra `by_word_name_only`) e a `cobertura` perde `nao_resolvidas_por_palavra` (crates/memo-core/src/query.rs:94-104, :497-503); consumidores internos verificados (render, hide, delta, main, testes); consumidor externo: `memo serve`/MCP repassa o JSON (crates/memo-mcp/src/lib.rs:23) → informado no CHANGELOG? não há CHANGELOG; esquema JSON é `schema: 1` sem versão subida → 🟢 G1
+- [ ] env_k8s: não identificado — verificado em: diff sem settings, env ou manifest
+- [ ] concurrency: não identificado — verificado em: diff sem worker/consumer/entrypoint
+- [ ] migrations: não identificado — verificado em: banco derivado; `schema_version` 3 → 4 descarta e recria (crates/memo-core/src/store.rs:8), testado em `old_schema_version_when_opened`
+- [ ] perf: N+1 por uso candidato (3 a 4 consultas por uso) e `r.src = ?1` sem índice em `raw_ref(src)` (crates/memo-core/src/query.rs:833-860; índices em crates/memo-core/src/store.rs:48-55) → Y1
+- [ ] security: não identificado — verificado em: SQL dinâmico só com ids inteiros (`word_id IN ({list})`, crates/memo-core/src/query.rs:777-790) e parâmetros bind no restante
+- [ ] errors: não identificado — verificado em: todas as consultas novas propagam `CoreError` com `?`
+- [ ] readability: nomes e comentários explicam o porquê (D14 em crates/memo-core/src/query.rs:836-838); `by_word` longo → Y2
+- [ ] layers: não identificado — verificado em: `index.rs` (relacional) não importa `evidence.rs` (inferência); `evidence.rs` não importa banco (§5)
+- [ ] tests: todos os nomes do §7 presentes com docstring GIVEN/WHEN/THEN (crates/memo-core/tests/evidence.rs, crates/memo-core/tests/use_words.rs, crates/memo-cli/tests/query.rs:1095-1205); D16 sem teste (ver R1)
+- [ ] task: §4 C1–C11 com teste; C12 não medido (registrado, não bloqueia); decisão D16 com efeito observável sem enforcement nem teste (crates/memo-core/src/notes.rs:750, :829; crates/memo-core/src/events.rs:75) → R1
+- [ ] format: linhas acima de 100 só em literais SQL (crates/memo-core/src/query.rs:705), mesmo padrão do arquivo; `fmt` e `clippy -D warnings` verdes
+- [ ] lang: lang sem reference: rust (só critérios base aplicados)
+- [ ] implicit: "mesmo uso" = mesma linha do símbolo (D14) explícito em comentário e na spec; `family` inclui Protocols das bases, além dos da dona (crates/memo-core/src/query.rs:727-745) → 🟢 G2
+- [ ] refactor_estrutural: remoção de `rebuild_use_words` preserva semântica, travada por `incremental_equals_fresh_index` e `each_ref_owns_exactly_its_text_words`
+
+SMELLS
+- [ ] Long Method: `by_word` 149 linhas (crates/memo-core/src/query.rs:758) → Y2
+- [ ] Long Class: não identificado — verificado em: `query.rs` 978 linhas, módulo de funções sem estado (preexistente)
+- [ ] Long Params: não identificado — verificado em: `Anchor::Module` agrupa 4 campos em vez de parâmetros soltos (crates/memo-core/src/evidence.rs:24-33)
+- [ ] Data Clumps: tupla `Use = (SymbolAddr, i64, i64, i64, i64)` (crates/memo-core/src/query.rs:798) → parte de Y2
+- [ ] Primitive Obsession: não identificado — verificado em: nível como `enum Evidence`, não string
+- [ ] Switch Stmts: não identificado — verificado em: dois `match` sobre `Evidence`/`Anchor`, um por responsabilidade
+- [ ] Refused Bequest: não identificado — verificado em: sem herança/traits novos
+- [ ] Divergent Change: não identificado — verificado em: `evidence.rs` muda só por regra de evidência
+- [ ] Shotgun Surgery: tipo `ByWordItem` exigiu ajuste em `hide`, `delta`, `render` (3 locais, esperado por contrato)
+- [ ] Speculative Generality: não identificado — verificado em: `Anchor` com dois casos, ambos usados
+- [ ] Duplicate Code: fixture U duplicada em crates/memo-core/tests/use_words.rs e crates/memo-cli/tests/query.rs (binários de teste separados) → 🟢 G3
+- [ ] Dead Code: drop de `by_word_name_only` em crates/memo-core/src/hide.rs:62 não é alcançável hoje (D15) → 🟢 G4
+- [ ] Temp Field: não identificado — verificado em: structs novas sem campo opcional temporário
+- [ ] Feature Envy: não identificado — verificado em: `classify` usa só seus argumentos
+- [ ] Inappropriate Intimacy: não identificado — verificado em: `render` lê `ByWordItem` público, sem acessar internos
+- [ ] Msg Chains: não identificado — verificado em: acessos `b.item.addr.qname` de profundidade 3, padrão preexistente
+- [ ] Middle Man: não identificado — verificado em: sem delegação vazia
+- [ ] Magic Numbers: não identificado — verificado em: sem literais numéricos novos
+- [ ] Ignored Exceptions: não identificado — verificado em: sem `unwrap` em código de produção novo (só em testes)
+- [ ] Opaque Indirection: não identificado — verificado em: closure `words_where` local e comentada (crates/memo-core/src/query.rs:839)
+- [ ] Order Coupling: `insert_raw_ref` grava as palavras depois do INSERT e lê `last_insert_rowid` (crates/memo-core/src/index.rs:380-410); ordem garantida na própria função
+
+N_PARTITE
+- [ ] n-partite: ver `N_PARTITE (CODE_REVIEW)` abaixo — `[N_PARTITE] modo: code | alvo: delta | referência: TASK-6 §4/§9 | perfil: stacked + full`; `[N_PARTITE.GAP]` D16 sem guarda; `[N_PARTITE.FAIL]` não coberto: nenhum; DRIFT: não aplicável — sem estado empilhado de DEFINITION
+
+VERIFY: reli o diff `8835ee4..c144bd45` do zero (crates/memo-core/src/{store,index,query,evidence,hide,delta}.rs, crates/memo-cli/src/render.rs e os testes). Achados novos da releitura: G2 (Protocols das bases na família) e G5 (com `--task`, `by_word_name_only` não passa pelo delta: `+N só pelo nome` se repete a cada chamada, crates/memo-core/src/delta.rs:86-95). Nenhum outro.
+
+**ACTIONS**
+- 🔴 R1 — palavra de nota e de evento aceita fontes de uso. Problema: `notes.rs:750` e `:829` e `events.rs:75` consultam `occurrence` sem filtrar `source`; com a TASK-6, uma palavra que só existe em `ref`/`type` mantém viva uma nota `word:x` e entra no snapshot de eventos. Impacto: contraria a D16; nota que deveria virar `orfa` não vira. Fix (eng, commit próprio, red → green):
+  - before: `SELECT EXISTS(SELECT 1 FROM word w JOIN occurrence o ON o.word_id = w.id WHERE w.text = ?1)`
+  - after: `... WHERE w.text = ?1 AND o.source IN ('name', 'path', 'import', 'test_doc'))`, nas três consultas, com teste: nota `word:x` vira `orfa` quando `x` só aparece numa chamada; snapshot de eventos não lista palavra só de uso.
+- 🟡 Y1 — consultas por uso sem índice. `by_word` faz 3 a 4 consultas por uso candidato e filtra `raw_ref` por `src` sem índice (store.rs:48-55). Alvo de nome genérico com centenas de usos faz varreduras repetidas; C12 não medido. Correção: `CREATE INDEX raw_ref_src ON raw_ref(src, line)` (o esquema 4 ainda não foi publicado: dá para incluir sem subir de novo) e medir o `impact` de um nome genérico antes/depois no gerador.
+- 🟡 Y2 — `by_word` longo. Justificativa: mistura quatro responsabilidades (query.rs:758-906). Correção: extrair `anchor_for(store, id)` e `use_evidence(store, use, anchor)`, trocando a tupla `Use` por struct.
+- 🟢 G1 — o JSON do `impact` mudou de forma sob `schema: 1`; benefício de registrar no README/spec que `by_word` mudou (consumidores MCP).
+- 🟢 G2 — `family` inclui Protocols das bases (query.rs:727-745); registrar na D9a para a regra e o código dizerem o mesmo.
+- 🟢 G3 — fixture U duplicada em dois binários de teste; mover para um arquivo `tests/fixtures/u/` lido pelos dois.
+- 🟢 G4 — drop de `by_word_name_only` em `hide.rs:62` é defensivo e hoje inalcançável (D15); manter com comentário ou remover.
+- 🟢 G5 — com `--task`, `+N só pelo nome` não passa pelo delta (delta.rs:86-95); decidir se a contagem também é "nova desde a última chamada".
+- ⚖️ T1 — forma de corrigir Y1: (a) índice `raw_ref(src, line)`: 1 linha, mantém o código, ainda N+1 em memória local · (b) pré-carregar as palavras de todos os usos dos símbolos candidatos numa consulta só e classificar em memória: elimina o N+1, mais código. Recomendação: (a) agora, (b) só se a medição mostrar `impact` acima de 500 ms num nome genérico.
+
+**COMMITS**
+- ✓ [d8d95f83](https://github.com/erickod/memo/commit/d8d95f83ef82cf696eb76f35e492b0a7f05df66e) docs: reabre a TASK em DEFINITION com D7–D12
+- ✓ [36a323a8](https://github.com/erickod/memo/commit/36a323a84353675014fad84f6b4770d4b899aec2) docs: §7
+- ✓ [8e0f7034](https://github.com/erickod/memo/commit/8e0f70347f509bbde17daa3e7dbad4747bd8a926) test: schema 4 (red por asserção)
+- ✓ [e01febd3](https://github.com/erickod/memo/commit/e01febd33b5e0ea75d9b2f1b592af414c58cb439) feat: `raw_ref.id` e schema 4
+- ✓ [12148731](https://github.com/erickod/memo/commit/121487312a2d8706241397c6276299b7549b1e0a) test: dono `ref` (red por asserção; adapta os obsoletos aprovados)
+- ✓ [f780582a](https://github.com/erickod/memo/commit/f780582abf6b584f5f7bcf037d95923e9095aee8) feat: uso como dono
+- ✓ [e4915c77](https://github.com/erickod/memo/commit/e4915c77010fe43a205deaa79f8ae67585af106e) test: incremental (red por asserção; fixtures C2/C3 ajustadas e registradas)
+- ✓ [45e2d6c1](https://github.com/erickod/memo/commit/45e2d6c11843144bbff725defb69de6bb91ea1cf) perf: gravação por arquivo
+- ✓ [4d94f233](https://github.com/erickod/memo/commit/4d94f233380bc4afcf27792a0aa5ebd871a57ce7) docs: log (a)–(c) e D9a
+- ✓ [e26062cf](https://github.com/erickod/memo/commit/e26062cf016e9c466debfe47749c818a16f447a9) test: níveis por uso (stubs de tipo no mesmo commit, explicados no corpo)
+- ✓ [27fe910b](https://github.com/erickod/memo/commit/27fe910b95362f3a116c26e388e4869e395f3606) feat: classificação por evidência
+- ✓ [bed42c7b](https://github.com/erickod/memo/commit/bed42c7b4566272b7e5d3c2ef467e3e9dee3c718) docs: log (d) e D14
+- ✓ [80599d75](https://github.com/erickod/memo/commit/80599d758b6789dc37dd0f93024eb2be407616fe) test: CLI (red)
+- ✓ [d0f4b599](https://github.com/erickod/memo/commit/d0f4b5990e8fc9b915654674c7dc7d303b5abe6f) docs: D15
+- ✓ [2c403241](https://github.com/erickod/memo/commit/2c40324125a422b04ee96fbfc970f7b8b545ecf9) feat: render (golden aceito pelo humano)
+- ✓ [a9bf1672](https://github.com/erickod/memo/commit/a9bf1672c1d0725ed268402e2b1ff9a48de14422) test: sem contagem na cobertura (goldens editados só no trecho)
+- ✓ [e916d5d9](https://github.com/erickod/memo/commit/e916d5d94d66028a166f955fe2fa6b6b92b7a0fa) feat: remove a contagem
+- ✓ [6f679714](https://github.com/erickod/memo/commit/6f679714deb2c59b819f6d23439d037a985199e6) docs: spec
+- ✓ [ea77f5e7](https://github.com/erickod/memo/commit/ea77f5e75f6bc9e4ac900b7182dc6539493074f0) docs: funcionalidades
+- ✓ [baf9aed7](https://github.com/erickod/memo/commit/baf9aed72a21d69b90b98f7588ad6a2af43f96d1) docs: limitações
+- ✓ [b322f52f](https://github.com/erickod/memo/commit/b322f52f5495fbeab3fcc7f8cd1bcf09fb78ed24) docs: índice de tasks
+- ✓ [c144bd45](https://github.com/erickod/memo/commit/c144bd45c3b840a93b9ebc9482a53fc27c29add3) docs: log (e)–(f) e critérios
+
+**EVIDÊNCIAS**
+- SHA revisado: `c144bd45c3b840a93b9ebc9482a53fc27c29add3` · base `origin/master` = `8835ee4dfa9be0012577963b7abd1cf70b7396dc` (fetch `git fetch --no-tags origin +refs/heads/master:refs/remotes/origin/master` ok) · merge-base único `8835ee4` · fingerprint `sha256(git diff --no-ext-diff --no-textconv --binary --find-renames 8835ee4 c144bd45)` = `8a21b5dc313b8487b27f5ab9272f508724a2a710c7c4284791ffa8067269571c` (calculado antes do commit desta entrada)
+- Comandos: `cargo fmt --check` ok · `cargo clippy --all-targets -- -D warnings` ok · `cargo test --no-fail-fast` 334 passed, 0 failed
+- Consumidores: memo não indexa Rust (`memo status` → `base: ausente`); grep mínimo `grep -rlw --include=*.rs <termo> crates`: `Impact` → main.rs, render.rs, delta.rs, query.rs, hide.rs, tests/use_words.rs · `by_word`/`by_word_name_only` → render.rs, hide.rs, delta.rs, query.rs e testes (`representativeness.rs` casa só uma variável local homônima) · `Coverage` → render.rs, main.rs, query.rs · `nao_resolvidas` → render.rs, query.rs, tests/calls.rs, tests/query.rs (nenhum uso do campo removido) · `insert_raw_ref`/`delete_file_symbols` → só index.rs · consumidor externo do JSON: `memo serve` (crates/memo-mcp/src/lib.rs:23). memo: 0 · grep extra: 7 termos · não coberto: clientes MCP fora do repo
+- Não executado: medição C12 (pulada por decisão do humano); teste contra clientes MCP reais
+- GRILL: 1 rodada, 1 decisão (D16), 0 pendências
+
+### N_PARTITE (CODE_REVIEW)
+[N_PARTITE] modo: code | alvo: delta | referência: TASK-6 §4 e §9 (decisões D7–D16) | perfil: stacked + full | budget: 10 | frame: base | fonte: 8835ee4..c144bd45
+- metadado: repo `github.com/erickod/memo` · WT `/Users/erick.duartelend.tech/Documents/dev/memo` · base `origin/master` `8835ee4` · merge-base `8835ee4` · fingerprint sha256 `8a21b5dc…69571c` (método `git diff --no-ext-diff --no-textconv --binary --find-renames`) · fetch ok · memo: índice ausente (Rust não indexado), grep mínimo
+[N_PARTITE.STACK] decisão: base | frames: 1 | fonte: 8835ee4..c144bd45 | recalculados: 0 | herdados: 0 | resolvidos: 0 | revalidar: 0
+[N_PARTITE:code] par: occurrence.owner_kind='ref' (L1) ↔ insert_raw_ref (L3) — acoplamento: alto | evidência: co-mudança f780582a, 45e2d6c1 | abstração: ponto único de escrita | lifecycle: coerente (nasce e morre com a raw_ref: index.rs:380-410, :126-131) → manter
+[N_PARTITE:code] par: raw_ref.id (L1) ↔ store.rs (L4) — acoplamento: baixo | evidência: e01febd3 | abstração: alias de rowid | lifecycle: coerente → manter
+[N_PARTITE:code] par: ByWordItem.nivel (L1) ↔ Evidence (L2) — acoplamento: alto | evidência: e26062cf, 27fe910b | abstração: enum fechado | lifecycle: coerente → manter
+[N_PARTITE:code] par: Evidence (L2) ↔ classify (L3) — acoplamento: alto | evidência: 27fe910b | abstração: função pura no módulo do tipo | lifecycle: coerente → manter
+[N_PARTITE:code] par: Impact (L2) ↔ by_word (L3) — acoplamento: alto | evidência: e26062cf, 27fe910b | abstração: extrair montagem de âncora e classificação por uso | lifecycle: coerente → Y2
+[N_PARTITE:code] par: by_word (L3) ↔ query.rs (L4) — acoplamento: alto | evidência: 27fe910b | abstração: candidatos/âncora são inferência; poderiam ir para `evidence.rs` com acesso a banco separado | lifecycle: coerente → Y2
+[N_PARTITE:code] par: occurrence (L1) ↔ notes.rs/events.rs (L4) — acoplamento: alto | evidência: não definido (sem co-mudança no diff) | abstração: filtro de fonte "vocabulário" compartilhado | lifecycle: divergente (fontes de uso nasceram na TASK-6, consumidores não foram ajustados) → R1
+[N_PARTITE:code] par: evidence.rs (L4) ↔ memo-core (L5) — acoplamento: baixo | evidência: e26062cf | abstração: módulo puro | lifecycle: coerente → manter
+[N_PARTITE:code] par: render.rs::by_word_item (L3) ↔ memo-cli (L5) — acoplamento: baixo | evidência: 2c403241 | abstração: formatação local | lifecycle: coerente → manter
+[N_PARTITE.STRUCT:code] alvo: query.rs::by_word — problema: orquestrador com regra (âncora + classificação + dedupe) | estrutura proposta: `anchor_for` + `use_evidence`, struct no lugar da tupla `Use` | base: crates/memo-core/src/query.rs:758-906
+[N_PARTITE.FAIL] ação: index.rs::insert_raw_ref (crates/memo-core/src/index.rs:380) — eixo: interrupção | status: coberto por transação única de `run_index` → —
+[N_PARTITE.FAIL] ação: index.rs::insert_raw_ref — eixo: duplicidade | status: coberto por `delete_file_symbols` antes da reinserção e teste `incremental_equals_fresh_index` → —
+[N_PARTITE.FAIL] ação: store.rs schema 4 — eixo: falha | status: coberto por descarte e recriação do banco derivado, notas intactas (teste `old_schema_version_when_opened`) → —
+[N_PARTITE.FAIL] ação: query.rs::by_word — eixo: tempo | status: não coberto (sem limite de usos candidatos; custo não medido, C12) → Y1/T1
+[N_PARTITE.GAP] item: D16 — palavra de nota e de evento só do vocabulário (name, path, import, test_doc) — status: ausente-não-decidido no código | base: TASK-6 §9 D16 → R1
+[N_PARTITE.GAP] item: C12 custo medido — status: ausente-intencional (registrado no §4 e §10) | base: TASK-6 §4 C12 → —
+[N_PARTITE.CLUSTER] nome: camada relacional de uso — membros: 4 (raw_ref.id, occurrence ref/type, insert_raw_ref, delete_file_symbols) | razão de mudança: nova fonte de texto extraída | fronteira com: inferência por palavra (→) | contrato: exigido (occurrence com owner_kind/source; dono e ciclo diferentes)
+[N_PARTITE.CLUSTER] nome: inferência por palavra do impact — membros: 6 (by_word, family, hierarchy, classify, Evidence, ByWordItem) | razão de mudança: nova regra de evidência | fronteira com: renderização (→) | contrato: exigido (`Impact` JSON, consumidor externo MCP)
+[N_PARTITE.INV] id: INV-USE-1 (C1) | matriz: confirmado | c_código: 1.00 | c_humano: 1 (TASK-6 §4 C1) | estado: occurrence(owner_kind='ref') | guardas: insert_raw_ref | sem guarda: delete_file_symbols (coerente: só remove junto com a raw_ref) | cobertura: grep `owner_kind = 'ref'` e `INSERT INTO occurrence` · não cobre SQL dinâmico | proteção: atual 2 · recomendada 2 (dado derivado, |W|=2)
+[N_PARTITE.INV] id: INV-USE-2 (§5 camada relacional não importa inferência) | matriz: confirmado | c_código: 0.45 | c_humano: 1 (TASK-6 §5) | estado: imports de index.rs | guardas: — | sem guarda: index.rs (coerente: importa só `sources::use_words`) | cobertura: leitura dos `use` de index.rs | proteção: atual 0 · recomendada 1 (|W|=1, sem dado sensível; teste de arquitetura opcional)
+[N_PARTITE.INV] id: D16 | matriz: intenção sem proteção | c_código: 0.00 | c_humano: 1 (decisão [2026-11-08T15:37-0300]) | estado: consultas de palavra em notes.rs/events.rs | guardas: — | sem guarda: notes.rs:750, notes.rs:829, events.rs:75 (GAP: aceitam source ref/type) | cobertura: grep `FROM occurrence` sem `source` · não cobre consultas dinâmicas | proteção: atual 0 · recomendada 1 (|W|=3, dado derivado) → R1
+[N_PARTITE.SIDE] ação: insert_raw_ref (crates/memo-core/src/index.rs:380) — eixo: visibilidade | efeito: palavras de uso visíveis para notas `word:` e eventos | quando: imediato | status: GAP → R1
+[N_PARTITE.SIDE] ação: store.rs schema 4 — eixo: cascata | efeito: banco recriado na primeira abertura | quando: imediato | status: informativo → —
+[N_PARTITE.RANK] 1 · GAP D16 · impacto: alto · alcance: não definido · custo: baixo · 80/20
+[N_PARTITE.RANK] 2 · FAIL tempo by_word · impacto: médio · alcance: não definido · custo: baixo · —
+[N_PARTITE.RANK] 3 · STRUCT by_word · impacto: baixo · alcance: não definido · custo: médio · —
+- cohesion.evidence: co-mudança medida só nos 22 commits do diff (janela: 8835ee4..c144bd45) · drift: não aplicável — sem estado empilhado de DEFINITION
 
 ## 10. Log de Decisões e Alterações
+
+### [2026-11-08T15:37-0300] — code review Requer alterações
+- Tipo: revisão
+- Revisado: `8835ee4..c144bd45` (22 commits), entrada completa no §9/Code Review e `N_PARTITE (CODE_REVIEW)`.
+- Achados: 🔴 R1 (D16 sem guarda em notes.rs/events.rs); 🟡 Y1 (consultas por uso sem índice em `raw_ref.src`), Y2 (`by_word` com 149 linhas); 🟢 G1–G5; ⚖️ T1.
+- GRILL: grill-me · diferida · — · CODE_REVIEW · 1 rodadas · 1 decisões · 0 pendências · STATUS:READY
+- Impacto: STATE: BLOCKED → REQUEST CHANGES: eng (R1 obrigatório; Y1 e Y2 a corrigir ou justificar).
 
 ### [2026-11-08] — ENGINEERING, passos (e) e (f), medição pulada e docs
 - Tipo: implementação e documentação
