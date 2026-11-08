@@ -37,7 +37,7 @@ fn test_given_symbol_word_when_stored_then_occurrence_has_owner_kind_and_name_so
 
 /// GIVEN a store at schema_version '1' (occurrence without owner_kind) and a note file on disk
 /// WHEN  the store is opened again and the repository is indexed
-/// THEN  the old graph is discarded, schema_version is '5', indexing succeeds and the note file is intact
+/// THEN  the old graph is discarded, schema_version is '6', indexing succeeds and the note file is intact
 #[test]
 fn test_given_old_schema_version_when_opened_then_db_discarded_and_notes_kept() {
     let repo = Repo::fixture();
@@ -64,7 +64,7 @@ fn test_given_old_schema_version_when_opened_then_db_discarded_and_notes_kept() 
     assert_eq!(store.counts().unwrap(), (0, 0));
     assert_eq!(
         store.get_meta("schema_version").unwrap().as_deref(),
-        Some("5")
+        Some("6")
     );
     let report = index(&WorkTree::new(repo.path()), &mut store).unwrap();
     assert!(report.wrote && report.files_with_error.is_empty());
