@@ -71,8 +71,12 @@ pub(crate) fn snapshot(conn: &Connection) -> Result<Snapshot, CoreError> {
         let (qname, value) = row?;
         symbols.insert(qname, value);
     }
-    let mut stmt =
-        conn.prepare("SELECT DISTINCT w.text FROM word w JOIN occurrence o ON o.word_id = w.id")?;
+    // Só o vocabulário gera eventos de palavra; as palavras de uso ficam fora (TASK-6, D16).
+    let mut stmt = conn.prepare(&format!(
+        "SELECT DISTINCT w.text FROM word w JOIN occurrence o ON o.word_id = w.id
+         WHERE o.source IN {}",
+        crate::store::VOCABULARY_SOURCES
+    ))?;
     let words = stmt
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
