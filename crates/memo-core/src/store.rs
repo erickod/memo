@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use std::fmt::Write;
 use std::path::Path;
 
-const SCHEMA_VERSION: &str = "3";
+const SCHEMA_VERSION: &str = "4";
 
 const SCHEMA: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
@@ -37,7 +37,7 @@ CREATE TABLE edge(
   dst_text TEXT,
   line INTEGER, attr TEXT, pos INTEGER,
   approx INTEGER DEFAULT 0, count INTEGER DEFAULT 1);
-CREATE TABLE raw_ref(file_id INTEGER, src INTEGER, kind TEXT, callee_text TEXT, receiver TEXT, line INTEGER,
+CREATE TABLE raw_ref(id INTEGER PRIMARY KEY, file_id INTEGER, src INTEGER, kind TEXT, callee_text TEXT, receiver TEXT, line INTEGER,
   attr TEXT, pos INTEGER, resolved INTEGER DEFAULT 1);
 CREATE TABLE import(file_id INTEGER, local_name TEXT, target TEXT, line INTEGER, type_checking INTEGER DEFAULT 0);
 CREATE TABLE word_stats(
