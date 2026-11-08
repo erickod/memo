@@ -239,3 +239,32 @@ fn test_given_rename_when_summary_then_line_matches_spec_format() {
         "eventos: +0 símbolos, ~2 alterados, 1 renomeado, 0 notas stale"
     );
 }
+
+/// GIVEN the word 'stripe', which exists only through the import 'from stripe.api import Charge'
+/// WHEN  the import is removed and the repository is reindexed
+/// THEN  WORD_CREATED for 'stripe' exists at first and WORD_DESTROYED for it after the removal
+#[test]
+fn test_given_word_only_in_import_when_import_removed_then_word_destroyed_event() {
+    let repo = Repo::empty();
+    repo.write(
+        "m.py",
+        "from stripe.api import Charge\n\ndef pay():\n    pass\n",
+    );
+    let mut store = SqliteStore::open_in_memory().unwrap();
+    let tree = WorkTree::new(repo.path());
+    index_with(&tree, &mut store, &Config::default()).unwrap();
+    let created = of_kind(&store.events().unwrap(), "WORD_CREATED");
+    assert!(
+        created
+            .iter()
+            .any(|e| e.subject.as_deref() == Some("stripe"))
+    );
+    repo.write("m.py", "def pay():\n    pass\n");
+    index_with(&tree, &mut store, &Config::default()).unwrap();
+    let destroyed = of_kind(&store.events().unwrap(), "WORD_DESTROYED");
+    assert!(
+        destroyed
+            .iter()
+            .any(|e| e.subject.as_deref() == Some("stripe"))
+    );
+}
