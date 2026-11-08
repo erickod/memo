@@ -119,18 +119,6 @@ fn test_given_low_idf_and_high_coherence_when_decided_then_not_esqueleto() {
     assert!(!order.esqueleto);
 }
 
-/// GIVEN 'get' used in 50 modules, each next to a different word
-/// WHEN  the statistics are read with min_coherence 0.30
-/// THEN  its specificity is below 0.35 and its coherence is below 0.30, so it is esqueleto
-#[test]
-fn test_given_low_idf_and_low_coherence_when_decided_then_esqueleto() {
-    let (_r, store, _c) = build(&get_like(), OPEN);
-    let get = stats(&store, "get");
-    assert!(get.especificidade < 0.35, "{get:?}");
-    assert!(get.coerencia < 0.30, "{get:?}");
-    assert!(get.esqueleto);
-}
-
 fn hub_repo(doc_words: usize) -> (Vec<(String, String)>, String) {
     let mut files: Vec<(String, String)> = (0..12)
         .map(|i| module("h", &format!("h{}", token(i)), &["hub_one".to_string()]))
@@ -148,9 +136,9 @@ fn hub_repo(doc_words: usize) -> (Vec<(String, String)>, String) {
 
 /// GIVEN 'hub' with one fixed neighbor, and a test that calls 'hub_one' exactly with a short docstring
 /// WHEN  the docstring is edited to list 100 identifier words and the repository is reindexed
-/// THEN  'hub' is not esqueleto before and is esqueleto after (the status is recomputed)
+/// THEN  'hub' is not esqueleto before and after, and its coherence is recomputed below 0.30
 #[test]
-fn test_given_docstring_edit_when_reindexed_then_esqueleto_status_recomputed() {
+fn test_given_docstring_edit_when_reindexed_then_coherence_recomputed_and_not_esqueleto() {
     let (before, _) = hub_repo(0);
     let (repo, mut store, config) = build(&before, OPEN);
     assert!(
@@ -163,7 +151,7 @@ fn test_given_docstring_edit_when_reindexed_then_esqueleto_status_recomputed() {
     repo.write(path, source);
     index_with(&WorkTree::new(repo.path()), &mut store, &config).unwrap();
     let hub = stats(&store, "hub");
-    assert!(hub.coerencia < 0.30 && hub.esqueleto, "{hub:?}");
+    assert!(hub.coerencia < 0.30 && !hub.esqueleto, "{hub:?}");
 }
 
 /// GIVEN the order-like repository indexed twice into separate stores
@@ -183,8 +171,8 @@ fn test_given_same_tree_twice_when_index_then_coherence_and_esqueleto_bytes_iden
     assert_eq!(line.split('|').count(), 10, "{line}");
 }
 
-/// GIVEN a proposta note anchored on the word 'hub', which is not esqueleto
-/// WHEN  a test docstring is edited so 'hub' becomes esqueleto and the repository is reindexed
+/// GIVEN a proposta note anchored on the word 'hub', which is not in the skeleton list
+/// WHEN  'hub' is added to the skeleton list, a test docstring is edited and the repository is reindexed
 /// THEN  the note is still 'proposta', no NOTE_* event was recorded, and the anchor reads as generic
 #[test]
 fn test_given_note_on_word_turned_esqueleto_when_reindexed_then_active_without_event() {
@@ -209,7 +197,10 @@ fn test_given_note_on_word_turned_esqueleto_when_reindexed_then_active_without_e
     let (after, _) = hub_repo(100);
     let (path, source) = after.last().unwrap();
     repo.write(path, source);
-    index_with_notes(&WorkTree::new(repo.path()), &mut store, &config, &notes).unwrap();
+    let listed =
+        Config::from_toml("skeleton = [\"hub\"]\nmin_specificity = 0.35\nmin_coherence = 0.30\n")
+            .unwrap();
+    index_with_notes(&WorkTree::new(repo.path()), &mut store, &listed, &notes).unwrap();
 
     assert!(stats(&store, "hub").esqueleto);
     assert_eq!(notes.get(&note.id).unwrap().estado, "proposta");

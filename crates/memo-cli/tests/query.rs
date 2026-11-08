@@ -674,14 +674,17 @@ fn test_given_order_like_fixture_when_indexed_then_frequent_coherent_word_not_es
 
 /// GIVEN 'get' used in 50 modules, each next to a different word, skeleton list empty
 /// WHEN  'memo query word get' runs
-/// THEN  the output has the line 'esqueleto: sim' (frequent and incoherent)
+/// THEN  the output has no 'esqueleto: sim' line (only the skeleton list decides)
 #[test]
-fn test_given_get_like_fixture_when_indexed_then_spread_generic_word_is_esqueleto() {
+fn test_given_get_like_fixture_when_indexed_then_spread_word_outside_list_not_esqueleto() {
     let repo = Repo::fixture();
     repo.write(".git/memo/memo.toml", "skeleton = []\n");
     write_modules(&repo, "g", 50, |i| vec![format!("get_{}", token(i + 200))]);
     let out = stdout(&memo(&repo, &["query", "word", "get"]));
-    assert!(out.contains("esqueleto: sim"), "{out}");
+    assert!(
+        out.contains("stats: uso=") && !out.contains("esqueleto: sim"),
+        "{out}"
+    );
 }
 
 /// GIVEN the fixture with min_specificity 0 and the word 'limit', used in names, a test, imports and calls
