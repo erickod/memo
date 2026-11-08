@@ -22,6 +22,15 @@ O que o `memo` não faz, faz mal ou não foi verificado. Cada item diz de onde v
 
 - Num repositório real, a cobertura foi de 4.450 chamadas resolvidas, 1.492 aproximadas e 1.740 **não resolvidas** (cerca de 23% do total). O resultado vazio nunca prova ausência.
 - Escrita em variável de módulo ou `global` ainda não gera a aresta `ESCREVE`.
+- Quando outro arquivo ganha um homônimo de uma função já chamada, quem a chamava não é resolvido de novo até o próprio arquivo mudar: a chamada segue apontando para a definição antiga. (achado na TASK-6, não corrigido)
+
+## `impact` por palavra
+
+- **O "mesmo uso" é a linha do símbolo.** O extrator divide `Alpha(1).run()` em `?.run` (sem receptor) e `Alpha`; por isso a evidência `forte` olha os usos da mesma linha, e `x = Alpha(); y.run()` numa linha só também vira `forte`. (teste; decisão D14 da TASK-6)
+- **Usos de teste nunca aparecem**, com ou sem `--no-tests`; chamadas no nível do módulo não são extraídas. (teste)
+- **Nome de alvo genérico** (`run`, `get`) ainda casa muitos usos; os `só nome` só são contados, e a ordem dentro de um nível é alfabética, sem ranking por pontes.
+- **Custo não medido** depois da TASK-6 (índice completo, um arquivo alterado, tamanho do banco); a medição antes/depois foi pulada. Na primeira rodada, o índice completo subiu 28% e o banco 19% no gerador sintético.
+- Desde a TASK-6, uma palavra que só aparece em texto de uso conta como existente para a âncora `word:` de nota e para o snapshot de eventos (`notes.rs`, `events.rs` não filtram por fonte). Não foi decidido se é o desejado.
 
 ## Notas
 
