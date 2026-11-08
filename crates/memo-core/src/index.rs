@@ -257,8 +257,8 @@ fn insert_symbols(
             .and_then(|(p, _)| ids.get(p).copied());
         tx.execute(
             "INSERT INTO symbol(qname, name, kind, nivel, parent_id, file_id, line_start, line_end,
-                                sig_hash, body_hash, is_test, is_protocol, type_text)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                                sig_hash, body_hash, is_test, is_protocol, type_text, value_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 sym.qname,
                 name,
@@ -272,7 +272,8 @@ fn insert_symbols(
                 sym.body_hash,
                 is_test,
                 sym.is_protocol,
-                sym.type_text
+                sym.type_text,
+                sym.value_text
             ],
         )?;
         let symbol_id = tx.last_insert_rowid();
