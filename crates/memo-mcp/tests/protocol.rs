@@ -458,3 +458,17 @@ fn test_given_tests_argument_when_mcp_query_called_then_tests_flag_passed() {
     );
     assert_eq!(argv(&f), strs(&["--tests", "query", "callers", "--", "x"]));
 }
+
+/// GIVEN an initialize request
+/// WHEN  it is handled
+/// THEN  the result carries instructions that recommend reading the 'ler:' spots before querying again (TASK-7, D4)
+#[test]
+fn test_given_initialize_when_handled_then_instructions_recommend_reading() {
+    let f = fake("", false);
+    let r = call(
+        &Server::new(&f, None),
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+    );
+    let text = r["result"]["instructions"].as_str().unwrap();
+    assert!(text.contains("ler:"), "{text}");
+}
