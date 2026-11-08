@@ -26,19 +26,20 @@ fn file(repo: &Repo, path: &str, words: &[&str]) {
 }
 
 /// A fixture da TASK-3 §7: 11 arquivos; contexto = segmento depois de `app/`.
-/// alpha: a1 a2 a3 b1 raiz · beta: a1 a2 a3 b2 b3 b4 · gamma: a1 a2 b5.
+/// alpha: aaa aab aac baa raiz · beta: aaa aab aac bab bac bad · gamma: aaa aab bae.
+/// Nomes de módulo sem palavra em comum (`a1` viraria a palavra `a` em vários arquivos).
 fn fixture() -> Repo {
     let repo = Repo::empty();
-    file(&repo, "app/a/a1.py", &["alpha", "beta", "gamma"]);
-    file(&repo, "app/a/a2.py", &["alpha", "beta", "gamma"]);
-    file(&repo, "app/a/a3.py", &["alpha", "beta"]);
-    file(&repo, "app/a/a4.py", &["delta"]);
-    file(&repo, "app/b/b1.py", &["alpha"]);
-    file(&repo, "app/b/b2.py", &["beta"]);
-    file(&repo, "app/b/b3.py", &["beta"]);
-    file(&repo, "app/b/b4.py", &["beta"]);
-    file(&repo, "app/b/b5.py", &["gamma"]);
-    file(&repo, "app/b/b6.py", &["delta"]);
+    file(&repo, "app/a/aaa.py", &["alpha", "beta", "gamma"]);
+    file(&repo, "app/a/aab.py", &["alpha", "beta", "gamma"]);
+    file(&repo, "app/a/aac.py", &["alpha", "beta"]);
+    file(&repo, "app/a/aad.py", &["delta"]);
+    file(&repo, "app/b/baa.py", &["alpha"]);
+    file(&repo, "app/b/bab.py", &["beta"]);
+    file(&repo, "app/b/bac.py", &["beta"]);
+    file(&repo, "app/b/bad.py", &["beta"]);
+    file(&repo, "app/b/bae.py", &["gamma"]);
+    file(&repo, "app/b/baf.py", &["delta"]);
     file(&repo, "app/raiz.py", &["alpha"]);
     repo
 }

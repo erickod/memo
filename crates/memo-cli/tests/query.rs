@@ -924,16 +924,16 @@ fn test_given_alias_report_cli_when_run_then_note_add_command_ready() {
 fn representativeness_repo() -> Repo {
     let repo = Repo::empty();
     for (path, words) in [
-        ("app/a/a1.py", vec!["alpha", "beta", "gamma"]),
-        ("app/a/a2.py", vec!["alpha", "beta", "gamma"]),
-        ("app/a/a3.py", vec!["alpha", "beta"]),
-        ("app/a/a4.py", vec!["delta"]),
-        ("app/b/b1.py", vec!["alpha"]),
-        ("app/b/b2.py", vec!["beta"]),
-        ("app/b/b3.py", vec!["beta"]),
-        ("app/b/b4.py", vec!["beta"]),
-        ("app/b/b5.py", vec!["gamma"]),
-        ("app/b/b6.py", vec!["delta"]),
+        ("app/a/aaa.py", vec!["alpha", "beta", "gamma"]),
+        ("app/a/aab.py", vec!["alpha", "beta", "gamma"]),
+        ("app/a/aac.py", vec!["alpha", "beta"]),
+        ("app/a/aad.py", vec!["delta"]),
+        ("app/b/baa.py", vec!["alpha"]),
+        ("app/b/bab.py", vec!["beta"]),
+        ("app/b/bac.py", vec!["beta"]),
+        ("app/b/bad.py", vec!["beta"]),
+        ("app/b/bae.py", vec!["gamma"]),
+        ("app/b/baf.py", vec!["delta"]),
         ("app/raiz.py", vec!["alpha"]),
     ] {
         let body: String = words

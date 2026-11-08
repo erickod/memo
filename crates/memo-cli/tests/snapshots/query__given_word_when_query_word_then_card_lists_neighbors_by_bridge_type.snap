@@ -1,5 +1,6 @@
 ---
 source: crates/memo-cli/tests/query.rs
+assertion_line: 697
 expression: stdout(&out)
 ---
 word limit  idx=ok
@@ -14,6 +15,9 @@ vizinhas por ponte:
   chamada : execute(0.5)
   arquivo : calculate(0.6) repository(0.6) save(0.6) usecase(0.6) amount(0.3) execute(0.3) last(0.3) repo(0.3)
   contexto: amount(0.1) anticipate(0.1) calculate(0.1) cancel(0.1) checkout(0.1) execute(0.1) invoice(0.1) last(0.1)
+representatividade (arquivos):
+  repositório: 4/10 (0.40)
+  contexto billing: 4/8 (0.50)
 símbolos:
   mod test_calculate_limit_usecase   app/billing/application/tests/unit/test_calculate_limit_usecase.py:L1-L8 [nome, import]
   T test_given_amount_when_calculate_then_returns_limit   app/billing/application/tests/unit/test_calculate_limit_usecase.py:L5-L7 [nome, chamada]

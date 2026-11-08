@@ -69,6 +69,45 @@ fn bridge_lines(bridges: &[memo_core::bridges::Bridge]) -> Vec<String> {
     lines
 }
 
+/// Representatividade em arquivos: repositório, cada contexto e as vizinhas mais fortes.
+fn representativeness_lines(
+    word: &str,
+    r: &memo_core::representativeness::Representativeness,
+) -> Vec<String> {
+    let ratio = |files: usize, total: usize| {
+        if total == 0 {
+            0.0
+        } else {
+            files as f64 / total as f64
+        }
+    };
+    let mut lines = vec![
+        "representatividade (arquivos):".to_string(),
+        format!(
+            "  repositório: {}/{} ({:.2})",
+            r.repository.files,
+            r.repository.total,
+            ratio(r.repository.files, r.repository.total)
+        ),
+    ];
+    for c in &r.contexts {
+        lines.push(format!(
+            "  contexto {}: {}/{} ({:.2})",
+            c.context,
+            c.files,
+            c.total,
+            ratio(c.files, c.total)
+        ));
+    }
+    for n in &r.neighbors {
+        lines.push(format!(
+            "  vizinha {}: {word}|{}={:.2} {}|{word}={:.2} comum={}",
+            n.word, n.word, n.word_given_neighbor, n.word, n.neighbor_given_word, n.shared
+        ));
+    }
+    lines
+}
+
 fn tagged_item(addr: &SymbolAddr, tags: &[String]) -> String {
     let tags = if tags.is_empty() {
         "vizinho".to_string()
@@ -570,6 +609,9 @@ pub fn word_text(
         list_line("camadas", &info.layers),
     ]);
     head.extend(bridge_lines(&info.bridges));
+    if let Some(r) = &info.representativeness {
+        head.extend(representativeness_lines(&info.word, r));
+    }
     if !info.ignored.is_empty() {
         head.push(list_line("ignoradas", &info.ignored));
     }
