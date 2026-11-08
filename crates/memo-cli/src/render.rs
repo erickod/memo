@@ -780,6 +780,50 @@ pub fn word_text(
     fit(&head, &items, &[coverage_line(cov)], max_chars, limit)
 }
 
+/// Palavra composta (TASK-7, D7): a interpretação, a ficha curta de cada parte e os símbolos
+/// cujo nome tem todas as partes.
+pub fn composite_word_text(
+    info: &memo_core::query::CompositeWord,
+    idx: &str,
+    cov: &Coverage,
+    max_chars: usize,
+    limit: Option<usize>,
+    all: bool,
+) -> String {
+    let mut head = vec![
+        format!("word {}  idx={idx}", info.input),
+        format!("interpretado como: {}", info.parts.join(" + ")),
+    ];
+    for card in &info.cards {
+        let stats = card.stats.as_ref().map_or(String::new(), |st| {
+            format!(
+                " uso={} alcance={} espec={:.2}",
+                st.uso, st.alcance, st.especificidade
+            )
+        });
+        head.push(format!(
+            "{}:{stats} papéis={} verbos={}",
+            card.word,
+            dash_join(&card.roles),
+            dash_join(&card.verbs)
+        ));
+    }
+    if !info.unknown.is_empty() {
+        head.push(list_line("desconhecidas", &info.unknown));
+    }
+    head.push("símbolos com todas:".to_string());
+    if info.symbols.is_empty() {
+        head.push("  nenhum".to_string());
+    }
+    let symbols = info
+        .symbols
+        .iter()
+        .map(|s| (item(s), module_of_addr(s)))
+        .collect();
+    let items = grouped(symbols, all);
+    fit(&head, &items, &[coverage_line(cov)], max_chars, limit)
+}
+
 /// Relatório de aliases: cada par com o motivo e o `memo note add` pronto para copiar.
 pub fn aliases_text(pairs: &[memo_core::aliases::AliasPair], idx: &str, cov: &Coverage) -> String {
     let mut out = format!("aliases  idx={idx}\n");
