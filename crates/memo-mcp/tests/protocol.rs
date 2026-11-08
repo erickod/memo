@@ -129,8 +129,8 @@ fn test_given_batch_array_when_handled_then_error_32600() {
 
 /// GIVEN a tools/list request
 /// WHEN  it is handled
-/// THEN  four tools come back (brief, query, note_add, status), each with a description of at
-///       most two lines and an object inputSchema
+/// THEN  six tools come back (brief, query, note_add, note_show, note_list, status), each with a
+///       description of at most two lines and an object inputSchema
 #[test]
 fn test_given_tools_list_when_handled_then_four_tools_with_short_descriptions_and_schemas() {
     let f = fake("", false);
@@ -140,7 +140,17 @@ fn test_given_tools_list_when_handled_then_four_tools_with_short_descriptions_an
     );
     let tools = r["result"]["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, vec!["brief", "query", "note_add", "status"]);
+    assert_eq!(
+        names,
+        vec![
+            "brief",
+            "query",
+            "note_add",
+            "note_show",
+            "note_list",
+            "status"
+        ]
+    );
     for tool in tools {
         let description = tool["description"].as_str().unwrap();
         assert!(
@@ -401,4 +411,33 @@ fn test_given_no_tests_argument_when_mcp_brief_called_then_flag_passed_to_cli() 
         tool_call("brief", json!({"text":"a b","no_tests":false})),
     );
     assert_eq!(argv(&f), strs(&["brief", "--", "a b"]));
+}
+
+/// GIVEN a tools/list request
+/// WHEN  it is handled
+/// THEN  note_show requires an id and note_list takes only an optional task (TASK-7, D1)
+#[test]
+fn test_given_tools_list_when_handled_then_has_note_tools() {
+    let f = fake("", false);
+    let r = call(
+        &Server::new(&f, None),
+        json!({"jsonrpc":"2.0","id":5,"method":"tools/list"}),
+    );
+    let tools = r["result"]["tools"].as_array().unwrap();
+    let tool = |name: &str| tools.iter().find(|t| t["name"] == name).cloned().unwrap();
+    assert_eq!(tool("note_show")["inputSchema"]["required"], json!(["id"]));
+    assert!(tool("note_list")["inputSchema"].get("required").is_none());
+}
+
+/// GIVEN a note_show call with an id and a note_list call with a task
+/// WHEN  they are handled
+/// THEN  the backend runs `note show <id>` and `--task <t> note list` (TASK-7, D1)
+#[test]
+fn test_given_note_show_and_list_calls_when_handled_then_argv_maps_to_cli() {
+    let f = fake("n-abc regra proposta", false);
+    let server = Server::new(&f, None);
+    call(&server, tool_call("note_show", json!({"id": "n-abc"})));
+    assert_eq!(argv(&f), strs(&["note", "show", "--", "n-abc"]));
+    call(&server, tool_call("note_list", json!({"task": "lend-1"})));
+    assert_eq!(argv(&f), strs(&["--task", "lend-1", "note", "list"]));
 }
