@@ -1353,3 +1353,18 @@ fn test_given_many_imports_when_query_symbol_then_imports_as_counts() {
     let all = stdout(&memo(&repo, &["--all", "query", "symbol", "h.hub"]));
     assert_eq!(all.matches("IMPORTA <- ").count(), 30, "{all}");
 }
+
+/// GIVEN 'class Status(StrEnum)' with A = "a", B = auto() and C = 3
+/// WHEN  'memo query symbol Status' runs
+/// THEN  the output has 'membros: A = "a" · B · C = 3' (TASK-7, D6)
+#[test]
+fn test_given_enum_when_query_symbol_then_members_line() {
+    let repo = Repo::empty();
+    repo.write(
+        "m.py",
+        "from enum import StrEnum, auto\n\nclass Status(StrEnum):\n    A = \"a\"\n    B = auto()\n    C = 3\n",
+    );
+    repo.commit_all();
+    let out = stdout(&memo(&repo, &["query", "symbol", "m.Status"]));
+    assert!(out.contains("\nmembros: A = \"a\" · B · C = 3\n"), "{out}");
+}
