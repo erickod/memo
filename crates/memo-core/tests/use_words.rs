@@ -1,8 +1,10 @@
 mod common;
 
 use common::Repo;
+use memo_core::config::Config;
 use memo_core::index::index;
 use memo_core::source::WorkTree;
+use memo_core::sources::use_words;
 use memo_core::store::SqliteStore;
 use rusqlite::Connection;
 use std::collections::BTreeSet;
@@ -25,14 +27,21 @@ fn indexed(files: &[(&str, &str)]) -> Indexed {
 }
 
 impl Indexed {
-    /// Palavras de uso (`ref` e `type`) cujo dono é o símbolo `qname`.
+    /// Palavras de uso do símbolo `qname`: as de `ref`, cujo dono é cada uso (`raw_ref`) que
+    /// está no símbolo, e as de `type`, cujo dono é o próprio símbolo.
     fn use_words(&self, qname: &str) -> BTreeSet<String> {
         self.conn
             .prepare(
                 "SELECT w.text FROM occurrence o
                  JOIN word w ON w.id = o.word_id
+                 JOIN raw_ref r ON o.owner_kind = 'ref' AND o.owner_id = r.id
+                 JOIN symbol s ON s.id = r.src
+                 WHERE s.qname = ?1 AND o.source = 'ref'
+                 UNION
+                 SELECT w.text FROM occurrence o
+                 JOIN word w ON w.id = o.word_id
                  JOIN symbol s ON o.owner_kind = 'symbol' AND o.owner_id = s.id
-                 WHERE s.qname = ?1 AND o.source IN ('ref', 'type')",
+                 WHERE s.qname = ?1 AND o.source = 'type'",
             )
             .unwrap()
             .query_map([qname], |r| r.get(0))
@@ -51,7 +60,7 @@ const TWO_RUNNERS: &str = "class Alpha:\n    def run(self):\n        pass\n\n\
 
 /// GIVEN 'def go(): Alpha(1).run()' where 'run' exists in two classes (call stays unresolved)
 /// WHEN  the repository is indexed
-/// THEN  m.go owns the word 'alpha' from its call text, with no edge needed
+/// THEN  a use inside m.go owns the word 'alpha' from its call text, with no edge needed
 #[test]
 fn test_given_chained_call_when_indexed_then_receiver_words_belong_to_caller() {
     let i = indexed(&[
@@ -83,7 +92,7 @@ fn test_given_type_annotation_when_indexed_then_type_words_belong_to_symbol() {
 
 /// GIVEN a call that the resolver leaves unresolved and one it resolves
 /// WHEN  the repository is indexed
-/// THEN  both callers own the words of their call text (independent of `resolved`)
+/// THEN  the uses inside both callers own the words of their call text (independent of `resolved`)
 #[test]
 fn test_given_resolved_and_unresolved_calls_when_indexed_then_both_emit_words() {
     let i = indexed(&[
@@ -144,6 +153,78 @@ fn test_given_changed_file_when_reindexed_then_stale_use_words_removed() {
         words.contains("other") && !words.contains("helper"),
         "{words:?}"
     );
+}
+
+/// Fixture U (TASK-6, §7): uma família de `run` e usos com e sem evidência da classe dona.
+const FIXTURE_U_A: &str = "from typing import Protocol\n\n\
+                           class Runner(Protocol):\n    def run(self):\n        ...\n\n\
+                           class Alpha:\n    def run(self):\n        pass\n\n\
+                           class SubAlpha(Alpha):\n    pass\n\n\
+                           class Beta:\n    def run(self):\n        pass\n";
+const FIXTURE_U_M: &str = "from a import Alpha, SubAlpha, Beta, Runner\n\n\
+                           def strong_owner():\n    Alpha(1).run()\n\n\
+                           def strong_sub():\n    SubAlpha(1).run()\n\n\
+                           def medium_owner(items: list[Alpha]):\n    for it in items:\n        it.run()\n\n\
+                           def medium_protocol(items: list[Runner]):\n    for it in items:\n        it.run()\n\n\
+                           def only_beta():\n    Beta(1).run()\n\n\
+                           def only_obj(obj):\n    obj.run()\n";
+/// Fixture R (TASK-6, §7): chamadas resolvidas (1), ambíguas (0) e externas (2).
+const FIXTURE_R: &str = "class Gamma:\n    def go(self):\n        pass\n\n\
+                         class Delta:\n    def go(self):\n        pass\n\n\
+                         def helper():\n    pass\n\n\
+                         def one():\n    helper()\n\n\
+                         def two():\n    Gamma(1).go()\n\n\
+                         def three():\n    external_thing()\n";
+
+/// GIVEN fixtures U and R, with resolved 0, 1 and 2 all present among the references
+/// WHEN  the repository is indexed
+/// THEN  every raw_ref owns, as 'ref' occurrences, exactly the words of its callee text and receiver
+#[test]
+fn test_given_varied_refs_when_indexed_then_each_ref_owns_exactly_its_text_words() {
+    let i = indexed(&[
+        ("a.py", FIXTURE_U_A),
+        ("m.py", FIXTURE_U_M),
+        ("r.py", FIXTURE_R),
+    ]);
+    let states: BTreeSet<i64> = i
+        .conn
+        .prepare("SELECT DISTINCT resolved FROM raw_ref")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(states, BTreeSet::from([0, 1, 2]));
+    let refs: Vec<(i64, Option<String>, Option<String>)> = i
+        .conn
+        .prepare("SELECT id, callee_text, receiver FROM raw_ref ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(!refs.is_empty());
+    let config = Config::default();
+    for (id, text, receiver) in refs {
+        let expected: BTreeSet<String> = [text, receiver]
+            .into_iter()
+            .flatten()
+            .flat_map(|t| use_words(&t, &config))
+            .map(|w| w.text)
+            .collect();
+        let owned: BTreeSet<String> = i
+            .conn
+            .prepare(
+                "SELECT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
+                 WHERE o.owner_kind = 'ref' AND o.owner_id = ?1 AND o.source = 'ref'",
+            )
+            .unwrap()
+            .query_map([id], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(owned, expected, "raw_ref {id}");
+    }
 }
 
 fn by_word_names(files: &[(&str, &str)], target: &str) -> (Vec<String>, Vec<String>) {
