@@ -1184,18 +1184,16 @@ fn test_given_use_in_test_file_when_impact_then_never_listed() {
         let mut args = flags.to_vec();
         args.extend(["--json", "query", "impact", "a.Alpha.run"]);
         let json: serde_json::Value = serde_json::from_str(&stdout(&memo(&repo, &args))).unwrap();
-        for key in ["by_word"] {
-            let paths: Vec<&str> = json["data"][key]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|i| i["addr"]["path"].as_str().unwrap())
-                .collect();
-            assert!(
-                paths.iter().all(|p| !p.starts_with("tests/")),
-                "{flags:?} {key} {paths:?}"
-            );
-        }
+        let paths: Vec<&str> = json["data"]["by_word"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["addr"]["path"].as_str().unwrap())
+            .collect();
+        assert!(
+            paths.iter().all(|p| !p.starts_with("tests/")),
+            "{flags:?} {paths:?}"
+        );
     }
 }
 
