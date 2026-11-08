@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use std::fmt::Write;
 use std::path::Path;
 
-const SCHEMA_VERSION: &str = "5";
+const SCHEMA_VERSION: &str = "6";
 
 /// Fontes de palavra que formam o vocabulário (TASK-6, D16): as de uso (`ref`, `type`) ficam fora
 /// das âncoras de nota e dos eventos de palavra.
@@ -24,7 +24,7 @@ CREATE TABLE symbol(
   line_start INTEGER, line_end INTEGER,
   sig_hash TEXT, body_hash TEXT, decorators TEXT,
   is_test INTEGER DEFAULT 0, is_entrypoint INTEGER DEFAULT 0, is_protocol INTEGER DEFAULT 0,
-  type_text TEXT);
+  type_text TEXT, value_text TEXT);
 CREATE TABLE word(id INTEGER PRIMARY KEY, text TEXT UNIQUE NOT NULL);
 CREATE TABLE occurrence(
   symbol_id INTEGER, word_id INTEGER NOT NULL, pos INTEGER NOT NULL,
