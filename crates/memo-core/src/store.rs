@@ -42,7 +42,7 @@ CREATE TABLE raw_ref(file_id INTEGER, src INTEGER, kind TEXT, callee_text TEXT, 
 CREATE TABLE import(file_id INTEGER, local_name TEXT, target TEXT, line INTEGER, type_checking INTEGER DEFAULT 0);
 CREATE TABLE word_stats(
   word_id INTEGER PRIMARY KEY, uso INTEGER, alcance INTEGER, grau INTEGER,
-  idf REAL, especificidade REAL, centralidade REAL, esqueleto INTEGER);
+  idf REAL, especificidade REAL, centralidade REAL, esqueleto INTEGER, coerencia REAL);
 CREATE TABLE event(id INTEGER PRIMARY KEY, batch TEXT NOT NULL, seq INTEGER, kind TEXT NOT NULL, subject TEXT, payload TEXT);
 CREATE TABLE session_seen(task TEXT, cmd TEXT, key TEXT, PRIMARY KEY(task, cmd, key));
 CREATE INDEX edge_src_kind ON edge(src, kind);
@@ -295,14 +295,14 @@ impl SqliteStore {
             );
         }
         let mut stats = self.conn.prepare(
-            "SELECT w.text, ws.uso, ws.alcance, ws.grau, ws.idf, ws.especificidade, ws.centralidade, ws.esqueleto
+            "SELECT w.text, ws.uso, ws.alcance, ws.grau, ws.idf, ws.especificidade, ws.centralidade, ws.esqueleto, COALESCE(ws.coerencia, 0.0)
              FROM word_stats ws JOIN word w ON w.id = ws.word_id ORDER BY w.text",
         )?;
         let mut rows = stats.query([])?;
         while let Some(r) = rows.next()? {
             let _ = writeln!(
                 out,
-                "stats|{}|{}|{}|{}|{:.6}|{:.6}|{:.6}|{}",
+                "stats|{}|{}|{}|{}|{:.6}|{:.6}|{:.6}|{}|{:.6}",
                 r.get::<_, String>(0)?,
                 r.get::<_, i64>(1)?,
                 r.get::<_, i64>(2)?,
@@ -311,6 +311,7 @@ impl SqliteStore {
                 r.get::<_, f64>(5)?,
                 r.get::<_, f64>(6)?,
                 r.get::<_, i64>(7)?,
+                r.get::<_, f64>(8)?,
             );
         }
         let mut edges = self.conn.prepare(

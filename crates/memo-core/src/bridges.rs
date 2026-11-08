@@ -9,7 +9,7 @@ use crate::config::BridgeWeights;
 use crate::error::CoreError;
 use crate::store::SqliteStore;
 use rusqlite::{Connection, params};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BridgeKind {
@@ -320,5 +320,125 @@ pub fn word_bridges(
             .then_with(|| a.kind.cmp(&b.kind))
             .then_with(|| a.other.cmp(&b.other))
     });
+    Ok(out)
+}
+
+type Neighborhoods = BTreeMap<i64, BTreeMap<i64, f64>>;
+
+fn add_pair(out: &mut Neighborhoods, x: i64, y: i64, weight: f64) {
+    *out.entry(x).or_default().entry(y).or_insert(0.0) += weight;
+    *out.entry(y).or_default().entry(x).or_insert(0.0) += weight;
+}
+
+/// Liga cada palavra de `a` a cada palavra de `b` (as que coincidem ficam de fora).
+fn link(out: &mut Neighborhoods, a: &BTreeSet<i64>, b: &BTreeSet<i64>, weight: f64) {
+    if weight <= 0.0 {
+        return;
+    }
+    for &x in a {
+        for &y in b {
+            if x != y {
+                add_pair(out, x, y, weight);
+            }
+        }
+    }
+}
+
+/// Vizinhança de todas as palavras pelas pontes de símbolo, teste, import e chamada, em lote:
+/// `palavra -> (outra palavra -> peso)`. Arquivo e contexto ficam de fora (formariam pares demais).
+///
+/// Usa as mesmas regras de `word_bridges`; a ordem de soma é estável (mapas ordenados).
+pub(crate) fn core_neighborhoods(
+    conn: &Connection,
+    w: &BridgeWeights,
+) -> Result<BTreeMap<i64, BTreeMap<i64, f64>>, CoreError> {
+    let words_of = |sql: &str| -> Result<BTreeMap<i64, BTreeSet<i64>>, CoreError> {
+        let mut map: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+        for row in rows {
+            let (owner, word) = row?;
+            map.entry(owner).or_default().insert(word);
+        }
+        Ok(map)
+    };
+    let names = words_of(
+        "SELECT owner_id, word_id FROM occurrence
+         WHERE owner_kind = 'symbol' AND source = 'name' ORDER BY owner_id, word_id",
+    )?;
+    let docs = words_of(
+        "SELECT owner_id, word_id FROM occurrence
+         WHERE owner_kind = 'symbol' AND source = 'test_doc' ORDER BY owner_id, word_id",
+    )?;
+    let imported = words_of(
+        "SELECT owner_id, word_id FROM occurrence WHERE owner_kind = 'import' ORDER BY owner_id, word_id",
+    )?;
+    let mut file_words = words_of(
+        "SELECT owner_id, word_id FROM occurrence
+         WHERE owner_kind = 'file' AND source = 'path' ORDER BY owner_id, word_id",
+    )?;
+    let module_words: Vec<(i64, i64)> = conn
+        .prepare(
+            "SELECT s.file_id, o.word_id FROM symbol s JOIN occurrence o
+               ON o.owner_kind = 'symbol' AND o.owner_id = s.id AND o.source = 'name'
+             WHERE s.kind = 'module' ORDER BY s.file_id, o.word_id",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    for (file, word) in module_words {
+        file_words.entry(file).or_default().insert(word);
+    }
+
+    let mut out = Neighborhoods::new();
+    // No mesmo símbolo cada par entra uma vez, nos dois sentidos.
+    for words in names.values() {
+        let v: Vec<i64> = words.iter().copied().collect();
+        for (i, &x) in v.iter().enumerate() {
+            for &y in &v[i + 1..] {
+                add_pair(&mut out, x, y, w.symbol);
+            }
+        }
+    }
+    let empty = BTreeSet::new();
+    for call in calls(conn)? {
+        let src_name = names.get(&call.src).unwrap_or(&empty);
+        let dst_name = names.get(&call.dst).unwrap_or(&empty);
+        if call.src_is_test {
+            if call.approx {
+                continue;
+            }
+            let mut src_all = src_name.clone();
+            src_all.extend(docs.get(&call.src).unwrap_or(&empty));
+            link(&mut out, &src_all, dst_name, w.test);
+        } else {
+            let factor = if call.approx { w.approximate } else { 1.0 };
+            link(&mut out, src_name, dst_name, w.call * factor);
+        }
+    }
+
+    let mut prefixes: HashSet<String> = HashSet::new();
+    let qnames: Vec<String> = column(conn, "SELECT qname FROM symbol", [])?;
+    for qname in &qnames {
+        let mut end = 0;
+        for part in qname.split('.') {
+            end += part.len();
+            prefixes.insert(qname[..end].to_string());
+            end += 1;
+        }
+    }
+    let imports: Vec<(i64, i64, String)> = conn
+        .prepare("SELECT rowid, file_id, target FROM import ORDER BY rowid")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    for (rowid, file_id, target) in imports {
+        let weight = if prefixes.contains(&target) {
+            w.import
+        } else {
+            w.import_external
+        };
+        if let (Some(imp), Some(file)) = (imported.get(&rowid), file_words.get(&file_id)) {
+            link(&mut out, file, imp, weight);
+        }
+    }
     Ok(out)
 }

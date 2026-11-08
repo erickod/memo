@@ -608,7 +608,7 @@ pub fn word_stats(store: &SqliteStore, word: &str) -> Result<Option<WordStats>, 
     Ok(store
         .conn
         .query_row(
-            "SELECT ws.uso, ws.alcance, ws.grau, ws.idf, ws.especificidade, ws.centralidade, ws.esqueleto
+            "SELECT ws.uso, ws.alcance, ws.grau, ws.idf, ws.especificidade, ws.centralidade, ws.esqueleto, COALESCE(ws.coerencia, 0.0)
              FROM word_stats ws JOIN word w ON w.id = ws.word_id WHERE w.text = ?1",
             [word.to_lowercase()],
             |r| {
@@ -619,7 +619,7 @@ pub fn word_stats(store: &SqliteStore, word: &str) -> Result<Option<WordStats>, 
                     idf: r.get(3)?,
                     especificidade: r.get(4)?,
                     centralidade: r.get(5)?,
-                    coerencia: 0.0,
+                    coerencia: r.get(7)?,
                     esqueleto: r.get::<_, i64>(6)? != 0,
                 })
             },

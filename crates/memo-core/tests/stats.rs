@@ -115,17 +115,18 @@ fn test_given_skeleton_config_when_stats_then_word_is_esqueleto_with_zero_centra
     assert!(!word_stats(&store, "limit").unwrap().unwrap().esqueleto);
 }
 
-/// GIVEN min_specificity 0.5 and an empty skeleton list
+/// GIVEN min_specificity 0.5, an empty skeleton list and the fixture, where every word has few neighbors
 /// WHEN  the fixture is indexed
-/// THEN  'checkout' (specificity above 0.5) is not esqueleto and 'usecase' (below 0.5) is
+/// THEN  'usecase' (specificity below 0.5) has coherence 1.0 and is not esqueleto; neither is 'checkout'
 #[test]
-fn test_given_low_specificity_when_stats_then_esqueleto_by_threshold() {
+fn test_given_low_specificity_but_coherent_when_stats_then_not_esqueleto() {
     let config = Config::from_toml("skeleton = []\nmin_specificity = 0.5").unwrap();
     let (_r, store) = fixture_store(&config);
     let checkout = word_stats(&store, "checkout").unwrap().unwrap();
     let usecase = word_stats(&store, "usecase").unwrap().unwrap();
     assert!(checkout.especificidade >= 0.5 && !checkout.esqueleto);
-    assert!(usecase.especificidade < 0.5 && usecase.esqueleto);
+    assert!(usecase.especificidade < 0.5 && usecase.coerencia >= 0.30);
+    assert!(!usecase.esqueleto);
 }
 
 /// GIVEN the indexed fixture with the seed skeleton

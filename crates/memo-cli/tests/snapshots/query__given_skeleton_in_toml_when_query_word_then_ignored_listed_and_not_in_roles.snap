@@ -4,7 +4,6 @@ expression: stdout(&out)
 ---
 word limit  idx=ok
 stats: uso=8 alcance=4 grau=7 espec=0.16 central=0.205
-esqueleto: sim (nunca âncora)
 verbos: calculate
 papéis: repository
 camadas: application,domain,infra

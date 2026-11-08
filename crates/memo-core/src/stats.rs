@@ -1,5 +1,6 @@
 //! Pesos das palavras, recalculados a cada indexação que escreve (spec §5.6).
 
+use crate::bridges::core_neighborhoods;
 use crate::config::Config;
 use crate::error::CoreError;
 use rusqlite::{Transaction, params};
@@ -7,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 const DAMPING: f64 = 0.85;
 const ITERATIONS: usize = 20;
+const TOP_NEIGHBORS: usize = 10;
 
 #[derive(Default)]
 struct Raw {
@@ -126,6 +128,23 @@ pub fn recompute(tx: &Transaction, config: &Config) -> Result<(), CoreError> {
         .collect();
     let central = pagerank(&nodes, &weights);
 
+    // Vizinhas "não esqueleto" (D20) = fora da lista `skeleton`. O status final depende da
+    // própria coerência, então só a lista explícita pode excluir vizinhas sem circularidade;
+    // excluir também as de IDF baixo apagaria os aglomerados de conceito (`order` com `placed`).
+    let weak: &HashSet<i64> = &skeleton;
+    let neighborhoods = core_neighborhoods(tx, &config.bridges)?;
+    let coherence_of = |word: &i64| -> f64 {
+        let Some(row) = neighborhoods.get(word) else {
+            return 0.0;
+        };
+        let list: Vec<(String, f64)> = row
+            .iter()
+            .filter(|(other, _)| !weak.contains(other))
+            .map(|(other, weight)| (texts[other].clone(), *weight))
+            .collect();
+        coherence(&list)
+    };
+
     for (word, r) in &raw {
         let idf_w = idf[word];
         let especificidade = if hi > lo {
@@ -133,10 +152,12 @@ pub fn recompute(tx: &Transaction, config: &Config) -> Result<(), CoreError> {
         } else {
             1.0
         };
-        let is_skeleton = skeleton.contains(word) || especificidade < config.min_specificity;
+        let coerencia = coherence_of(word);
+        let is_skeleton = skeleton.contains(word)
+            || (especificidade < config.min_specificity && coerencia < config.min_coherence);
         tx.execute(
-            "INSERT INTO word_stats(word_id, uso, alcance, grau, idf, especificidade, centralidade, esqueleto)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO word_stats(word_id, uso, alcance, grau, idf, especificidade, centralidade, esqueleto, coerencia)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 word,
                 r.uso,
@@ -145,7 +166,8 @@ pub fn recompute(tx: &Transaction, config: &Config) -> Result<(), CoreError> {
                 idf_w,
                 especificidade,
                 central.get(word).copied().unwrap_or(0.0),
-                is_skeleton
+                is_skeleton,
+                coerencia
             ],
         )?;
     }
@@ -153,7 +175,14 @@ pub fn recompute(tx: &Transaction, config: &Config) -> Result<(), CoreError> {
 }
 
 /// Coerência de uma palavra: peso das 10 vizinhas mais fortes sobre o peso total (D20).
-/// Ordem estável: peso decrescente, nome crescente.
-pub fn coherence(_neighbors: &[(String, f64)]) -> f64 {
-    todo!("etapa 4")
+/// Ordem estável: peso decrescente, nome crescente. Sem vizinhas, 0.
+pub fn coherence(neighbors: &[(String, f64)]) -> f64 {
+    let mut sorted: Vec<&(String, f64)> = neighbors.iter().collect();
+    sorted.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let total: f64 = sorted.iter().map(|n| n.1).sum();
+    if total <= 0.0 {
+        return 0.0;
+    }
+    let top: f64 = sorted.iter().take(TOP_NEIGHBORS).map(|n| n.1).sum();
+    top / total
 }

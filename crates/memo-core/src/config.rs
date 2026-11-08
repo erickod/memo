@@ -72,7 +72,7 @@ impl Default for Config {
             write_methods: own(WRITE_METHODS),
             entrypoint_decorators: Vec::new(),
             min_specificity: 0.35,
-            min_coherence: 0.0,
+            min_coherence: 0.30,
             stale_on: own(&["sig", "body"]),
             context_root: "app".to_string(),
             layers: own(&["domain", "application", "infra"]),
@@ -105,6 +105,7 @@ struct Raw {
     write_methods: Option<Vec<String>>,
     entrypoint_decorators: Option<Vec<String>>,
     min_specificity: Option<f64>,
+    min_coherence: Option<f64>,
     stale_on: Option<Vec<String>>,
     context_root: Option<String>,
     layers: Option<Vec<String>>,
@@ -124,6 +125,7 @@ impl Config {
             .entrypoint_decorators
             .unwrap_or(config.entrypoint_decorators);
         config.min_specificity = raw.min_specificity.unwrap_or(config.min_specificity);
+        config.min_coherence = raw.min_coherence.unwrap_or(config.min_coherence);
         config.stale_on = raw.stale_on.unwrap_or(config.stale_on);
         config.context_root = raw.context_root.unwrap_or(config.context_root);
         config.layers = raw.layers.unwrap_or(config.layers);
@@ -152,6 +154,11 @@ impl Config {
         if all.iter().any(|v| !v.is_finite() || *v < 0.0) {
             return Err(CoreError::Config(
                 "[bridges] weights must be finite and not negative".to_string(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&config.min_coherence) {
+            return Err(CoreError::Config(
+                "min_coherence must be between 0 and 1".to_string(),
             ));
         }
         if !(0.0..=1.0).contains(&config.min_specificity) {
@@ -192,6 +199,7 @@ impl Config {
             list(&self.entrypoint_decorators)
         ));
         out.push_str(&format!("min_specificity = {:?}\n", self.min_specificity));
+        out.push_str(&format!("min_coherence = {:?}\n", self.min_coherence));
         out.push_str(&format!("stale_on = {}\n", list(&self.stale_on)));
         out.push_str(&format!("context_root = {:?}\n", self.context_root));
         out.push_str(&format!("layers = {}\n", list(&self.layers)));
