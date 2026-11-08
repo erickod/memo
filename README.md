@@ -9,6 +9,7 @@ O `memo` não chama APIs de IA, não executa o código do repositório e não ve
 - [Funcionalidades](docs/funcionalidades.md): o que o `memo` faz hoje e como cada item foi verificado.
 - [Limitações](docs/limitacoes.md): o que não faz, faz mal ou não foi verificado.
 - [Possíveis caminhos](docs/caminhos.md): ideias para depois, com o que as sustenta.
+- [Como reproduzir as medições](docs/medicoes.md): scripts e números de referência.
 - [Especificação](Spec%20CLI%20de%20mem%C3%B3ria%20estrutural%20para%20IA.md): o contrato completo (esquema, algoritmos, comandos).
 
 ## Como a ideia nasceu

@@ -39,7 +39,7 @@ O que o `memo` não faz, faz mal ou não foi verificado. Cada item diz de onde v
 
 - Uma mudança de config que molda o índice refaz todos os arquivos: cerca de 9 s em 801 arquivos e cerca de 44 s em 5.000. O CLI não avisa que o índice foi refeito.
 - `query word` custa de 1 a 2,3 s em repositório grande, com palavras presentes em quase todo arquivo, porque carrega todos os pares arquivo×palavra a cada consulta.
-- As medições vêm de um gerador sintético e de dois repositórios; não há medição em repositórios de outro perfil.
+- As medições vêm de um gerador sintético e de dois repositórios; não há medição em repositórios de outro perfil. O gerador que produziu os números das TASKs se perdeu; o versionado em `scripts/measure/` dá outro perfil, e nele o `brief` leva 0,66 s, acima da meta de 500 ms (causa não investigada). Ver [Como reproduzir as medições](medicoes.md).
 
 ## Escopo
 

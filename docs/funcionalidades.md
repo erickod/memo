@@ -40,4 +40,4 @@ O que o `memo` faz hoje. Cada item diz como foi verificado: **teste** (coberto p
 ## Qualidade e desempenho
 
 - Testes de saída com `insta` (golden files), `cargo fmt` e `cargo clippy -D warnings` limpos. (teste)
-- Num repositório sintético de 5.000 arquivos: índice completo cerca de 44 s, reindexação sem mudança 0,04 s, `brief` cerca de 0,4 s, `query word` de 1 a 2,3 s. Num repositório real de 801 arquivos: índice completo cerca de 9 s. (medido)
+- Num repositório sintético de 5.000 arquivos (de um gerador que se perdeu): índice completo cerca de 44 s, reindexação sem mudança 0,04 s, `brief` cerca de 0,4 s, `query word` de 1 a 2,3 s. Num repositório real de 801 arquivos: índice completo cerca de 9 s. (medido) Com o gerador versionado em `scripts/measure/`, o perfil é outro: ver [Como reproduzir as medições](medicoes.md).
