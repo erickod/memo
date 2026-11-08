@@ -120,7 +120,98 @@ Revistos na revisão do merge (§10, 2026-11-08): os desmarcados não tinham tes
 ---
 
 ## 7. Estratégia de Testes
-escritor: test-analyst (preenchido em TEST_ANALYSIS, depois da DEFINITION)
+escritor: test-analyst (segunda rodada; a primeira não preencheu este §)
+
+**Cenários** — Happy Path: uso como dono das palavras de `ref`; tipo no símbolo; evidência `forte`, `média` e `só nome` para método (classe dona, base, subclasse, Protocol) e para alvo sem família (mesmo módulo, import do alvo, import do módulo); linha do uso; contagem `só nome` no texto e lista no JSON · Error Scenarios: nenhum comando novo; alvo inexistente segue com exit 2 (coberto hoje) · Edge Cases: as três situações de `resolved` (0, 1, 2) na mesma fixture; resolução que muda sem o arquivo do uso mudar; reindexação incremental igual à do zero; uso já coberto por aresta; uso em arquivo de teste com `--no-tests`; corte por `--max-chars`; determinismo; `schema_version` 3 → 4.
+
+**Fixtures**
+- **U** (`a.py` e `m.py`): em `a.py`, `class Runner(Protocol)` com `run`; `class Alpha` com `run` (implementa `Runner` por estrutura); `class SubAlpha(Alpha)` sem `run` próprio; `class Beta` com `run`. Em `m.py`, `from a import Alpha, SubAlpha, Beta, Runner` e: `strong_owner()` com `Alpha(1).run()`; `strong_sub()` com `SubAlpha(1).run()`; `medium_owner(items: list[Alpha])` com `for it in items: it.run()`; `medium_protocol(items: list[Runner])` com `for it in items: it.run()`; `only_beta()` com `Beta(1).run()`; `only_obj(obj)` com `obj.run()`.
+- **F** (alvo sem família): `m.py` com `def helper()` e `def local_use(): helper()`; `n.py` com `from m import helper` e `def imported_use(): helper()`; `k.py` com `import m` e `def module_use(): m.helper()`; `z.py` e `y.py`, cada um com seu `def helper()`, e `w.py` sem import de `m`, com `def other_use(): helper()`.
+- **R** (as três situações de `resolved`): `def helper()` e `def one(): helper()` (1); `class Alpha` e `class Beta` com `run` e `def two(): Alpha(1).run()` (0); uma chamada que o resolvedor marca como aproximada (2), escolhida na ENGINEERING a partir de `resolve.rs:587`.
+- **Ressalva:** se o resolvedor criar aresta para algum caso de U ou F (por exemplo, `it.run()` resolvido pelo tipo do laço), o caso sai do `por palavra` por C8. Ele é então trocado por outro sem aresta, e a troca é registrada no §10. Os testes unitários de evidência não dependem disso.
+
+**Rastreabilidade**
+- C1 → `each_ref_owns_exactly_its_text_words`
+- C2 → `type_words_match_type_text`
+- C3 → `call_made_ambiguous_elsewhere`, e C1 sobre a fixture R
+- C4 → `other_files_use_rows_untouched`, `incremental_equals_fresh_index`
+- C5 → os unitários `owner_class_word`, `subclass_word`, `protocol_word`, `owner_class_only_in_other_use`, `no_family_word`, e o de integração `family_uses_when_impact`
+- C5b → os unitários `function_target_same_module`, `function_target_imported`, `module_of_target_imported`, `function_target_not_imported`, e o de integração `homonym_call_when_impact`
+- C6 → `by_word_item_when_impact_then_line`
+- C7 → `name_only_uses_when_impact_text` (golden), `name_only_uses_when_impact_json`
+- C8 → `edge_consumer_when_impact` (existente), `max_chars_when_impact_by_word`, `use_in_test_file_when_no_tests`
+- C9 → `same_tree_twice_when_impact`
+- C10 → golden `index_command` revisto, `coverage_json_when_rendered_then_no_by_word_field`
+- C11 → não há teste novo: os goldens de `brief`, `query word`, `status` e as estatísticas não podem mudar (a revisão rejeita diff neles)
+- C12 → não coberto por teste: medição no §10 (não bloqueia)
+- schema → `old_schema_version_when_opened` (existente, passa a esperar `'4'`)
+- não coberto: Protocol implementado só por aresta aproximada (D9 usa só `ESPECIALIZA` exata); hierarquia com mais de um nível (o teste usa um nível e a consulta é recursiva por construção, a conferir na revisão)
+
+**Lifecycle Coverage**
+- [ ] Uso (`raw_ref`): nasce na inserção do arquivo, morre quando o arquivo é reindexado ou removido; as palavras nascem e morrem junto → `stale_use_words_removed` (existente, adaptado ao dono `ref`), `other_files_use_rows_untouched`
+- [ ] Palavra de tipo: nasce e morre com o símbolo → `type_words_match_type_text`, `incremental_equals_fresh_index`
+- [ ] `resolved` muda sem o uso mudar (outro arquivo cria ambiguidade): as palavras não mudam → `call_made_ambiguous_elsewhere`
+- [ ] Evidência: derivada a cada consulta, sem estado gravado → unitários de evidência e `same_tree_twice_when_impact`
+
+### Testes obsoletos pela D7 (trocar só com aval explícito)
+- `test_given_chained_call_when_indexed_then_receiver_words_belong_to_caller` e `test_given_resolved_and_unresolved_calls_when_indexed_then_both_emit_words`: afirmam que o símbolo é o dono das palavras de `ref`. Passam a afirmar que o dono é o uso, e o símbolo é alcançado por `raw_ref.src`. A intenção continua a mesma.
+- `test_given_unresolved_call_when_impact_then_by_word_lists_caller`: passa a afirmar o nível (`m.go` é `forte`) em vez de só a presença.
+- Golden `query__given_index_command_when_run_then_golden_summary_line`: perde `(2 por palavra)` (D10).
+- Golden `query__given_method_when_query_impact_then_sections_callers_consumers_protocol_tests`: a seção `por palavra` pode ganhar a linha `+N só pelo nome`. O diff é lido antes de aceitar.
+
+### Testes Unitários
+Função pura de evidência (`memo-core`). Ela recebe as palavras do uso, as palavras dos outros usos e do tipo do mesmo símbolo, os conjuntos de palavras da família e, para alvo sem família, o módulo do uso, os imports do arquivo do uso e o `qname` do alvo. Devolve `forte`, `média` ou `só nome`.
+- [ ] test_given_use_with_owner_class_word_when_classified_then_strong  (65 chars)
+    - GIVEN target a.Alpha.run and a use 'Alpha(1).run'; WHEN classified; THEN strong
+- [ ] test_given_use_with_subclass_word_when_classified_then_strong  (62 chars)
+    - GIVEN target a.Alpha.run, family {Alpha, SubAlpha, Runner} and a use 'SubAlpha(1).run'; WHEN classified; THEN strong
+- [ ] test_given_use_with_protocol_word_when_classified_then_strong  (62 chars)
+    - GIVEN target a.Alpha.run, family with Runner and a use 'Runner.run'; WHEN classified; THEN strong
+- [ ] test_given_owner_class_only_in_other_use_when_classified_then_medium  (71 chars)
+    - GIVEN a use 'it.run' and the symbol type 'list[Alpha]'; WHEN classified for a.Alpha.run; THEN medium
+- [ ] test_given_no_family_word_when_classified_then_name_only  (56 chars)
+    - GIVEN a use 'Beta(1).run' and no family word in the symbol; WHEN classified for a.Alpha.run; THEN name only
+- [ ] test_given_function_target_same_module_when_classified_then_strong  (67 chars)
+    - GIVEN target m.helper and a use 'helper' in module m; WHEN classified; THEN strong
+- [ ] test_given_function_target_imported_when_classified_then_strong  (64 chars)
+    - GIVEN target m.helper and a use 'helper' in a file importing 'm.helper'; WHEN classified; THEN strong
+- [ ] test_given_module_of_target_imported_when_classified_then_strong  (65 chars)
+    - GIVEN target m.helper and a use 'm.helper' in a file importing 'm'; WHEN classified; THEN strong
+- [ ] test_given_function_target_not_imported_when_classified_then_name_only  (73 chars)
+    - GIVEN target m.helper and a use 'helper' in module w, which imports neither m nor m.helper; WHEN classified; THEN name only
+
+### Testes de Integração (`memo-core`, `tests/use_words.rs`)
+- [ ] test_given_varied_refs_when_indexed_then_each_ref_owns_exactly_its_text_words  (79 chars)
+    - GIVEN fixtures U and R (calls, chained calls, receivers, typed params and returns, resolved 0, 1 and 2 all present); WHEN indexed; THEN for every raw_ref, the set of 'ref' occurrences owned by ('ref', id) equals use_words(callee_text) ∪ use_words(receiver)
+- [ ] test_given_typed_symbols_when_indexed_then_type_words_match_type_text  (71 chars)
+    - GIVEN fixture U; WHEN indexed; THEN for every symbol with type_text, its 'type' occurrences equal use_words(type_text), and symbols without type_text have none
+- [ ] test_given_call_made_ambiguous_elsewhere_when_reindexed_then_use_words_unchanged  (81 chars)
+    - GIVEN 'one()' calling 'helper()' resolved to a single definition; WHEN another file adding a second 'helper' is indexed (the caller file untouched); THEN the call's resolved changes and the words of that use are identical
+- [ ] test_given_one_file_changed_when_reindexed_then_other_files_use_rows_untouched  (79 chars)
+    - GIVEN fixture U indexed; WHEN only a.py changes and the repository is reindexed; THEN raw_ref ids and their occurrences for m.py are the same as before
+- [ ] test_given_incremental_reindex_when_compared_then_equals_fresh_index  (69 chars)
+    - GIVEN fixture U indexed and then a.py changed and reindexed; WHEN compared with a fresh index of the final tree; THEN the multiset of (word, source, owner symbol qname, line) is equal
+- [ ] test_given_family_uses_when_impact_then_strong_medium_and_name_only_split  (75 chars)
+    - GIVEN fixture U; WHEN impact runs on a.Alpha.run; THEN strong = {strong_owner, strong_sub}, medium = {medium_owner, medium_protocol}, name only = {only_beta, only_obj}, minus whatever edges already cover
+- [ ] test_given_homonym_call_when_impact_then_name_only_counted  (59 chars)
+    - GIVEN fixture F; WHEN impact runs on m.helper; THEN other_use is counted as name only and never listed as strong or medium
+- [ ] test_given_by_word_item_when_impact_then_line_is_use_line  (58 chars)
+    - GIVEN fixture U; WHEN impact runs on a.Alpha.run; THEN each strong and medium item carries the line of its raw_ref
+- [ ] test_given_same_tree_twice_when_impact_then_identical_bytes  (60 chars)
+    - GIVEN fixture U indexed fresh twice into two stores; WHEN impact on a.Alpha.run is serialized to JSON; THEN both outputs are byte-identical
+- [ ] adaptados (ver obsoletos): `chained_call_...`, `resolved_and_unresolved_calls_...`, `unresolved_call_when_impact_...`; mantidos: `type_annotation_...`, `use_words_when_stored_then_symbol_id_is_null`, `changed_file_..._stale_use_words_removed`, `edge_consumer_..._does_not_repeat_it`
+
+### Testes de Integração (`memo-cli`, `tests/query.rs`)
+- [ ] test_given_name_only_uses_when_impact_text_then_only_count_line  (66 chars)
+    - GIVEN fixture U; WHEN 'memo query impact Alpha.run' runs; THEN golden: 'por palavra' lists strong and medium with '~' and the line, then '+2 só pelo nome'
+- [ ] test_given_name_only_uses_when_impact_json_then_listed  (55 chars)
+    - GIVEN fixture U; WHEN impact runs with --json; THEN data.by_word has each item with its level and line, and the name-only items are listed
+- [ ] test_given_max_chars_when_impact_by_word_then_cut_with_omitted  (63 chars)
+    - GIVEN fixture U; WHEN impact runs with a --max-chars that cuts inside 'por palavra'; THEN the output ends with '+N omitidos' and stays under the limit
+- [ ] test_given_use_in_test_file_when_no_tests_then_by_word_hides_it  (64 chars)
+    - GIVEN fixture U plus tests/test_m.py with 'Alpha(1).run()'; WHEN impact runs with --no-tests; THEN that use is not listed and cobertura reports hidden tests
+- [ ] test_given_coverage_json_when_rendered_then_no_by_word_field  (61 chars)
+    - GIVEN any repository; WHEN a query runs with --json; THEN cobertura has no 'nao_resolvidas_por_palavra' key
 
 ---
 
