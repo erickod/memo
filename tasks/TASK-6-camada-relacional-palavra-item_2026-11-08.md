@@ -242,6 +242,7 @@ Função pura de evidência (`memo-core`). Ela recebe as palavras do uso, as pal
 - Decidido D8 (humano, recomendação aceita): os usos `só nome` aparecem só como contagem `+N só pelo nome`; o JSON traz a lista.
 - Decidido D9 (humano, recomendação aceita): a família de evidência é a classe dona, as bases e as subclasses (`ESPECIALIZA` exata, nos dois sentidos) e os Protocols que ela implementa.
 - Decidido D9a (humano, recomendação aceita, na ENGINEERING): o Protocol que a classe implementa só por estrutura entra na família. Essa ligação é uma `ESPECIALIZA` aproximada (`resolve.rs:333`); sem ela, a fixture U contradizia o C5. Bases e subclasses continuam só por aresta exata.
+- Decidido D14 (humano, recomendação aceita, na ENGINEERING): o "mesmo uso" da evidência `forte` é a linha do símbolo. O extrator divide `Alpha(1).run()` em duas `raw_ref` na mesma linha, `?.run` (sem receptor) e `Alpha`, e por isso a classe nunca aparecia no mesmo uso que o método. A alternativa de gravar o receptor no extrator foi recusada: o resolvedor lê o receptor e passaria a criar arestas novas. Efeito colateral aceito: `x = Alpha(); y.run()` numa linha só vira `forte`.
 - Decidido D10 (humano, recomendação aceita): `nao_resolvidas_por_palavra` sai da `cobertura` e do JSON; a completude vira teste de propriedade (C1, C2).
 - Decidido D11 (humano, recomendação aceita): a reconstrução das palavras de uso fica incremental, com medição antes e depois.
 - Decidido D12 (humano): plano aprovado; fluxo DEFINITION → TEST_ANALYSIS → ENGINEERING (`test:` red, depois `feat:` green, sem `Co-Authored-By`, cada alteração aprovada antes) → medição → docs.
@@ -267,6 +268,12 @@ Segunda rodada, na branch `feat/task-6-completion`:
 (vazio)
 
 ## 10. Log de Decisões e Alterações
+
+### [2026-11-08] — ENGINEERING, passo (d)
+- Tipo: implementação
+- Feito: `evidence.rs` (`Evidence`, `Anchor` e a função pura `classify`); `query::by_word` passa a ser por uso, com a família (D9, D9a), o módulo (D13), a linha do uso e o nível. `Impact.by_word` traz `forte` e `media`, e `Impact.by_word_name_only` traz `so_nome`. Quando há dois usos na mesma linha do mesmo símbolo, vale o mais forte (`e26062c` red, com os stubs; green no commit seguinte). 329 testes, `fmt` e `clippy` verdes.
+- Achado no green: a chamada encadeada vira duas `raw_ref`, o que levou à D14 (§9).
+- Conferido num repositório de rascunho com a fixture U: `forte` = `strong_owner` :L4 e `strong_sub` :L7; `media` = `medium_owner` :L11 e `medium_protocol` :L15; `so_nome` = `only_beta` :L18 e `only_obj` :L21. Nenhum desses usos tem aresta.
 
 ### [2026-11-08] — ENGINEERING, passos (a) a (c)
 - Tipo: implementação
