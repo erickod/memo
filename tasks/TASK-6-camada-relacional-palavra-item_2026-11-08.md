@@ -113,7 +113,7 @@ escritor: test-analyst (preenchido em TEST_ANALYSIS, depois da DEFINITION)
 - Decidido (consequência, Q3): só chamadas (`raw_ref`) e tipos (`type_text`).
 - Decidido (Q4): o `impact` por palavra é a inferência desta task.
 - Adiada (Q5): palavra ↔ palavra como relação própria; segue derivada, até a reestruturação.
-- Aberta Q6: o nível por palavra do `impact` usa só as palavras do nome do alvo ou também as do qualificado (módulo)? Menor mudança: só o nome, e o qualificado desempata se houver ambiguidade de alvo.
+- Aberta Q6 (próximo passo recomendado, ver `tasks/README.md`): o nível por palavra do `impact` usa só as palavras do nome do alvo ou também as do qualificado (módulo)? Menor mudança: só o nome, e o qualificado desempata se houver ambiguidade de alvo.
 
 ### Premissas
 - [DEFINITION] O volume de `occurrence` vai crescer; medir o custo no gerador sintético de `docs/medicoes.md`, sem bloquear o aceite.
