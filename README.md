@@ -4,6 +4,28 @@ CLI em Rust que indexa um repositório Python como grafo de palavras, símbolos 
 
 O `memo` não chama APIs de IA, não executa o código do repositório e não versiona o grafo. Ele entrega fatos; quem julga é o agente e o humano. A especificação completa está em [`Spec CLI de memória estrutural para IA.md`](Spec%20CLI%20de%20mem%C3%B3ria%20estrutural%20para%20IA.md).
 
+## Documentação
+
+- [Funcionalidades](docs/funcionalidades.md): o que o `memo` faz hoje e como cada item foi verificado.
+- [Limitações](docs/limitacoes.md): o que não faz, faz mal ou não foi verificado.
+- [Possíveis caminhos](docs/caminhos.md): ideias para depois, com o que as sustenta.
+- [Especificação](Spec%20CLI%20de%20mem%C3%B3ria%20estrutural%20para%20IA.md): o contrato completo (esquema, algoritmos, comandos).
+
+## Como a ideia nasceu
+
+Um agente de IA que trabalha num repositório grande gasta contexto explorando: lê arquivos, busca texto, adivinha o que importa. A ideia foi dar a ele uma **memória estrutural** do código: um grafo derivado do próprio repositório (símbolos, chamadas, tipos, testes) que responde "quem chama isto", "o que muda se eu alterar isto" e "o que o código já sabe sobre este pedido", com poucos caracteres e sem que o agente precise abrir arquivos. O que o código não mostra (uma decisão, uma regra, algo que foi descartado) fica em **notas curtas, escritas por humanos e ancoradas** no símbolo mais específico.
+
+A primeira versão (spec de 7 de novembro de 2026) tratava o símbolo como a unidade. Rodando o `memo` num repositório real de backend, a palavra `order`, o núcleo do domínio, foi marcada como genérica e deixou de ser âncora, e o `brief` listou ruído antes do código. Daí veio a segunda ideia: **a palavra é o conceito central, e símbolos, arquivos, chamadas, testes e imports são pontes entre palavras**. Ela mudou o modelo (palavras com origem, pontes tipadas e pesos), a decisão de esqueleto (só a lista do humano), o índice (acompanha a config) e o ranking do `brief` (quem carrega a palavra antes, hubs amortecidos). Cada passo foi medido em repositório real antes de decidido, e alguns palpites iniciais foram desmentidos pela medição (por exemplo, que filtrar palavras de função resolveria a coerência).
+
+## Intenções
+
+- **Entregar fatos, não julgar.** O `memo` não diz se uma palavra é de domínio, se o código está certo ou o que fazer; quem julga é o agente e o humano.
+- **Contexto compacto e verificável.** Saída curta, com endereços `caminho:Linicio-Lfim`, sempre com a `cobertura` (o que foi resolvido, o que é aproximado, o que não foi resolvido). Resultado vazio nunca prova ausência.
+- **Determinismo.** Mesma árvore e mesma config dão a mesma saída, byte a byte; sem IA, sem rede e sem relógio nas consultas.
+- **Estado descartável.** O grafo se reconstrói do código; as notas são o único estado próprio, em arquivos Markdown fora da árvore versionada.
+- **Honestidade sobre os limites.** O que não funciona bem está escrito em [Limitações](docs/limitacoes.md), com a evidência de onde veio.
+- **Não é** um substituto da leitura do código, um linter, um classificador de domínio nem um cliente de modelo de IA.
+
 ## Instalação
 
 Precisa de Rust estável e `git`. O SQLite vem embutido.
@@ -79,6 +101,7 @@ O `memo` trata a palavra como o conceito central. Ela nasce de nomes de símbolo
 Uma palavra só vira `esqueleto` (nunca âncora de `brief` nem de nota) se estiver na lista `skeleton` do `memo.toml`. O `memo` não decide sozinho se uma palavra é de domínio: `order`, `get` e `data` viram âncora, a menos que você as coloque na lista. Especificidade e coerência aparecem em `query word` só como informação.
 
 No `brief`, os símbolos que carregam a palavra do pedido (no nome, na docstring de teste ou num módulo que a importa) vêm primeiro, até 10, e os que só chegam por vizinhança (chamada ou tipo) vêm depois, até 5 de 15; a vizinhança é amortecida pelo número de ligações do vizinho, para um símbolo chamado por todo mundo (como um `get_events` genérico) não encabeçar a lista. Os valores 10 e 5 são iniciais e ainda não configuráveis.
+
 `memo query aliases` sugere pares que provavelmente são o mesmo conceito (`cancel`/`canceled`, ou palavras com vizinhança parecida), cada um com o `memo note add --tipo glossario ... --alias ...` pronto. Só lê; quem decide é você.
 
 ### Códigos de saída
@@ -159,7 +182,7 @@ O protocolo foi escrito sem teste contra clientes reais (Claude Code, Codex). Co
 | `context_root`, `layers` | `app/<contexto>/<camada>`: o segmento após a raiz é o contexto, e a camada é um dos `layers`. `context_root` aceita um prefixo de caminho, como `backend/easy_lease` |
 | `[bridges]` | pesos das pontes entre palavras: `symbol`, `test`, `import`, `import_external`, `call`, `file`, `context` e `approximate` (padrões 1,0 · 0,8 · 0,6 · 0,3 · 0,5 · 0,3 · 0,1 · 0,5) |
 
-Mudar o `memo.toml` não reextrai arquivos inalterados; rode `memo index --full`.
+Mudar uma chave que molda o índice (`skeleton`, `context_root`, `layers`, `verbs`, `roles`, `write_methods` e `[bridges]`) reindexa tudo no próximo comando; as demais não alteram o que o índice grava. `memo index --full` força a reextração.
 
 **Atualização de versão:** o banco do `memo` é derivado. Quando o esquema muda (`schema_version`), o primeiro comando depois da atualização descarta o banco e reindexa tudo. As notas (`.md`) não são tocadas. Do mesmo modo, mudar no `memo.toml` o `skeleton`, `context_root`, `layers`, `verbs`, `roles`, `write_methods` ou os pesos de `[bridges]` faz o próximo comando reindexar tudo (as notas não mudam); `min_specificity` e `min_coherence` não têm mais efeito.
 
@@ -192,6 +215,8 @@ cargo test
 O workspace tem quatro crates: `memo-core` (extração, grafo, consultas, notas e eventos; não depende de `clap` nem de MCP), `memo-cli` (o binário `memo`), `memo-mcp` (servidor MCP) e `memo-harness` (adaptadores do `init`). A saída de texto é verificada por golden files (`insta`), e a fixture Python fica em `tests/fixtures/`.
 
 ## Limitações conhecidas
+
+A lista completa, com a evidência de cada item, está em [docs/limitacoes.md](docs/limitacoes.md). As principais:
 
 - Só Python.
 - Nome definido mais de uma vez (`@property` com `@x.setter`, `@overload`, atributo e método com o mesmo nome, ou um módulo e uma função com o mesmo `qname`): vale a primeira definição. Mudar só o corpo de um setter não marca notas como `stale`.
