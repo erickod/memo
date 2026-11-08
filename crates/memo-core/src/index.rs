@@ -6,8 +6,9 @@ use crate::events::{Delta, EventSummary};
 use crate::extract::{FileFacts, SymbolKind, extract_python_file};
 use crate::resolve::resolve_files;
 use crate::source::{SourceFile, SourceTree};
+use crate::sources::{doc_words, import_words, path_words};
 use crate::store::SqliteStore;
-use crate::words::{NameKind, Segment, Slot, classify_name_with};
+use crate::words::{NameKind, Segment, Slot, WordOcc, classify_name_with};
 use rayon::prelude::*;
 use rusqlite::{OptionalExtension, Transaction, params};
 use std::collections::{HashMap, HashSet};
@@ -45,8 +46,13 @@ pub fn module_of(path: &str) -> String {
 /// Contexto (segmento após `app/`) e camada (`domain`, `application` ou `infra`), spec §4.
 fn context_and_layer(path: &str, config: &Config) -> (Option<String>, Option<String>) {
     let parts: Vec<&str> = path.split('/').collect();
-    let context = (parts.first() == Some(&config.context_root.as_str()) && parts.len() > 2)
-        .then(|| parts[1].to_string());
+    let root: Vec<&str> = config
+        .context_root
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    let context = (!root.is_empty() && parts.starts_with(&root) && parts.len() > root.len() + 1)
+        .then(|| parts[root.len()].to_string());
     let layer = parts
         .iter()
         .find(|p| config.layers.iter().any(|l| l == **p))
@@ -79,6 +85,7 @@ fn slot_label(slot: Slot) -> &'static str {
         Slot::Action => "action",
         Slot::Object => "object",
         Slot::Role => "role",
+        Slot::Context => "context",
     }
 }
 
@@ -117,7 +124,13 @@ fn delete_file_symbols(tx: &Transaction, file_id: i64) -> Result<(), CoreError> 
     tx.execute("DELETE FROM raw_ref WHERE file_id = ?1", [file_id])?;
     tx.execute("DELETE FROM import WHERE file_id = ?1", [file_id])?;
     tx.execute(
-        "DELETE FROM occurrence WHERE symbol_id IN (SELECT id FROM symbol WHERE file_id = ?1)",
+        "DELETE FROM occurrence WHERE symbol_id IN (SELECT id FROM symbol WHERE file_id = ?1)
+            OR (owner_kind = 'symbol' AND owner_id IN (SELECT id FROM symbol WHERE file_id = ?1))
+            OR (owner_kind = 'file' AND owner_id = ?1)",
+        [file_id],
+    )?;
+    tx.execute(
+        "DELETE FROM doc WHERE symbol_id IN (SELECT id FROM symbol WHERE file_id = ?1)",
         [file_id],
     )?;
     tx.execute("DELETE FROM symbol WHERE file_id = ?1", [file_id])?;
@@ -127,6 +140,84 @@ fn delete_file_symbols(tx: &Transaction, file_id: i64) -> Result<(), CoreError> 
 fn word_id(tx: &Transaction, text: &str) -> Result<i64, CoreError> {
     tx.execute("INSERT OR IGNORE INTO word(text) VALUES (?1)", [text])?;
     Ok(tx.query_row("SELECT id FROM word WHERE text = ?1", [text], |r| r.get(0))?)
+}
+
+struct OwnedWords<'a> {
+    owner_kind: &'a str,
+    owner_id: i64,
+    /// Preenchido só para palavras de nome, que as estatísticas e o `brief` já usam.
+    symbol_id: Option<i64>,
+    source: &'a str,
+}
+
+fn insert_owned_words(
+    tx: &Transaction,
+    owner: &OwnedWords,
+    words: &[WordOcc],
+) -> Result<(), CoreError> {
+    for (pos, occ) in words.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO occurrence(symbol_id, word_id, pos, slot, segment, owner_kind, owner_id, source)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                owner.symbol_id,
+                word_id(tx, &occ.text)?,
+                int(pos),
+                slot_label(occ.slot),
+                occ.segment.map(segment_label),
+                owner.owner_kind,
+                owner.owner_id,
+                owner.source
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// Reconstrói as palavras dos imports (dependem de quais alvos existem no repositório).
+fn rebuild_import_words(tx: &Transaction, config: &Config) -> Result<(), CoreError> {
+    tx.execute("DELETE FROM occurrence WHERE owner_kind = 'import'", [])?;
+    let mut stmt = tx.prepare("SELECT rowid, target FROM import ORDER BY rowid")?;
+    let imports: Vec<(i64, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    for (rowid, target) in imports {
+        let owner = OwnedWords {
+            owner_kind: "import",
+            owner_id: rowid,
+            symbol_id: None,
+            source: "import",
+        };
+        insert_owned_words(tx, &owner, &import_words(&target, config))?;
+    }
+    Ok(())
+}
+
+/// Reconstrói as palavras das docstrings de teste: só entram as que já existem como palavra de
+/// identificador (nome, caminho ou import), então precisa rodar depois das outras fontes.
+fn rebuild_doc_words(tx: &Transaction, config: &Config) -> Result<(), CoreError> {
+    tx.execute("DELETE FROM occurrence WHERE source = 'test_doc'", [])?;
+    let mut stmt = tx.prepare(
+        "SELECT DISTINCT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
+         WHERE o.source IN ('name', 'path', 'import')",
+    )?;
+    let known: HashSet<String> = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut stmt = tx.prepare("SELECT symbol_id, text FROM doc ORDER BY symbol_id")?;
+    let docs: Vec<(i64, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    for (symbol_id, text) in docs {
+        let owner = OwnedWords {
+            owner_kind: "symbol",
+            owner_id: symbol_id,
+            symbol_id: None,
+            source: "test_doc",
+        };
+        insert_owned_words(tx, &owner, &doc_words(&text, &known, config))?;
+    }
+    Ok(())
 }
 
 fn insert_symbols(
@@ -179,6 +270,15 @@ fn insert_symbols(
         )?;
         let symbol_id = tx.last_insert_rowid();
         ids.insert(&sym.qname, symbol_id);
+        if let Some(doc) = is_test
+            .then(|| facts.docs.iter().find(|d| d.src_qname == sym.qname))
+            .flatten()
+        {
+            tx.execute(
+                "INSERT OR REPLACE INTO doc(symbol_id, text) VALUES (?1, ?2)",
+                params![symbol_id, doc.text],
+            )?;
+        }
         let name_kind = match (sym.kind, is_test) {
             (SymbolKind::Attribute, _) => NameKind::Attribute,
             (_, true) => NameKind::Test,
@@ -416,6 +516,13 @@ fn run_index(
             ],
         )?;
         let file_id = tx.last_insert_rowid();
+        let owner = OwnedWords {
+            owner_kind: "file",
+            owner_id: file_id,
+            symbol_id: None,
+            source: "path",
+        };
+        insert_owned_words(&tx, &owner, &path_words(&p.file.path, config))?;
         if let Ok(facts) = &result {
             insert_symbols(&tx, file_id, &p.file.path, facts, config)?;
         }
@@ -426,6 +533,8 @@ fn run_index(
             to_resolve.push(id);
         }
     }
+    rebuild_import_words(&tx, config)?;
+    rebuild_doc_words(&tx, config)?;
     resolve_files(&tx, &to_resolve, &config.write_methods)?;
     crate::stats::recompute(&tx, config)?;
     let after = crate::events::snapshot(&tx)?;

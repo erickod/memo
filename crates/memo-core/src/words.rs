@@ -61,6 +61,8 @@ pub enum Slot {
     Action,
     Object,
     Role,
+    /// Segmento de contexto delimitado (o que vem depois da raiz, ex.: `orders`).
+    Context,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

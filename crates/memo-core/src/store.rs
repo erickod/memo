@@ -29,7 +29,8 @@ CREATE TABLE occurrence(
   owner_kind TEXT NOT NULL DEFAULT 'symbol',
   owner_id INTEGER NOT NULL,
   source TEXT NOT NULL DEFAULT 'name',
-  PRIMARY KEY(owner_kind, owner_id, pos));
+  PRIMARY KEY(owner_kind, owner_id, source, pos));
+CREATE TABLE doc(symbol_id INTEGER PRIMARY KEY, text TEXT NOT NULL);
 CREATE TABLE edge(
   id INTEGER PRIMARY KEY, kind TEXT NOT NULL,
   src INTEGER NOT NULL REFERENCES symbol(id), dst INTEGER REFERENCES symbol(id),
@@ -271,6 +272,26 @@ impl SqliteStore {
                 e.kind,
                 e.subject.unwrap_or_default(),
                 e.payload.unwrap_or_default()
+            );
+        }
+        let mut owned = self.conn.prepare(
+            "SELECT o.owner_kind, o.source, w.text, o.slot, COALESCE(o.segment, ''), COUNT(*)
+             FROM occurrence o JOIN word w ON w.id = o.word_id
+             WHERE o.source != 'name'
+             GROUP BY o.owner_kind, o.source, w.text, o.slot, COALESCE(o.segment, '')
+             ORDER BY o.owner_kind, o.source, w.text, o.slot, COALESCE(o.segment, '')",
+        )?;
+        let mut rows = owned.query([])?;
+        while let Some(r) = rows.next()? {
+            let _ = writeln!(
+                out,
+                "occ|{}|{}|{}|{}|{}|{}",
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, i64>(5)?,
             );
         }
         let mut stats = self.conn.prepare(

@@ -7,8 +7,8 @@ use memo_core::store::SqliteStore;
 use rusqlite::Connection;
 
 /// GIVEN the fixture indexed into a file-backed store
-/// WHEN  the occurrence rows are read
-/// THEN  every row has owner_kind 'symbol', source 'name' and owner_id equal to its symbol_id
+/// WHEN  the occurrence rows of symbol names (source 'name') are read
+/// THEN  every one has owner_kind 'symbol' and owner_id equal to its symbol_id
 #[test]
 fn test_given_symbol_word_when_stored_then_occurrence_has_owner_kind_and_name_source() {
     let repo = Repo::fixture();
@@ -18,7 +18,7 @@ fn test_given_symbol_word_when_stored_then_occurrence_has_owner_kind_and_name_so
 
     let conn = Connection::open(&db).unwrap();
     let kinds: Vec<(String, String)> = conn
-        .prepare("SELECT DISTINCT owner_kind, source FROM occurrence")
+        .prepare("SELECT DISTINCT owner_kind, source FROM occurrence WHERE source = 'name'")
         .unwrap()
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
         .unwrap()
@@ -27,7 +27,7 @@ fn test_given_symbol_word_when_stored_then_occurrence_has_owner_kind_and_name_so
     assert_eq!(kinds, vec![("symbol".to_string(), "name".to_string())]);
     let mismatched: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM occurrence WHERE owner_id != symbol_id",
+            "SELECT COUNT(*) FROM occurrence WHERE source = 'name' AND owner_id != symbol_id",
             [],
             |r| r.get(0),
         )

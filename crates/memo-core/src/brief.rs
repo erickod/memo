@@ -132,7 +132,9 @@ fn match_words(store: &SqliteStore, tokens: &[String]) -> Result<Vec<Candidate>,
     let mut stmt = store.conn.prepare(
         "SELECT w.id, w.text, COALESCE(ws.especificidade, 0), COALESCE(ws.centralidade, 0),
                 COALESCE(ws.esqueleto, 0)
-         FROM word w LEFT JOIN word_stats ws ON ws.word_id = w.id ORDER BY w.text",
+         FROM word w LEFT JOIN word_stats ws ON ws.word_id = w.id
+         WHERE EXISTS (SELECT 1 FROM occurrence o WHERE o.word_id = w.id AND o.symbol_id IS NOT NULL)
+         ORDER BY w.text",
     )?;
     let words: Vec<(i64, String, f64, bool)> = stmt
         .query_map([], |r| {
@@ -325,9 +327,9 @@ pub fn brief_with(store: &SqliteStore, request: &str, notes: &[Note]) -> Result<
 
     let mut scores: BTreeMap<i64, f64> = BTreeMap::new();
     for c in &usable {
-        let mut stmt = store
-            .conn
-            .prepare("SELECT symbol_id, slot FROM occurrence WHERE word_id = ?1")?;
+        let mut stmt = store.conn.prepare(
+            "SELECT symbol_id, slot FROM occurrence WHERE word_id = ?1 AND symbol_id IS NOT NULL",
+        )?;
         let rows = stmt.query_map([c.id], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
         })?;

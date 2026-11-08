@@ -12,6 +12,7 @@ pub mod notes;
 pub mod query;
 pub mod resolve;
 pub mod source;
+pub mod sources;
 pub mod stats;
 pub mod status;
 pub mod store;

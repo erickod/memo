@@ -87,6 +87,14 @@ pub struct FileFacts {
     pub receives: Vec<ReceiveFact>,
     pub refs: Vec<RefFact>,
     pub imports: Vec<ImportFact>,
+    /// Docstring (texto) de cada função ou método que a tem.
+    pub docs: Vec<DocFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocFact {
+    pub src_qname: String,
+    pub text: String,
 }
 
 #[derive(Debug)]
@@ -269,6 +277,15 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
                 params_sig.push(sig);
             }
         }
+    }
+    if let Some(text) = def
+        .child_by_field_name("body")
+        .and_then(|b| docstring_text(ctx, b))
+    {
+        ctx.facts.docs.push(DocFact {
+            src_qname: qname.clone(),
+            text,
+        });
     }
     let def_line = def.start_position().row + 1;
     if let Some(r) = def.child_by_field_name("return_type") {
@@ -849,4 +866,20 @@ fn collect_locals(ctx: &Ctx, node: Node, locals: &mut HashMap<String, String>) {
         }
         collect_locals(ctx, child, locals);
     }
+}
+
+/// Texto da docstring (primeira instrução do corpo, se for uma string), sem as aspas.
+fn docstring_text(ctx: &Ctx, body: Node) -> Option<String> {
+    let first = body.named_child(0)?;
+    if !is_docstring(first) {
+        return None;
+    }
+    let string = first.named_child(0)?;
+    let mut cursor = string.walk();
+    let content: Vec<&str> = string
+        .named_children(&mut cursor)
+        .filter(|n| n.kind() == "string_content")
+        .map(|n| ctx.text(n))
+        .collect();
+    Some(content.join(" "))
 }
