@@ -441,3 +441,20 @@ fn test_given_note_show_and_list_calls_when_handled_then_argv_maps_to_cli() {
     call(&server, tool_call("note_list", json!({"task": "lend-1"})));
     assert_eq!(argv(&f), strs(&["--task", "lend-1", "note", "list"]));
 }
+
+/// GIVEN a query call with 'tests: true'
+/// WHEN  it is handled
+/// THEN  the backend runs the query with '--tests' (TASK-7, D2: tests are hidden by default)
+#[test]
+fn test_given_tests_argument_when_mcp_query_called_then_tests_flag_passed() {
+    let f = fake("", false);
+    let server = Server::new(&f, None);
+    call(
+        &server,
+        tool_call(
+            "query",
+            json!({"kind": "callers", "target": "x", "tests": true}),
+        ),
+    );
+    assert_eq!(argv(&f), strs(&["--tests", "query", "callers", "--", "x"]));
+}
