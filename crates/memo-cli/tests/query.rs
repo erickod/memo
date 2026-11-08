@@ -683,3 +683,93 @@ fn test_given_get_like_fixture_when_indexed_then_spread_generic_word_is_esquelet
     let out = stdout(&memo(&repo, &["query", "word", "get"]));
     assert!(out.contains("esqueleto: sim"), "{out}");
 }
+
+/// GIVEN the fixture with min_specificity 0 and the word 'limit', used in names, a test, imports and calls
+/// WHEN  'memo query word limit' runs
+/// THEN  the golden card lists neighbors per bridge type with weights, the coherence and tagged symbols
+#[test]
+fn test_given_word_when_query_word_then_card_lists_neighbors_by_bridge_type() {
+    let out = memo(&open_repo(), &["query", "word", "limit"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN the fixture and the request 'calculate limit'
+/// WHEN  'memo brief' runs
+/// THEN  every production symbol line ends with its bridge tags in brackets, starting with 'nome'
+#[test]
+fn test_given_brief_when_run_then_symbols_show_bridge_tags() {
+    let out = stdout(&memo(&open_repo(), &["brief", "calculate limit"]));
+    let lines: Vec<&str> = out
+        .lines()
+        .skip_while(|l| *l != "símbolos:")
+        .skip(1)
+        .take_while(|l| l.starts_with("  "))
+        .collect();
+    assert!(!lines.is_empty(), "{out}");
+    for line in &lines {
+        assert!(line.ends_with(']') && line.contains(" ["), "{line}");
+    }
+    assert!(lines.iter().any(|l| l.contains("[nome")), "{out}");
+}
+
+/// GIVEN the fixture where a test calls CalculateLimitUseCase
+/// WHEN  'memo brief calculate limit' runs
+/// THEN  no 'T' line appears before the 'testes:' section, and that section is after 'escritores:'
+#[test]
+fn test_given_tests_in_results_when_brief_then_tests_listed_in_final_section() {
+    let out = stdout(&memo(&open_repo(), &["brief", "calculate limit"]));
+    let tests_at = out.lines().position(|l| l == "testes:").expect(&out);
+    let writers_at = out.lines().position(|l| l == "escritores:").expect(&out);
+    assert!(tests_at > writers_at, "{out}");
+    for (i, line) in out.lines().enumerate() {
+        let is_test_item = line.starts_with("  T ");
+        assert_eq!(
+            is_test_item,
+            i > tests_at && line.starts_with("  T "),
+            "{line}"
+        );
+        if i < tests_at {
+            assert!(!is_test_item, "{line}");
+        }
+    }
+    assert!(
+        out.lines().skip(tests_at).any(|l| l.starts_with("  T ")),
+        "{out}"
+    );
+}
+
+/// GIVEN '--max-chars 1400' where the full brief does not fit
+/// WHEN  'memo brief calculate limit' runs
+/// THEN  the tests are cut first (a 'testes omitidos' marker, production symbols all kept)
+///       and the last line is '+N omitidos' with N counting the cut tests
+#[test]
+fn test_given_small_max_chars_when_brief_then_tests_cut_first_and_omitidos_per_section() {
+    let full = stdout(&memo(&open_repo(), &["brief", "calculate limit"]));
+    let production: Vec<&str> = full
+        .lines()
+        .skip_while(|l| *l != "símbolos:")
+        .skip(1)
+        .take_while(|l| l.starts_with("  "))
+        .collect();
+    let limit = full.chars().count() - 40;
+    let out = stdout(&memo(
+        &open_repo(),
+        &[
+            "--max-chars",
+            &limit.to_string(),
+            "brief",
+            "calculate limit",
+        ],
+    ));
+    assert!(out.chars().count() <= limit, "{out}");
+    for line in &production {
+        assert!(out.contains(line), "production line lost: {line}\n{out}");
+    }
+    assert!(out.contains("testes omitidos"), "{out}");
+    let last = out.lines().last().unwrap();
+    assert!(
+        last.starts_with('+') && last.ends_with("omitidos"),
+        "{last}"
+    );
+}
