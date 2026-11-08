@@ -28,9 +28,9 @@ O que o `memo` não faz, faz mal ou não foi verificado. Cada item diz de onde v
 
 - **O "mesmo uso" é a linha do símbolo.** O extrator divide `Alpha(1).run()` em `?.run` (sem receptor) e `Alpha`; por isso a evidência `forte` olha os usos da mesma linha, e `x = Alpha(); y.run()` numa linha só também vira `forte`. (teste; decisão D14 da TASK-6)
 - **Usos de teste nunca aparecem**, com ou sem `--no-tests`; chamadas no nível do módulo não são extraídas. (teste)
-- **Nome de alvo genérico** (`run`, `get`) ainda casa muitos usos; os `só nome` só são contados, e a ordem dentro de um nível é alfabética, sem ranking por pontes.
-- **Custo não medido** depois da TASK-6 (índice completo, um arquivo alterado, tamanho do banco); a medição antes/depois foi pulada. Na primeira rodada, o índice completo subiu 28% e o banco 19% no gerador sintético.
-- Desde a TASK-6, uma palavra que só aparece em texto de uso conta como existente para a âncora `word:` de nota e para o snapshot de eventos (`notes.rs`, `events.rs` não filtram por fonte). Não foi decidido se é o desejado.
+- **Nome de alvo genérico** (`run`, `execute`) lista centenas de usos `só nome` (no `bope`, 384 para um `execute`); o nível ordena, mas dentro dele a ordem é alfabética, sem ranking por pontes.
+- **A evidência quase nunca passa de `só nome` em código com injeção de dependência**: o receptor (`self._repo.run()`) não cita a classe. No `bope`, um único `forte` em seis alvos medidos, e ele era verdadeiro.
+- **Custo:** no `bope`, índice completo de 54 s antes e depois da TASK-6 e `impact` de 50 a 80 ms por alvo; não medido no gerador sintético nem para um arquivo alterado.
 
 ## Notas
 
