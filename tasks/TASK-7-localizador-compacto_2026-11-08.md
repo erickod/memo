@@ -86,7 +86,31 @@ Todos verificados com fixtures sintéticas.
 ---
 
 ## 7. Estratégia de Testes
-escritor: test-analyst (preenchido em TEST_ANALYSIS, depois da DEFINITION)
+escritor: test-analyst
+
+**Cenários** — Happy Path: as duas ferramentas novas do MCP; testes ocultos por padrão e `--tests`; seção longa agrupada por módulo; importações em contagem; `ler:` no `symbol` e no `brief`; `Classe.attr` exato e `x.attr` aproximado; membros de Enum com e sem valor literal; `query word` composta · Error Scenarios: `note_show` com id inexistente (`isError`); `query word` sem partes conhecidas (exit 2); `--no-tests` em `query tests` segue erro de uso · Edge Cases: seção com exatamente 10 itens (sem agrupamento); `--all` com `--max-chars`; símbolo com mais de 60 linhas (janela de 20); alvo sem chamadores (`ler:` só com o alvo); atributo existente em várias classes; `x.attr` sem classe com `attr` (sem relação); Enum por `enum.Enum`; classe comum com atribuição sem anotação (não vira membro); `__init__` e `_order_`.
+
+**Achado da análise:** o extrator só cria símbolo para atributo **anotado** no corpo da classe (`extract.rs`, `class_body_attribute`). Membros de Enum (`A = "a"`) não viram símbolo hoje. A D6 exige extraí-los, e isso fica restrito a classes cuja base declarada é `Enum`, `IntEnum`, `StrEnum`, `Flag` ou `enum.<nome>`, para não mudar a contagem de símbolos do resto do repositório. O valor literal é guardado numa coluna nova (`schema_version` 6).
+
+**Rastreabilidade**
+- C1 → memo-mcp `tools_list_has_note_tools`, `note_show_returns_full_text`, `note_list_matches_cli`, `note_show_unknown_id_is_error`
+- C2 → memo-cli `default_hides_tests_in_queries`, `tests_flag_shows_tests`, `no_tests_flag_same_as_default`, `query_tests_lists_tests_without_flag`; goldens que listavam testes revistos um a um
+- C3 → memo-cli `section_over_ten_grouped_by_module`, `section_of_ten_not_grouped`, `all_flag_lists_every_item`
+- C4 → memo-cli `symbol_imports_as_module_counts`
+- C5 → memo-core `symbol_read_spots_target_and_callers`, `large_symbol_read_spot_is_window`, `symbol_without_callers_reads_only_target`
+- C6 → memo-core `brief_read_spots_first_five_production`
+- C7 → memo-mcp `instructions_recommend_reading`; memo-harness `block_recommends_reading`
+- C8 → memo-core `class_attr_read_is_exact_reader`
+- C9 → memo-core `untyped_attr_read_is_approx_reader`, `attr_in_two_classes_approx_in_both`, `unknown_attr_read_no_edge`
+- C10 → memo-core `enum_members_with_literal_values`, `enum_module_base_detected`, `plain_class_assignment_not_member`; memo-cli `symbol_shows_enum_members`
+- C11 → memo-core `composite_word_split_and_crossed`, `underscore_prefix_suffix_stripped`, `unknown_composite_not_found`; memo-cli golden `composite_word_card`
+- C12 → `same_tree_twice` existentes; `fmt`, `clippy`, `test`
+
+**Testes obsoletos pelas decisões (aval dado na aprovação única)**
+- Todo teste e golden que espera testes visíveis sem flag passa a usar `--tests` ou a esperar `N testes ocultos` (D2).
+- Testes que comparam a saída com e sem `--no-tests` passam a comparar `--tests` com o padrão (D2).
+- Goldens de `symbol` com importações listadas passam à contagem por módulo (D3).
+- O teste de schema passa a esperar `'6'`.
 
 ---
 
