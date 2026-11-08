@@ -1107,9 +1107,9 @@ fn repo_u() -> Repo {
 
 /// GIVEN fixture U
 /// WHEN  'memo query impact Alpha.run' runs
-/// THEN  golden: 'por palavra' lists strong and medium uses with '~', the line and the level, then '+2 só pelo nome'
+/// THEN  golden: 'por palavra' lists every use with '~', the line and the level, ordered by level
 #[test]
-fn test_given_name_only_uses_when_impact_text_then_only_count_line() {
+fn test_given_name_only_uses_when_impact_text_then_listed_with_label() {
     let out = memo(&repo_u(), &["query", "impact", "a.Alpha.run"]);
     assert_eq!(out.status.code(), Some(0));
     insta::assert_snapshot!(stdout(&out));
@@ -1117,25 +1117,28 @@ fn test_given_name_only_uses_when_impact_text_then_only_count_line() {
 
 /// GIVEN fixture U
 /// WHEN  impact runs with --json
-/// THEN  data.by_word has each item with its level and line, and the name-only items are listed
+/// THEN  data.by_word has each item with its level, origin and line, and the name-only items are listed in it
 #[test]
 fn test_given_name_only_uses_when_impact_json_then_listed() {
     let out = memo(&repo_u(), &["--json", "query", "impact", "a.Alpha.run"]);
     let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     let data = &json["data"];
+    assert!(data.get("by_word_name_only").is_none(), "{data}");
     let listed = data["by_word"].as_array().unwrap();
-    assert!(!listed.is_empty());
     for item in listed {
         assert!(item["line"].is_i64(), "{item}");
         assert!(
-            ["forte", "media"].contains(&item["nivel"].as_str().unwrap()),
+            ["forte", "media", "so_nome"].contains(&item["nivel"].as_str().unwrap()),
+            "{item}"
+        );
+        assert!(
+            ["uso", "tipo"].contains(&item["origem"].as_str().unwrap()),
             "{item}"
         );
     }
-    let names: Vec<&str> = data["by_word_name_only"]
-        .as_array()
-        .unwrap()
+    let names: Vec<&str> = listed
         .iter()
+        .filter(|i| i["nivel"] == "so_nome")
         .map(|i| i["addr"]["qname"].as_str().unwrap())
         .collect();
     assert_eq!(names, ["m.only_beta", "m.only_obj"]);
@@ -1166,7 +1169,7 @@ fn test_given_max_chars_when_impact_by_word_then_cut_with_omitted() {
 
 /// GIVEN fixture U plus tests/test_m.py with a helper calling 'Alpha(1).run()'
 /// WHEN  impact runs with and without --no-tests
-/// THEN  the test use is never listed in 'por palavra' nor counted as name only
+/// THEN  the test use is never listed in 'por palavra'
 #[test]
 fn test_given_use_in_test_file_when_impact_then_never_listed() {
     let repo = Repo::empty();
@@ -1181,7 +1184,7 @@ fn test_given_use_in_test_file_when_impact_then_never_listed() {
         let mut args = flags.to_vec();
         args.extend(["--json", "query", "impact", "a.Alpha.run"]);
         let json: serde_json::Value = serde_json::from_str(&stdout(&memo(&repo, &args))).unwrap();
-        for key in ["by_word", "by_word_name_only"] {
+        for key in ["by_word"] {
             let paths: Vec<&str> = json["data"][key]
                 .as_array()
                 .unwrap()
