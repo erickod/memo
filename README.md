@@ -49,7 +49,8 @@ memo query writers <Classe.atributo>         # quem escreve o atributo
 memo query readers <Classe.atributo>         # quem lê o atributo
 memo query type <Tipo>                       # quem produz e quem consome o tipo
 memo query tests <símbolo>                   # testes que o chamam (exato) ou se sobrepõem por palavras (~)
-memo query word <palavra>                    # verbos, papéis, camadas, símbolos e vizinhas
+memo query word <palavra>                    # a ficha do conceito (ver abaixo)
+memo query aliases                           # sugestões de sinônimos, somente leitura
 ```
 
 `<símbolo>` aceita o `qname` completo ou um sufixo único (`CalculateLimitUseCase.execute`). Sufixo ambíguo lista as candidatas e sai com exit 2.
@@ -63,10 +64,21 @@ memo query word <palavra>                    # verbos, papéis, camadas, símbol
 | `--json` | saída JSON: `{"schema":1,"cmd":...,"data":...,"cobertura":...}` |
 | `--no-index` | não reindexa antes de responder |
 | `--limit <n>` | limita os itens listados |
+| `--no-tests` | esconde os testes da saída (as estatísticas continuam contando tudo); a `cobertura` diz `N testes ocultos` |
 | `--max-chars <n>` | teto de caracteres (padrão 6000); o corte termina com `+N omitidos` |
 | `--since-last` / `--full` | só o que é novo desde a última chamada (`brief` e `query impact`) / tudo |
 
 Com `--task`, a segunda chamada de `brief` ou `query impact` devolve só o que mudou, mais a linha `inalterados: N`.
+
+### A palavra como conceito
+
+O `memo` trata a palavra como o conceito central. Ela nasce de nomes de símbolos, de diretórios, de imports (nome e caminho do módulo) e das docstrings de testes (só palavras que já existem em algum identificador; `GIVEN`, `WHEN` e `THEN` marcam o trecho). Duas palavras se ligam por *pontes*: o mesmo símbolo, um teste e o símbolo que ele chama de forma exata, um import, uma chamada, o mesmo arquivo ou o mesmo contexto.
+
+`memo query word <palavra>` devolve a ficha: estatísticas (inclui `coer=`, a coerência da vizinhança), verbos, papéis e camadas, as vizinhas por tipo de ponte com os pesos, e os símbolos com as pontes que os trazem (`[nome, teste, import]`). O `memo brief` usa a mesma vizinhança só para ranquear: cada símbolo mostra por que entrou, a produção vem primeiro e os testes ficam numa seção `testes:` ao final.
+
+Uma palavra frequente só vira `esqueleto` (nunca âncora) se for pouco específica **e** pouco coerente. `order`, que aparece sempre ao lado das mesmas palavras, continua sendo conceito. `get` e `data`, ligadas a tudo, viram esqueleto.
+
+`memo query aliases` sugere pares que provavelmente são o mesmo conceito (`cancel`/`canceled`, ou palavras com vizinhança parecida), cada um com o `memo note add --tipo glossario ... --alias ...` pronto. Só lê; quem decide é você.
 
 ### Códigos de saída
 
@@ -142,9 +154,13 @@ O protocolo foi escrito sem teste contra clientes reais (Claude Code, Codex). Co
 | `min_specificity` | abaixo disto a palavra também vira `esqueleto` (padrão 0,35; calibre no seu repositório) |
 | `write_methods` | métodos de escrita externa (`save`, `publish`, ...) |
 | `stale_on` | o que torna uma nota `stale`: `"sig"`, `"body"` ou os dois |
-| `context_root`, `layers` | `app/<contexto>/<camada>`: o segmento após a raiz é o contexto, e a camada é um dos `layers` |
+| `min_coherence` | abaixo disto (e com especificidade baixa) a palavra vira `esqueleto` (padrão 0,30) |
+| `context_root`, `layers` | `app/<contexto>/<camada>`: o segmento após a raiz é o contexto, e a camada é um dos `layers`. `context_root` aceita um prefixo de caminho, como `backend/easy_lease` |
+| `[bridges]` | pesos das pontes entre palavras: `symbol`, `test`, `import`, `import_external`, `call`, `file`, `context` e `approximate` (padrões 1,0 · 0,8 · 0,6 · 0,3 · 0,5 · 0,3 · 0,1 · 0,5) |
 
 Mudar o `memo.toml` não reextrai arquivos inalterados; rode `memo index --full`.
+
+**Atualização de versão:** o banco do `memo` é derivado. Quando o esquema muda (`schema_version`), o primeiro comando depois da atualização descarta o banco e reindexa tudo. As notas (`.md`) não são tocadas.
 
 Variáveis de ambiente: `MEMO_TASK` (equivale a `--task`) e `MEMO_LOCK_TIMEOUT_MS` (espera pelo lock do banco, padrão 30000).
 
@@ -181,5 +197,8 @@ O workspace tem quatro crates: `memo-core` (extração, grafo, consultas, notas 
 - Âncoras secundárias de uma nota não geram `stale` nem `orfa`.
 - Escrita em variável de módulo ou `global` ainda não gera a aresta `ESCREVE`.
 - O limiar `min_specificity` precisa de calibração num repositório real; em repositórios pequenos, até palavras do domínio caem em `esqueleto`.
-- Indexação completa de 5.000 arquivos levou cerca de 46 s numa medição sintética (meta: 60 s).
+- Desempenho em repositório grande: a indexação completa de 5.000 arquivos levou cerca de 46 s numa medição sintética anterior à ficha do conceito (meta: 60 s). Depois dela, num repositório sintético de 5.000 arquivos, `brief` e `query word` ficaram lentos (minutos, contra a meta de 500 ms) e a indexação completa não foi remedida. A correção está planejada, mas ainda não foi feita.
 - Os formatos de `.mcp.json` e `.codex/config.toml` vieram da documentação por busca resumida; confira com o seu cliente.
+- Docstrings e comentários de produção ainda não geram palavras (só as de testes).
+- O relatório de aliases por vizinhança sugere pares sem sentido em repositórios pequenos; use-o como lista para revisar.
+- Em palavras com 10 vizinhas ou menos a coerência é 1,0, então só a lista `skeleton` as marca como esqueleto.
