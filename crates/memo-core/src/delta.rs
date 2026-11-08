@@ -83,6 +83,16 @@ pub fn apply_impact_delta(
     )?;
     impact.protocol = protocol;
     omitted += n;
+    let (by_word, n) = filter_new(
+        store,
+        task,
+        "impact",
+        std::mem::take(&mut impact.by_word),
+        |i| format!("{target}|W|{}", rel(i)),
+        full,
+    )?;
+    impact.by_word = by_word;
+    omitted += n;
     let (exact, n) = filter_new(
         store,
         task,
