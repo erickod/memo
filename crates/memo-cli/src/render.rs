@@ -19,13 +19,8 @@ fn coverage_line(c: &Coverage) -> String {
     } else {
         String::new()
     };
-    let by_word = if c.nao_resolvidas > 0 {
-        format!(" ({} por palavra)", c.nao_resolvidas_por_palavra)
-    } else {
-        String::new()
-    };
     format!(
-        "cobertura: {} resolvidas, {} aprox, {} não resolvidas{by_word}, {} arquivos com erro{notes}{hidden}",
+        "cobertura: {} resolvidas, {} aprox, {} não resolvidas, {} arquivos com erro{notes}{hidden}",
         c.resolvidas, c.aproximadas, c.nao_resolvidas, c.arquivos_com_erro
     )
 }

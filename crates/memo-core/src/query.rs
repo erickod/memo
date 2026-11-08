@@ -94,8 +94,6 @@ pub struct Coverage {
     pub resolvidas: i64,
     pub aproximadas: i64,
     pub nao_resolvidas: i64,
-    /// Das não resolvidas, as que o `impact` ainda alcança por palavra (camada relacional).
-    pub nao_resolvidas_por_palavra: i64,
     pub arquivos_com_erro: i64,
     /// Itens de teste escondidos pela flag `--no-tests` (preenchido pelo CLI).
     pub testes_ocultos: i64,
@@ -288,11 +286,6 @@ pub fn coverage(store: &SqliteStore) -> Result<Coverage, CoreError> {
         resolvidas: count("SELECT COUNT(*) FROM edge WHERE dst IS NOT NULL AND approx = 0")?,
         aproximadas: count("SELECT COUNT(*) FROM edge WHERE approx = 1")?,
         nao_resolvidas: count("SELECT COUNT(*) FROM raw_ref WHERE resolved = 0")?,
-        nao_resolvidas_por_palavra: count(
-            "SELECT COUNT(*) FROM raw_ref r WHERE r.resolved = 0 AND EXISTS (
-               SELECT 1 FROM occurrence o
-               WHERE o.owner_kind = 'ref' AND o.owner_id = r.id AND o.source = 'ref')",
-        )?,
         arquivos_com_erro: count("SELECT COUNT(*) FROM file WHERE parse_error IS NOT NULL")?,
         notas_com_erro: 0,
         testes_ocultos: 0,
