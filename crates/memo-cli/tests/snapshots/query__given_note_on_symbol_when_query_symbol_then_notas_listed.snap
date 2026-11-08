@@ -16,4 +16,7 @@ arestas:
   CHAMA <- CheckoutUseCase.execute :L9
 notas:
   n-4qipqdn2 regra confirmada  CalculateLimitUseCase.execute: Limite é inteiro.
+ler:
+  app/billing/application/usecases/calculate_limit_usecase.py:L8-L13 — alvo
+  app/billing/application/usecases/checkout_usecase.py:L8-L9 — chama o alvo em :L9
 cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro, 1 testes ocultos
