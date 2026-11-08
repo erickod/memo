@@ -76,7 +76,7 @@ O `memo` trata a palavra como o conceito central. Ela nasce de nomes de símbolo
 
 `memo query word <palavra>` devolve a ficha: estatísticas (inclui `coer=`, a coerência da vizinhança), verbos, papéis e camadas, as vizinhas por tipo de ponte com os pesos, e os símbolos com as pontes que os trazem (`[nome, teste, import]`). O `memo brief` usa a mesma vizinhança só para ranquear: cada símbolo mostra por que entrou, a produção vem primeiro e os testes ficam numa seção `testes:` ao final.
 
-Uma palavra frequente só vira `esqueleto` (nunca âncora) se for pouco específica **e** pouco coerente. `order`, que aparece sempre ao lado das mesmas palavras, continua sendo conceito. `get` e `data`, ligadas a tudo, viram esqueleto.
+Uma palavra só vira `esqueleto` (nunca âncora de `brief` nem de nota) se estiver na lista `skeleton` do `memo.toml`. O `memo` não decide sozinho se uma palavra é de domínio: `order`, `get` e `data` viram âncora, a menos que você as coloque na lista. Especificidade e coerência aparecem em `query word` só como informação.
 
 `memo query aliases` sugere pares que provavelmente são o mesmo conceito (`cancel`/`canceled`, ou palavras com vizinhança parecida), cada um com o `memo note add --tipo glossario ... --alias ...` pronto. Só lê; quem decide é você.
 
@@ -151,10 +151,10 @@ O protocolo foi escrito sem teste contra clientes reais (Claude Code, Codex). Co
 | `main_branch` | branch principal (padrão: `origin/HEAD`, depois `main`, depois `master`) |
 | `roles`, `verbs` | vocabulário que classifica as palavras de um nome em papel e ação |
 | `skeleton` | palavras genéricas, que nunca são âncora de `brief` nem de nota |
-| `min_specificity` | abaixo disto a palavra também vira `esqueleto` (padrão 0,35; calibre no seu repositório) |
+| `min_specificity` | aceito por compatibilidade, sem efeito: não decide mais o `esqueleto` (padrão 0,35) |
 | `write_methods` | métodos de escrita externa (`save`, `publish`, ...) |
 | `stale_on` | o que torna uma nota `stale`: `"sig"`, `"body"` ou os dois |
-| `min_coherence` | abaixo disto (e com especificidade baixa) a palavra vira `esqueleto` (padrão 0,30) |
+| `min_coherence` | aceito por compatibilidade, sem efeito: não decide mais o `esqueleto` (padrão 0,30) |
 | `context_root`, `layers` | `app/<contexto>/<camada>`: o segmento após a raiz é o contexto, e a camada é um dos `layers`. `context_root` aceita um prefixo de caminho, como `backend/easy_lease` |
 | `[bridges]` | pesos das pontes entre palavras: `symbol`, `test`, `import`, `import_external`, `call`, `file`, `context` e `approximate` (padrões 1,0 · 0,8 · 0,6 · 0,3 · 0,5 · 0,3 · 0,1 · 0,5) |
 
@@ -196,9 +196,9 @@ O workspace tem quatro crates: `memo-core` (extração, grafo, consultas, notas 
 - Nome definido mais de uma vez (`@property` com `@x.setter`, `@overload`, atributo e método com o mesmo nome, ou um módulo e uma função com o mesmo `qname`): vale a primeira definição. Mudar só o corpo de um setter não marca notas como `stale`.
 - Âncoras secundárias de uma nota não geram `stale` nem `orfa`.
 - Escrita em variável de módulo ou `global` ainda não gera a aresta `ESCREVE`.
-- O limiar `min_specificity` precisa de calibração num repositório real; em repositórios pequenos, até palavras do domínio caem em `esqueleto`.
+- Sem a regra automática, palavras de infraestrutura fora da lista `skeleton` (`is`, `id`, `usecase`) também viram âncora e podem trazer ruído ao `brief`; ajuste a lista no seu repositório.
 - Desempenho em repositório grande: num repositório sintético de 5.000 arquivos, a indexação completa levou cerca de 43 s, a reindexação sem mudança 0,04 s e o `brief` 0,36 s. `query word` leva cerca de 1 s e chega a 2 s em palavras que aparecem em quase todo arquivo.
 - Os formatos de `.mcp.json` e `.codex/config.toml` vieram da documentação por busca resumida; confira com o seu cliente.
 - Docstrings e comentários de produção ainda não geram palavras (só as de testes).
 - O relatório de aliases por vizinhança sugere pares sem sentido em repositórios pequenos; use-o como lista para revisar.
-- Em palavras com 10 vizinhas ou menos a coerência é 1,0, então só a lista `skeleton` as marca como esqueleto.
+- Em palavras com 10 vizinhas ou menos a coerência é 1,0; ela é só informativa.

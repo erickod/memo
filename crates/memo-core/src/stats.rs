@@ -128,9 +128,7 @@ pub fn recompute(tx: &Transaction, config: &Config) -> Result<(), CoreError> {
         .collect();
     let central = pagerank(&nodes, &weights);
 
-    // Vizinhas "não esqueleto" (D20) = fora da lista `skeleton`. O status final depende da
-    // própria coerência, então só a lista explícita pode excluir vizinhas sem circularidade;
-    // excluir também as de IDF baixo apagaria os aglomerados de conceito (`order` com `placed`).
+    // Vizinhas "não esqueleto" (D20) = fora da lista `skeleton`, a única que decide o esqueleto.
     let weak: &HashSet<i64> = &skeleton;
     let neighborhoods = core_neighborhoods(tx, &config.bridges)?;
     let coherence_of = |word: &i64| -> f64 {
@@ -153,8 +151,8 @@ pub fn recompute(tx: &Transaction, config: &Config) -> Result<(), CoreError> {
             1.0
         };
         let coerencia = coherence_of(word);
-        let is_skeleton = skeleton.contains(word)
-            || (especificidade < config.min_specificity && coerencia < config.min_coherence);
+        // D2 (TASK-3): só a lista `skeleton` decide; especificidade e coerência são informativas.
+        let is_skeleton = skeleton.contains(word);
         tx.execute(
             "INSERT INTO word_stats(word_id, uso, alcance, grau, idf, especificidade, centralidade, esqueleto, coerencia)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",

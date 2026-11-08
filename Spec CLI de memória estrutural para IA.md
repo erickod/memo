@@ -194,7 +194,7 @@ Após cada indexação, recalcular `word_stats` com SQL e uma iteração de Page
 - `idf` = `ln(N_símbolos / (1 + símbolos_com_a_palavra))`, e `especificidade` = `idf` normalizado em 0 a 1;
 - `centralidade` = PageRank (amortecimento 0,85, 20 iterações) no grafo de co-ocorrência por símbolo, sem palavras `skeleton`;
 - `coerencia` = peso das 10 vizinhas mais fortes (peso decrescente, nome crescente) dividido pelo peso total das pontes da palavra, de 0 a 1; vizinhas da lista `skeleton` não contam; sem vizinhas, 0;
-- `esqueleto = 1` se a palavra está em `skeleton`, ou se tem `especificidade` abaixo de `min_specificity` (valor inicial 0,35) **e** `coerencia` abaixo de `min_coherence` (valor inicial 0,30). Valores a calibrar no repo real. Palavra frequente e coerente (um conceito, como `order` com `placed`, `canceled`) não é esqueleto; palavra frequente ligada a tudo (`get`, `data`) é.
+- `esqueleto = 1` se, e somente se, a palavra está na lista `skeleton` (decisão explícita do humano; TASK-3, D2). `especificidade` e `coerencia` ficam gravadas e aparecem em `query word`, só como informação: não decidem esqueleto, e `min_specificity` e `min_coherence` seguem aceitas no `memo.toml` sem efeito. O `memo` não decide sozinho se uma palavra é de domínio.
 
 **Pontes entre palavras** (derivadas, sem tabela): símbolo (mesmo nome) 1,0 · teste e símbolo testado, só por chamada exata 0,8 · import 0,6 (externo 0,3) · chamada 0,5 · mesmo arquivo 0,3 · mesmo contexto 0,1; ponte aproximada (`~`) vale metade. Pesos em `[bridges]` do `memo.toml`. As pontes de arquivo e contexto só são calculadas por palavra (na ficha); a coerência usa símbolo, teste, import e chamada.
 
@@ -491,7 +491,7 @@ Criar um repositório Python em `tests/fixtures/` que siga o layout `app/<contex
 | A4 | `self._repo.save()` com `_repo` anotado como Protocol resolve para o método do Protocol (exata) e liga implementações com `~` | 2 |
 | A5 | `callers` e `impact` incluem consumidores tipados só pelo Protocol e declaram `cobertura` | 2 |
 | A6 | `writers Invoice.status` lista os dois casos de uso da fixture | 2 |
-| A7 | `brief` é determinístico (mesma entrada, mesma saída byte a byte) e palavras `esqueleto` nunca viram âncora | 3 |
+| A7 | `brief` é determinístico (mesma entrada, mesma saída byte a byte) e palavras da lista `skeleton` nunca viram âncora | 3 |
 | A8 | Saída respeita `--max-chars` e termina com `+N omitidos` quando corta | 3 |
 | A9 | Renomear função sem mudar o corpo: `SYMBOL_RENAMED`, nota reancorada, sem `stale` | 4 |
 | A10 | Mudar a assinatura: nota vira `stale`; `note recheck` a restaura | 4 |

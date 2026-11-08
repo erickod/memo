@@ -48,8 +48,9 @@ pub struct Config {
     pub skeleton: Vec<String>,
     pub write_methods: Vec<String>,
     pub entrypoint_decorators: Vec<String>,
+    /// Aceito por compatibilidade: não decide mais o `esqueleto` (TASK-3, D4).
     pub min_specificity: f64,
-    /// Abaixo disto (e com IDF baixo) a palavra vira `esqueleto` (D9, D20).
+    /// Aceito por compatibilidade: não decide mais o `esqueleto` (TASK-3, D4).
     pub min_coherence: f64,
     pub stale_on: Vec<String>,
     /// Segmento da raiz do contexto: o que vem depois dele é o `context`.
