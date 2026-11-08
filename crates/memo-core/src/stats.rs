@@ -151,3 +151,9 @@ pub fn recompute(tx: &Transaction, config: &Config) -> Result<(), CoreError> {
     }
     Ok(())
 }
+
+/// Coerência de uma palavra: peso das 10 vizinhas mais fortes sobre o peso total (D20).
+/// Ordem estável: peso decrescente, nome crescente.
+pub fn coherence(_neighbors: &[(String, f64)]) -> f64 {
+    todo!("etapa 4")
+}

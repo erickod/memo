@@ -599,6 +599,7 @@ pub struct WordStats {
     pub idf: f64,
     pub especificidade: f64,
     pub centralidade: f64,
+    pub coerencia: f64,
     pub esqueleto: bool,
 }
 
@@ -618,6 +619,7 @@ pub fn word_stats(store: &SqliteStore, word: &str) -> Result<Option<WordStats>, 
                     idf: r.get(3)?,
                     especificidade: r.get(4)?,
                     centralidade: r.get(5)?,
+                    coerencia: 0.0,
                     esqueleto: r.get::<_, i64>(6)? != 0,
                 })
             },

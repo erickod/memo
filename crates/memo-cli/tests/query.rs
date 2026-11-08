@@ -632,3 +632,54 @@ fn test_given_corrupted_note_file_when_queried_then_skipped_and_counted_in_cober
     let json: serde_json::Value = serde_json::from_str(&stdout(&o)).unwrap();
     assert_eq!(json["cobertura"]["notas_com_erro"], 1);
 }
+
+fn token(i: usize) -> String {
+    format!(
+        "w{}{}",
+        (b'a' + (i / 26) as u8) as char,
+        (b'a' + (i % 26) as u8) as char
+    )
+}
+
+fn write_modules(repo: &Repo, dir: &str, count: usize, defs: impl Fn(usize) -> Vec<String>) {
+    for i in 0..count {
+        let body: String = defs(i)
+            .iter()
+            .map(|d| format!("def {d}():\n    return 1\n\n"))
+            .collect();
+        repo.write(&format!("app/{dir}/m{}.py", token(i)), &body);
+    }
+    repo.commit_all();
+}
+
+/// GIVEN 'order' used in 40 modules next to the same four words, skeleton list empty
+/// WHEN  'memo query word order' runs
+/// THEN  the output has no 'esqueleto: sim' line (frequent but coherent)
+#[test]
+fn test_given_order_like_fixture_when_indexed_then_frequent_coherent_word_not_esqueleto() {
+    let repo = Repo::fixture();
+    repo.write(".git/memo/memo.toml", "skeleton = []\n");
+    write_modules(&repo, "o", 40, |_| {
+        ["placed", "canceled", "confirmed", "failed"]
+            .iter()
+            .map(|s| format!("order_{s}"))
+            .collect()
+    });
+    let out = stdout(&memo(&repo, &["query", "word", "order"]));
+    assert!(
+        out.contains("stats: uso=") && !out.contains("esqueleto: sim"),
+        "{out}"
+    );
+}
+
+/// GIVEN 'get' used in 50 modules, each next to a different word, skeleton list empty
+/// WHEN  'memo query word get' runs
+/// THEN  the output has the line 'esqueleto: sim' (frequent and incoherent)
+#[test]
+fn test_given_get_like_fixture_when_indexed_then_spread_generic_word_is_esqueleto() {
+    let repo = Repo::fixture();
+    repo.write(".git/memo/memo.toml", "skeleton = []\n");
+    write_modules(&repo, "g", 50, |i| vec![format!("get_{}", token(i + 200))]);
+    let out = stdout(&memo(&repo, &["query", "word", "get"]));
+    assert!(out.contains("esqueleto: sim"), "{out}");
+}

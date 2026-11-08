@@ -49,6 +49,8 @@ pub struct Config {
     pub write_methods: Vec<String>,
     pub entrypoint_decorators: Vec<String>,
     pub min_specificity: f64,
+    /// Abaixo disto (e com IDF baixo) a palavra vira `esqueleto` (D9, D20).
+    pub min_coherence: f64,
     pub stale_on: Vec<String>,
     /// Segmento da raiz do contexto: o que vem depois dele é o `context`.
     pub context_root: String,
@@ -70,6 +72,7 @@ impl Default for Config {
             write_methods: own(WRITE_METHODS),
             entrypoint_decorators: Vec::new(),
             min_specificity: 0.35,
+            min_coherence: 0.0,
             stale_on: own(&["sig", "body"]),
             context_root: "app".to_string(),
             layers: own(&["domain", "application", "infra"]),
