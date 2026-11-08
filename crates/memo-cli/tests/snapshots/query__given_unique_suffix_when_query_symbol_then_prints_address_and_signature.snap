@@ -15,4 +15,7 @@ arestas:
   RETORNA -> int :L8
   CHAMA <- CheckoutUseCase.execute :L9
 notas: nenhuma
+ler:
+  app/billing/application/usecases/calculate_limit_usecase.py:L8-L13 — alvo
+  app/billing/application/usecases/checkout_usecase.py:L8-L9 — chama o alvo em :L9
 cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro, 1 testes ocultos
