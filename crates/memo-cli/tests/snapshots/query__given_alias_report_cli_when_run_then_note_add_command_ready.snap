@@ -1,0 +1,18 @@
+---
+source: crates/memo-cli/tests/query.rs
+expression: stdout(&out)
+---
+aliases  idx=ok
+  cancel ~ canceled  prefixo 0.75
+    memo note add --tipo glossario --ancora word:cancel --origem humano --alias canceled "cancel e canceled são o mesmo conceito."
+  cancel ~ cancelled  prefixo 0.67
+    memo note add --tipo glossario --ancora word:cancel --origem humano --alias cancelled "cancel e cancelled são o mesmo conceito."
+  canceled ~ cancelled  prefixo 0.67
+    memo note add --tipo glossario --ancora word:canceled --origem humano --alias cancelled "canceled e cancelled são o mesmo conceito."
+  anticipate ~ cancel  vizinhança 0.80
+    memo note add --tipo glossario --ancora word:anticipate --origem humano --alias cancel "anticipate e cancel são o mesmo conceito."
+  charge ~ test  vizinhança 0.75
+    memo note add --tipo glossario --ancora word:charge --origem humano --alias test "charge e test são o mesmo conceito."
+  checkout ~ test  vizinhança 0.62
+    memo note add --tipo glossario --ancora word:checkout --origem humano --alias test "checkout e test são o mesmo conceito."
+cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro

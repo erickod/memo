@@ -5,6 +5,7 @@ mod serve;
 mod workspace;
 
 use clap::{Parser, Subcommand};
+use memo_core::aliases::suggest as suggest_aliases;
 use memo_core::brief::{apply_delta, brief_weighted};
 use memo_core::delta::apply_impact_delta;
 use memo_core::error::CoreError;
@@ -161,6 +162,8 @@ enum Query {
     Readers { attr: String },
     /// Quem produz e quem consome o tipo.
     Type { target: String },
+    /// Pares de palavras que provavelmente são o mesmo conceito (somente leitura).
+    Aliases,
     /// Quem chama o símbolo.
     Callers {
         target: String,
@@ -454,6 +457,18 @@ fn run(cli: &Cli) -> Result<String, Failure> {
                 "query tests",
                 json_value(&tests)?,
                 render::tests_text(&addr, &tests, "ok", &cov, max, limit),
+            )
+        }
+        Query::Aliases => {
+            let glossary = notes_dir.visible(cli.task.as_deref())?;
+            let mut pairs = suggest_aliases(&store, &config.bridges, &glossary)?;
+            if let Some(n) = limit {
+                pairs.truncate(n);
+            }
+            (
+                "query aliases",
+                json_value(&pairs)?,
+                render::aliases_text(&pairs, "ok", &cov),
             )
         }
         Query::Type { target } => {

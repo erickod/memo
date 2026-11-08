@@ -585,6 +585,27 @@ pub fn word_text(
     fit(&head, &items, &[coverage_line(cov)], max_chars, limit)
 }
 
+/// Relatório de aliases: cada par com o motivo e o `memo note add` pronto para copiar.
+pub fn aliases_text(pairs: &[memo_core::aliases::AliasPair], idx: &str, cov: &Coverage) -> String {
+    let mut out = format!("aliases  idx={idx}\n");
+    if pairs.is_empty() {
+        out.push_str("  nenhum par sugerido\n");
+    }
+    for p in pairs {
+        out.push_str(&format!(
+            "  {} ~ {}  {} {:.2}\n",
+            p.first, p.second, p.reason, p.similarity
+        ));
+        out.push_str(&format!(
+            "    memo note add --tipo glossario --ancora word:{} --origem humano --alias {} \"{} e {} são o mesmo conceito.\"\n",
+            p.first, p.second, p.first, p.second
+        ));
+    }
+    out.push_str(&coverage_line(cov));
+    out.push('\n');
+    out
+}
+
 pub fn ambiguous_text(target: &str, candidates: &[String]) -> String {
     let mut out = format!("ambíguo: {target}\ncandidatas:\n");
     for c in candidates {
