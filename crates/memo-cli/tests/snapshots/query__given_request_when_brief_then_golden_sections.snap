@@ -5,13 +5,13 @@ expression: stdout(&out)
 brief "calculate limit"  idx=ok
 âncoras: calculate(1.00) limit(0.62)
 símbolos:
-  mod calculate_limit_usecase   app/billing/application/usecases/calculate_limit_usecase.py:L1-L14 [nome, import]
   C CalculateLimitUseCase   app/billing/application/usecases/calculate_limit_usecase.py:L4-L13 [nome, teste]
   A CheckoutUseCase._calculate   app/billing/application/usecases/checkout_usecase.py:L6-L6 [nome]
-  mod limit_repository   app/billing/domain/protocols/limit_repository.py:L1-L6 [nome]
   C LimitRepository   app/billing/domain/protocols/limit_repository.py:L4-L5 [nome]
-  mod limit_repository   app/billing/infra/repositories/limit_repository.py:L1-L4 [nome]
   C SqlLimitRepository   app/billing/infra/repositories/limit_repository.py:L1-L3 [nome, teste]
+  mod calculate_limit_usecase   app/billing/application/usecases/calculate_limit_usecase.py:L1-L14 [nome, import]
+  mod limit_repository   app/billing/domain/protocols/limit_repository.py:L1-L6 [nome]
+  mod limit_repository   app/billing/infra/repositories/limit_repository.py:L1-L4 [nome]
   mod checkout_usecase   app/billing/application/usecases/checkout_usecase.py:L1-L10 [import]
   mod charge_usecase   app/collections/application/usecases/charge_usecase.py:L1-L7 [import]
   M CheckoutUseCase.__init__   app/billing/application/usecases/checkout_usecase.py:L5-L6 [tipo]
@@ -19,16 +19,16 @@ símbolos:
   M ChargeUseCase.execute   app/collections/application/usecases/charge_usecase.py:L5-L6 [chamada, tipo]
   M CalculateLimitUseCase.execute   app/billing/application/usecases/calculate_limit_usecase.py:L8-L13 [vizinho]
 contorno:
-  nenhum
+  SqlLimitRepository <- ChargeUseCase.execute :L6
 padrão(calculate): verbos - · papéis usecase · camadas application
 escritores:
   CalculateLimitUseCase._repo <- CalculateLimitUseCase.__init__
   CheckoutUseCase._calculate <- CheckoutUseCase.__init__
 notas: nenhuma
 ler:
-  app/billing/application/usecases/calculate_limit_usecase.py:L1-L14 — carrega calculate, limit
   app/billing/application/usecases/calculate_limit_usecase.py:L4-L13 — carrega calculate, limit
   app/billing/application/usecases/checkout_usecase.py:L6-L6 — carrega calculate
-  app/billing/domain/protocols/limit_repository.py:L1-L6 — carrega limit
   app/billing/domain/protocols/limit_repository.py:L4-L5 — carrega limit
-cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro, 3 testes ocultos
+  app/billing/infra/repositories/limit_repository.py:L1-L3 — carrega limit
+  app/collections/application/usecases/charge_usecase.py:L1-L7 — vizinho
+cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro, 4 testes ocultos

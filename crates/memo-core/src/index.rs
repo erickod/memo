@@ -119,6 +119,10 @@ fn load_files(store: &SqliteStore) -> Result<HashMap<String, StoredFile>, CoreEr
 
 fn delete_file_symbols(tx: &Transaction, file_id: i64) -> Result<(), CoreError> {
     tx.execute(
+        "DELETE FROM read_region WHERE symbol_id IN (SELECT id FROM symbol WHERE file_id = ?1)",
+        [file_id],
+    )?;
+    tx.execute(
         "DELETE FROM edge WHERE src IN (SELECT id FROM symbol WHERE file_id = ?1)
             OR dst IN (SELECT id FROM symbol WHERE file_id = ?1)",
         [file_id],
@@ -316,6 +320,14 @@ fn insert_symbols(
                     slot_label(occ.slot),
                     occ.segment.map(segment_label)
                 ],
+            )?;
+        }
+    }
+    for region in &facts.regions {
+        if let Some(id) = ids.get(region.src_qname.as_str()) {
+            tx.execute(
+                "INSERT INTO read_region(symbol_id,start,end) VALUES (?1,?2,?3)",
+                params![id, int(region.start), int(region.end)],
             )?;
         }
     }

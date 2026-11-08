@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use std::fmt::Write;
 use std::path::Path;
 
-const SCHEMA_VERSION: &str = "6";
+const SCHEMA_VERSION: &str = "7";
 
 /// Fontes de palavra que formam o vocabulário (TASK-6, D16): as de uso (`ref`, `type`) ficam fora
 /// das âncoras de nota e dos eventos de palavra.
@@ -35,6 +35,8 @@ CREATE TABLE occurrence(
   source TEXT NOT NULL DEFAULT 'name',
   PRIMARY KEY(owner_kind, owner_id, source, pos));
 CREATE TABLE doc(symbol_id INTEGER PRIMARY KEY, text TEXT NOT NULL);
+CREATE TABLE read_region(symbol_id INTEGER NOT NULL REFERENCES symbol(id), start INTEGER, end INTEGER);
+CREATE INDEX read_region_symbol ON read_region(symbol_id, start, end);
 CREATE TABLE edge(
   id INTEGER PRIMARY KEY, kind TEXT NOT NULL,
   src INTEGER NOT NULL REFERENCES symbol(id), dst INTEGER REFERENCES symbol(id),
@@ -75,6 +77,18 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
+    /// Open a compatible graph without initialization, rebuilding or any writes.
+    pub fn open_read_only(path: &Path) -> Result<Self, CoreError> {
+        let store = Self {
+            conn: Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?,
+        };
+        if store.get_meta("schema_version")?.as_deref() != Some(SCHEMA_VERSION) {
+            return Err(CoreError::Config(
+                "incompatible base graph; rebuild the base index".into(),
+            ));
+        }
+        Ok(store)
+    }
     pub fn open(path: &Path) -> Result<Self, CoreError> {
         Self::init(Connection::open(path)?)
     }

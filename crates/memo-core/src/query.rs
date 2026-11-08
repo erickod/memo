@@ -91,20 +91,48 @@ pub(crate) fn read_spot(addr: &SymbolAddr, focus: Option<i64>, motivo: String) -
     }
 }
 
+/// Complete intersected statements when the resulting spot stays within forty lines.
+pub(crate) fn structural_read_spot(
+    store: &SqliteStore,
+    addr: &SymbolAddr,
+    focus: Option<i64>,
+    motivo: String,
+) -> Result<ReadSpot, CoreError> {
+    let mut spot = read_spot(addr, focus, motivo);
+    if addr.line_end - addr.line_start < READ_FULL_MAX {
+        return Ok(spot);
+    }
+    let regions = store.conn.prepare(
+        "SELECT r.start,r.end FROM read_region r JOIN symbol s ON s.id=r.symbol_id WHERE s.qname=?1 ORDER BY r.start,r.end DESC"
+    )?.query_map([&addr.qname], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?)))?.collect::<Result<Vec<_>,_>>()?;
+    for (start, end) in regions {
+        if start > spot.end || end < spot.start {
+            continue;
+        }
+        let from = spot.start.min(start).max(addr.line_start);
+        let to = spot.end.max(end).min(addr.line_end);
+        if to - from < READ_WINDOW * 2 {
+            spot.start = from;
+            spot.end = to;
+        }
+    }
+    Ok(spot)
+}
+
 /// `ler:` do `symbol`: o alvo e até 4 chamadores exatos d1 de produção, na ordem dos chamadores.
 fn symbol_read_spots(
     store: &SqliteStore,
     qname: &str,
     addr: &SymbolAddr,
 ) -> Result<Vec<ReadSpot>, CoreError> {
-    let mut spots = vec![read_spot(addr, None, "alvo".to_string())];
+    let mut spots = vec![structural_read_spot(store, addr, None, "alvo".to_string())?];
     for item in callers(store, qname, 1)?.items.iter().filter(|i| !i.approx) {
         if let (Some(caller), Some(line)) = (&item.addr, item.line) {
             if caller.in_tests() {
                 continue;
             }
             let motivo = format!("chama o alvo em :L{line}");
-            spots.push(read_spot(caller, Some(line), motivo));
+            spots.push(structural_read_spot(store, caller, Some(line), motivo)?);
             if spots.len() > READ_CALLERS {
                 break;
             }
@@ -342,7 +370,33 @@ fn related(store: &SqliteStore, qname: &str, edge_kind: &str) -> Result<Vec<RelI
             attr: r.get(8)?,
         })
     })?;
-    Ok(rows.collect::<Result<_, _>>()?)
+    let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+    rank_relations(&mut items, &addr_of(store, qname)?);
+    Ok(items)
+}
+
+/// Confidence precedes structural proximity; names and lines make ties reproducible.
+fn proximity(target: &SymbolAddr, other: &SymbolAddr) -> usize {
+    if target.path == other.path {
+        return usize::MAX;
+    }
+    let target_dir = target.path.rsplit_once('/').map_or("", |(d, _)| d);
+    let other_dir = other.path.rsplit_once('/').map_or("", |(d, _)| d);
+    target_dir
+        .split('/')
+        .zip(other_dir.split('/'))
+        .take_while(|(a, b)| !a.is_empty() && a == b)
+        .count()
+}
+
+fn rank_relations(items: &mut [RelItem], target: &SymbolAddr) {
+    items.sort_by(|a, b| {
+        a.approx
+            .cmp(&b.approx)
+            .then_with(|| proximity(target, &b.addr).cmp(&proximity(target, &a.addr)))
+            .then_with(|| a.addr.qname.cmp(&b.addr.qname))
+            .then_with(|| a.line.cmp(&b.line))
+    });
 }
 
 /// Símbolos que escrevem o atributo (`ESCREVE`).
@@ -696,7 +750,7 @@ fn walk_calls(
     let sql = format!(
         "SELECT {ADDR_COLUMNS}, e.line, e.approx, s.id FROM edge e
          JOIN symbol s ON s.id = e.{far} LEFT JOIN file f ON f.id = s.file_id
-         WHERE e.{near} = ?1 AND e.kind IN {CALL_KINDS} ORDER BY s.qname, e.line"
+         WHERE e.{near} = ?1 AND e.kind IN {CALL_KINDS} ORDER BY e.approx, s.qname, e.line"
     );
     let mut stmt = store.conn.prepare(&sql)?;
     let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::from([start]);
@@ -704,7 +758,8 @@ fn walk_calls(
     let mut items = Vec::new();
     for level in 1..=depth {
         let mut level_seen = std::collections::HashSet::new();
-        let mut next: Vec<(i64, bool)> = Vec::new();
+        let mut next = BTreeMap::<i64, bool>::new();
+        frontier.sort_by_key(|(_, approx)| *approx);
         for (node, path_approx) in &frontier {
             let rows = stmt.query_map([node], |r| {
                 Ok((
@@ -727,9 +782,10 @@ fn walk_calls(
                     line,
                     approx,
                 });
-                if level_seen.insert(id) {
-                    next.push((id, approx));
-                }
+                level_seen.insert(id);
+                next.entry(id)
+                    .and_modify(|a| *a &= approx)
+                    .or_insert(approx);
             }
             if !up && level == 1 {
                 let mut ext = store.conn.prepare(
@@ -752,8 +808,27 @@ fn walk_calls(
             }
         }
         seen.extend(level_seen);
-        frontier = next;
+        frontier = next.into_iter().collect();
     }
+    let target = addr_by_id(store, start)?;
+    items.sort_by(|a, b| {
+        a.depth
+            .cmp(&b.depth)
+            .then_with(|| (a.addr.is_none(), a.approx).cmp(&(b.addr.is_none(), b.approx)))
+            .then_with(|| {
+                let pa = a.addr.as_ref().map_or(0, |s| proximity(&target, s));
+                let pb = b.addr.as_ref().map_or(0, |s| proximity(&target, s));
+                pb.cmp(&pa)
+            })
+            .then_with(|| {
+                a.addr
+                    .as_ref()
+                    .map(|s| &s.qname)
+                    .cmp(&b.addr.as_ref().map(|s| &s.qname))
+            })
+            .then_with(|| a.ext.cmp(&b.ext))
+            .then_with(|| a.line.cmp(&b.line))
+    });
     Ok(items)
 }
 
@@ -835,6 +910,17 @@ pub fn tests_for(store: &SqliteStore, target: &str) -> Result<TestsInfo, CoreErr
             });
         }
     }
+    let target = addr_by_id(store, id)?;
+    rank_relations(&mut info.exact, &target);
+    // Calls inferred from a receiver remain stronger than a lexical overlap with no line.
+    info.approx.sort_by(|a, b| {
+        a.line
+            .is_none()
+            .cmp(&b.line.is_none())
+            .then_with(|| proximity(&target, &b.addr).cmp(&proximity(&target, &a.addr)))
+            .then_with(|| a.addr.qname.cmp(&b.addr.qname))
+            .then_with(|| a.line.cmp(&b.line))
+    });
     Ok(info)
 }
 
@@ -853,7 +939,7 @@ fn protocol_counterparts(store: &SqliteStore, id: i64) -> Result<Vec<RelItem>, C
              OR (e.dst = me.parent_id AND (SELECT is_protocol FROM symbol WHERE id = me.parent_id) = 1))
          ORDER BY s.qname"
     );
-    let rows = store
+    let mut rows: Vec<RelItem> = store
         .conn
         .prepare(&sql)?
         .query_map([id], |r| {
@@ -865,6 +951,7 @@ fn protocol_counterparts(store: &SqliteStore, id: i64) -> Result<Vec<RelItem>, C
             })
         })?
         .collect::<Result<_, _>>()?;
+    rank_relations(&mut rows, &addr_by_id(store, id)?);
     Ok(rows)
 }
 
@@ -1218,13 +1305,18 @@ fn by_word(
         }
     }
     let mut items: Vec<ByWordItem> = best.into_values().collect();
+    let target = addr_by_id(store, id)?;
     items.sort_by(|a, b| {
-        (a.nivel, &a.item.addr.qname, a.item.line, a.origem).cmp(&(
-            b.nivel,
-            &b.item.addr.qname,
-            b.item.line,
-            b.origem,
-        ))
+        a.nivel
+            .cmp(&b.nivel)
+            .then_with(|| proximity(&target, &b.item.addr).cmp(&proximity(&target, &a.item.addr)))
+            .then_with(|| {
+                (&a.item.addr.qname, a.item.line, a.origem).cmp(&(
+                    &b.item.addr.qname,
+                    b.item.line,
+                    b.origem,
+                ))
+            })
     });
     Ok(items)
 }

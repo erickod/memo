@@ -102,7 +102,7 @@ fn test_given_resolved_and_unresolved_calls_when_indexed_then_both_emit_words() 
         (
             "m.py",
             "from a import Alpha, Beta\n\ndef helper():\n    pass\n\n\
-             def one():\n    helper()\n\ndef two():\n    Alpha(1).run()\n",
+             def one():\n    helper()\n\ndef two(thing):\n    thing.run(Alpha(1))\n",
         ),
     ]);
     assert!(i.count("SELECT COUNT(*) FROM raw_ref WHERE resolved = 0") > 0);
@@ -250,7 +250,7 @@ fn by_word_names(files: &[(&str, &str)], target: &str) -> (Vec<String>, Vec<Stri
     )
 }
 
-/// GIVEN 'run' defined in two classes and called through a chained instantiation (no edge)
+/// GIVEN 'run' defined in two classes and called on an unknown receiver with Alpha as argument
 /// WHEN  impact runs on 'a.Alpha.run'
 /// THEN  the caller appears in the by-word level as strong, approximate; code without the word does not
 #[test]
@@ -259,7 +259,7 @@ fn test_given_unresolved_call_when_impact_then_by_word_lists_caller() {
     repo.write("a.py", TWO_RUNNERS);
     repo.write(
         "m.py",
-        "from a import Alpha, Beta\n\ndef go():\n    Alpha(1).run()\n",
+        "from a import Alpha, Beta\n\ndef go(thing):\n    thing.run(Alpha(1))\n",
     );
     let mut store = SqliteStore::open_in_memory().unwrap();
     index(&WorkTree::new(repo.path()), &mut store).unwrap();
@@ -276,7 +276,7 @@ fn test_given_unresolved_call_when_impact_then_by_word_lists_caller() {
             ("a.py", TWO_RUNNERS),
             (
                 "m.py",
-                "from a import Alpha, Beta\n\ndef go():\n    Alpha(1).run()\n\n\
+                "from a import Alpha, Beta\n\ndef go(thing):\n    thing.run(Alpha(1))\n\n\
                  def typed(x: Alpha):\n    return x\n",
             ),
         ],

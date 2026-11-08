@@ -21,6 +21,7 @@ pub mod sources;
 pub mod stats;
 pub mod status;
 pub mod store;
+pub mod structural;
 pub mod tags;
 pub mod task;
 pub mod words;

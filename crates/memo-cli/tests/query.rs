@@ -1160,7 +1160,7 @@ fn test_given_name_only_uses_when_impact_json_then_listed() {
 fn test_given_max_chars_when_impact_by_word_then_cut_with_omitted() {
     let repo = repo_u();
     let full = stdout(&memo(&repo, &["query", "impact", "a.Alpha.run"]));
-    let limit = full.find("forte\n").expect("a strong line") + 1;
+    let limit = full.find("média\n").expect("an approximate by-word line") + 1;
     let out = stdout(&memo(
         &repo,
         &[

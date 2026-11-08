@@ -6,7 +6,7 @@ mod workspace;
 
 use clap::{Parser, Subcommand};
 use memo_core::aliases::suggest as suggest_aliases;
-use memo_core::brief::{apply_delta, brief_weighted};
+use memo_core::brief::{apply_delta, brief_with_changes};
 use memo_core::delta::apply_impact_delta;
 use memo_core::error::CoreError;
 use memo_core::hide;
@@ -202,9 +202,10 @@ impl From<CoreError> for Failure {
             CoreError::Config(_) => Failure::Usage(e.to_string()),
             CoreError::Validation { .. } => Failure::Validation(e.to_string()),
             CoreError::Note(_) | CoreError::Locked(_) => Failure::Index(e.to_string()),
-            CoreError::NotFound(_) | CoreError::Ambiguous { .. } => {
-                Failure::NotFound(e.to_string())
+            CoreError::Ambiguous { target, candidates } => {
+                Failure::NotFound(render::ambiguous_text(&target, &candidates))
             }
+            CoreError::NotFound(_) => Failure::NotFound(e.to_string()),
             CoreError::Store(_) | CoreError::Source(_) => Failure::Index(e.to_string()),
             CoreError::Io(_) => Failure::Internal(e.to_string()),
         }
@@ -320,6 +321,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         store,
         memo_dir,
         report,
+        changed,
         _lock,
     } = workspace::open_indexed(cli, &opts)?;
     let notes_dir = NoteDir::new(&memo_dir.join("notes"));
@@ -347,7 +349,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         Cmd::Note { cmd } => return run_note(cli, cmd, &store, &notes_dir, &cov),
         Cmd::Brief { request } => {
             let visible = notes_dir.visible(cli.task.as_deref())?;
-            let mut b = brief_weighted(&store, request, &visible, &config.bridges)?;
+            let mut b = brief_with_changes(&store, request, &visible, &config.bridges, &changed)?;
             if let Some(task) = &delta_task {
                 apply_delta(&store, task, &mut b, cli.full)?;
             }
