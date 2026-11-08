@@ -1,15 +1,21 @@
 //! `brief`: âncoras, símbolos, contorno, padrão, escritores e notas para um pedido (spec §8.5).
 
+use crate::config::BridgeWeights;
 use crate::delta::filter_new;
 use crate::error::CoreError;
+use crate::index::is_test_file;
 use crate::notes::{Note, notes_for};
 use crate::query::{SymbolAddr, addr_by_id, short_name, word_info};
 use crate::store::SqliteStore;
+use crate::tags::bridge_tags;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
 const MAX_ANCHORS: usize = 5;
 const MAX_SYMBOLS: usize = 15;
+const MAX_TEST_SYMBOLS: usize = 5;
+/// Peso de um sinal fraco (import) frente ao nome, igual ao bônus do slot `role`.
+const WEAK_SIGNAL: f64 = 0.2;
 const OUTLINE_SYMBOLS: usize = 5;
 const MIN_PREFIX: usize = 5;
 const HOP_FACTOR: f64 = 0.5;
@@ -37,6 +43,10 @@ pub struct Anchor {
 pub struct ScoredSymbol {
     pub addr: SymbolAddr,
     pub score: f64,
+    /// Pontes que trouxeram o símbolo (`nome`, `docstring`, `teste`, `chamada`, `tipo`, `import`).
+    pub tags: Vec<String>,
+    /// Teste, ou símbolo de um arquivo de teste (como o módulo): vai para a seção de testes.
+    pub in_tests: bool,
 }
 
 /// Uma linha do contorno: arestas de chamada de um símbolo listado.
@@ -73,6 +83,11 @@ pub struct Brief {
     pub notes: Vec<String>,
     /// Itens omitidos por já terem sido entregues nesta task (spec §8.4).
     pub unchanged: Option<usize>,
+}
+
+/// Teste ou símbolo de arquivo de teste.
+fn in_tests(addr: &SymbolAddr) -> bool {
+    addr.is_test || is_test_file(&addr.path)
 }
 
 fn strip_accent(c: char) -> char {
@@ -194,9 +209,10 @@ fn neighbors(store: &SqliteStore, id: i64) -> Result<Vec<i64>, CoreError> {
 
 fn outline_for(store: &SqliteStore, id: i64) -> Result<Vec<String>, CoreError> {
     let mut links = Vec::new();
+    let mut test_callers = 0usize;
     for (arrow, near, far) in [("->", "src", "dst"), ("<-", "dst", "src")] {
         let sql = format!(
-            "SELECT o.qname, COALESCE(f.path, ''), e.line, e.approx FROM edge e
+            "SELECT o.qname, COALESCE(f.path, ''), e.line, e.approx, o.is_test FROM edge e
              JOIN symbol o ON o.id = e.{far} LEFT JOIN file f ON f.id = o.file_id
              WHERE e.{near} = ?1 AND e.kind IN ('CHAMA', 'CRIA') ORDER BY o.qname, e.line"
         );
@@ -207,10 +223,15 @@ fn outline_for(store: &SqliteStore, id: i64) -> Result<Vec<String>, CoreError> {
                 r.get::<_, String>(1)?,
                 r.get::<_, Option<i64>>(2)?,
                 r.get::<_, i64>(3)? != 0,
+                r.get::<_, i64>(4)? != 0,
             ))
         })?;
         for row in rows {
-            let (qname, path, line, approx) = row?;
+            let (qname, path, line, approx, is_test) = row?;
+            if is_test {
+                test_callers += 1;
+                continue;
+            }
             let approx = if approx { " ~" } else { "" };
             let line = line.map(|l| format!(" :L{l}")).unwrap_or_default();
             links.push(format!(
@@ -218,6 +239,9 @@ fn outline_for(store: &SqliteStore, id: i64) -> Result<Vec<String>, CoreError> {
                 short_name(&qname, &path)
             ));
         }
+    }
+    if test_callers > 0 {
+        links.push(format!("<- +{test_callers} testes"));
     }
     Ok(links)
 }
@@ -297,6 +321,16 @@ pub fn brief(store: &SqliteStore, request: &str) -> Result<Brief, CoreError> {
 /// `brief` com as notas visíveis: o alias de nota `glossario` casa tokens e as notas dos nós
 /// listados entram na seção `notas`.
 pub fn brief_with(store: &SqliteStore, request: &str, notes: &[Note]) -> Result<Brief, CoreError> {
+    brief_weighted(store, request, notes, &BridgeWeights::default())
+}
+
+/// Como `brief_with`, com os pesos de ponte do repositório (`[bridges]` do `memo.toml`).
+pub fn brief_weighted(
+    store: &SqliteStore,
+    request: &str,
+    notes: &[Note],
+    weights: &BridgeWeights,
+) -> Result<Brief, CoreError> {
     let tokens = expand_aliases(tokenize(request), notes);
     let matched = match_words(store, &tokens)?;
     let mut ignored: Vec<String> = Vec::new();
@@ -338,6 +372,35 @@ pub fn brief_with(store: &SqliteStore, request: &str, notes: &[Note]) -> Result<
             *scores.entry(symbol).or_insert(0.0) += normalized(c.weight) * slot_bonus(&slot);
         }
     }
+    for c in &usable {
+        let share = normalized(c.weight);
+        // Docstring de teste com a âncora: o teste sobe pelo peso da ponte de teste.
+        let docs: Vec<i64> = store
+            .conn
+            .prepare(
+                "SELECT owner_id FROM occurrence
+                 WHERE word_id = ?1 AND owner_kind = 'symbol' AND source = 'test_doc'",
+            )?
+            .query_map([c.id], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        for symbol in docs {
+            *scores.entry(symbol).or_insert(0.0) += share * weights.test;
+        }
+        // Módulo cujo arquivo importa a âncora: sinal fraco, pelo peso da ponte de import.
+        let modules: Vec<i64> = store
+            .conn
+            .prepare(
+                "SELECT DISTINCT s.id FROM occurrence o
+                 JOIN import i ON o.owner_kind = 'import' AND o.owner_id = i.rowid
+                 JOIN symbol s ON s.file_id = i.file_id AND s.kind = 'module'
+                 WHERE o.word_id = ?1 ORDER BY s.id",
+            )?
+            .query_map([c.id], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        for symbol in modules {
+            *scores.entry(symbol).or_insert(0.0) += share * weights.import * WEAK_SIGNAL;
+        }
+    }
     let direct = scores.clone();
     for (&id, &score) in &direct {
         for n in neighbors(store, id)? {
@@ -349,10 +412,18 @@ pub fn brief_with(store: &SqliteStore, request: &str, notes: &[Note]) -> Result<
         .map(|(id, s)| addr_by_id(store, id).map(|a| (id, s, a)))
         .collect::<Result<_, _>>()?;
     ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.2.qname.cmp(&b.2.qname)));
-    ranked.truncate(MAX_SYMBOLS);
+    // Produção primeiro: os testes não disputam as vagas do código (D7), têm as suas.
+    let (tests, production): (Vec<_>, Vec<_>) = ranked.into_iter().partition(|r| in_tests(&r.2));
+    let mut ranked: Vec<(i64, f64, SymbolAddr)> =
+        production.into_iter().take(MAX_SYMBOLS).collect();
+    ranked.extend(tests.into_iter().take(MAX_TEST_SYMBOLS));
 
     let mut outline = Vec::new();
-    for (id, _, addr) in ranked.iter().take(OUTLINE_SYMBOLS) {
+    for (id, _, addr) in ranked
+        .iter()
+        .filter(|r| !in_tests(&r.2))
+        .take(OUTLINE_SYMBOLS)
+    {
         let links = outline_for(store, *id)?;
         if !links.is_empty() {
             outline.push(Outline {
@@ -365,7 +436,7 @@ pub fn brief_with(store: &SqliteStore, request: &str, notes: &[Note]) -> Result<
     let ranked_addrs: Vec<SymbolAddr> = ranked.iter().map(|(_, _, a)| a.clone()).collect();
     let pattern = match anchors.first() {
         Some(a) => {
-            let info = word_info(store, &a.word)?;
+            let info = word_info(store, &a.word, weights)?;
             Some(Pattern {
                 word: a.word.clone(),
                 verbs: info.verbs,
@@ -375,16 +446,28 @@ pub fn brief_with(store: &SqliteStore, request: &str, notes: &[Note]) -> Result<
         }
         None => None,
     };
+    let anchor_ids: Vec<i64> = usable.iter().map(|c| c.id).collect();
+    let mut tagged = Vec::with_capacity(ranked.len());
+    for (id, score, addr) in ranked {
+        let tags = bridge_tags(&store.conn, id, &anchor_ids)?
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let in_tests = in_tests(&addr);
+        tagged.push(ScoredSymbol {
+            addr,
+            score,
+            tags,
+            in_tests,
+        });
+    }
     let notes_lines = related_notes(notes, &ranked_addrs, &anchors);
     Ok(Brief {
         request: request.to_string(),
         anchors,
         ignored,
         writers: writers_of_touched(store, &ids)?,
-        symbols: ranked
-            .into_iter()
-            .map(|(_, score, addr)| ScoredSymbol { addr, score })
-            .collect(),
+        symbols: tagged,
         outline,
         pattern,
         notes: notes_lines,

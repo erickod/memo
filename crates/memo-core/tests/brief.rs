@@ -73,7 +73,8 @@ fn test_given_skeleton_word_when_brief_then_ignored_and_never_anchor() {
 
 /// GIVEN eight request words that exist in the fixture
 /// WHEN  brief runs
-/// THEN  there are exactly 5 anchors, ordered by descending score, and at most 15 symbols
+/// THEN  there are exactly 5 anchors, ordered by descending score, at most 15 production symbols and 5 tests,
+///       each group ordered by descending score
 #[test]
 fn test_given_many_words_when_brief_then_five_anchors_and_fifteen_symbols_at_most() {
     let (_r, store) = open(OPEN);
@@ -84,8 +85,18 @@ fn test_given_many_words_when_brief_then_five_anchors_and_fifteen_symbols_at_mos
     .unwrap();
     assert_eq!(b.anchors.len(), 5);
     assert!(b.anchors.windows(2).all(|w| w[0].score >= w[1].score));
-    assert!(!b.symbols.is_empty() && b.symbols.len() <= 15);
-    assert!(b.symbols.windows(2).all(|w| w[0].score >= w[1].score));
+    let production = b.symbols.iter().filter(|s| !s.in_tests).count();
+    let tests = b.symbols.len() - production;
+    assert!(production > 0 && production <= 15 && tests <= 5);
+    for group in [false, true] {
+        let scores: Vec<f64> = b
+            .symbols
+            .iter()
+            .filter(|s| s.in_tests == group)
+            .map(|s| s.score)
+            .collect();
+        assert!(scores.windows(2).all(|w| w[0] >= w[1]), "{scores:?}");
+    }
 }
 
 /// GIVEN the fixture where two use cases write Invoice.status

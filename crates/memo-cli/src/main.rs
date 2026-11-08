@@ -5,7 +5,7 @@ mod serve;
 mod workspace;
 
 use clap::{Parser, Subcommand};
-use memo_core::brief::{apply_delta, brief_with};
+use memo_core::brief::{apply_delta, brief_weighted};
 use memo_core::delta::apply_impact_delta;
 use memo_core::error::CoreError;
 use memo_core::notes::{NewNote, NoteDir, format_utc, notes_for};
@@ -287,6 +287,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         _ => {}
     }
     let workspace::Opened {
+        config,
         store,
         memo_dir,
         report,
@@ -317,7 +318,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         Cmd::Note { cmd } => return run_note(cli, cmd, &store, &notes_dir, &cov),
         Cmd::Brief { request } => {
             let visible = notes_dir.visible(cli.task.as_deref())?;
-            let mut b = brief_with(&store, request, &visible)?;
+            let mut b = brief_weighted(&store, request, &visible, &config.bridges)?;
             if let Some(task) = &delta_task {
                 apply_delta(&store, task, &mut b, cli.full)?;
             }
@@ -345,7 +346,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             Err(e) => return Err(e.into()),
         },
         Query::Word { word } => {
-            let info = word_info(&store, word)?;
+            let info = word_info(&store, word, &config.bridges)?;
             (
                 "query word",
                 json_value(&info)?,

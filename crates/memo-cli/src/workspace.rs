@@ -121,6 +121,7 @@ pub struct IndexOpts {
 }
 
 pub struct Opened {
+    pub config: Config,
     pub store: SqliteStore,
     pub memo_dir: PathBuf,
     pub report: Option<IndexReport>,
@@ -177,6 +178,7 @@ pub fn open_indexed(cli: &Cli, opts: &IndexOpts) -> Result<Opened, Failure> {
         })
     };
     Ok(Opened {
+        config: env.config,
         store,
         memo_dir: env.memo_dir,
         report,

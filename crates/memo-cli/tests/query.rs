@@ -79,15 +79,15 @@ fn test_given_json_flag_when_query_symbol_then_schema_1_envelope() {
     );
 }
 
-/// GIVEN the fixture repository and '--max-chars 600'
+/// GIVEN the fixture repository and '--max-chars 1100'
 /// WHEN  'memo query word limit' runs
-/// THEN  stdout has at most 600 chars and its last line starts with '+' and ends with 'omitidos'
+/// THEN  stdout has at most 1100 chars and its last line starts with '+' and ends with 'omitidos'
 #[test]
 fn test_given_small_max_chars_when_query_word_then_last_line_omitidos() {
     let repo = Repo::fixture();
-    let out = memo(&repo, &["--max-chars", "600", "query", "word", "limit"]);
+    let out = memo(&repo, &["--max-chars", "1100", "query", "word", "limit"]);
     let text = stdout(&out);
-    assert!(text.chars().count() <= 600, "{text}");
+    assert!(text.chars().count() <= 1100, "{text}");
     let last = text.lines().last().unwrap();
     assert!(
         last.starts_with('+') && last.ends_with("omitidos"),

@@ -43,6 +43,36 @@ fn item(addr: &SymbolAddr) -> String {
     )
 }
 
+/// Vizinhas por tipo de ponte, as 8 mais pesadas de cada tipo.
+fn bridge_lines(bridges: &[memo_core::bridges::Bridge]) -> Vec<String> {
+    use memo_core::bridges::BridgeKind::{Call, Context, File, Import, Symbol, Test};
+    let mut lines = vec!["vizinhas por ponte:".to_string()];
+    for kind in [Symbol, Test, Import, Call, File, Context] {
+        let top: Vec<String> = bridges
+            .iter()
+            .filter(|b| b.kind == kind)
+            .take(8)
+            .map(|b| format!("{}({:.1})", b.other, b.weight))
+            .collect();
+        if !top.is_empty() {
+            lines.push(format!("  {:<8}: {}", kind.as_str(), top.join(" ")));
+        }
+    }
+    if lines.len() == 1 {
+        lines.push("  nenhuma".to_string());
+    }
+    lines
+}
+
+fn tagged_item(addr: &SymbolAddr, tags: &[String]) -> String {
+    let tags = if tags.is_empty() {
+        "vizinho".to_string()
+    } else {
+        tags.join(", ")
+    };
+    format!("{} [{tags}]", item(addr))
+}
+
 fn list_line(label: &str, values: &[String]) -> String {
     if values.is_empty() {
         format!("{label}: nenhum")
@@ -89,6 +119,50 @@ fn edge_line(e: &EdgeView) -> String {
     let line = e.line.map(|l| format!(" :L{l}")).unwrap_or_default();
     let other = if e.other.is_empty() { "?" } else { &e.other };
     format!("  {} {arrow} {other}{attr}{approx}{line}", e.kind)
+}
+
+/// Monta o `brief` com a seção de testes ao final. Sob `--max-chars` os testes são cortados
+/// primeiro; o `+N omitidos` final soma o que foi cortado em cada seção.
+fn fit_brief(
+    head: &[String],
+    main: &[String],
+    tests: &[String],
+    tail: &[String],
+    max_chars: usize,
+    limit: Option<usize>,
+) -> String {
+    let render = |kept_main: usize, kept_tests: usize| {
+        let mut lines: Vec<String> = head.to_vec();
+        lines.extend(main[..kept_main].iter().cloned());
+        if !tests.is_empty() {
+            lines.push("testes:".to_string());
+            lines.extend(tests[..kept_tests].iter().cloned());
+            if kept_tests < tests.len() {
+                lines.push(format!("  +{} testes omitidos", tests.len() - kept_tests));
+            }
+        }
+        lines.extend(tail.iter().cloned());
+        let omitted = (main.len() - kept_main) + (tests.len() - kept_tests);
+        if omitted > 0 {
+            lines.push(format!("+{omitted} omitidos"));
+        }
+        let mut text = lines.join("\n");
+        text.push('\n');
+        text
+    };
+    let mut kept_main = limit.map_or(main.len(), |l| l.min(main.len()));
+    let mut kept_tests = tests.len();
+    loop {
+        let text = render(kept_main, kept_tests);
+        if text.chars().count() <= max_chars || (kept_main == 0 && kept_tests == 0) {
+            return text;
+        }
+        if kept_tests > 0 {
+            kept_tests -= 1;
+        } else {
+            kept_main -= 1;
+        }
+    }
 }
 
 pub fn symbol_text(
@@ -411,7 +485,12 @@ pub fn brief_text(
         anchors_line(b),
     ];
     let mut items = Vec::new();
-    let symbols = b.symbols.iter().map(|s| item(&s.addr)).collect();
+    let symbols = b
+        .symbols
+        .iter()
+        .filter(|s| !s.in_tests)
+        .map(|s| tagged_item(&s.addr, &s.tags))
+        .collect();
     section("símbolos", symbols, &mut items);
     let outline = b
         .outline
@@ -443,7 +522,13 @@ pub fn brief_text(
     };
     tail.extend(unchanged_line(b.unchanged));
     tail.push(coverage_line(cov));
-    fit(&head, &items, &tail, max_chars, limit)
+    let tests: Vec<String> = b
+        .symbols
+        .iter()
+        .filter(|s| s.in_tests)
+        .map(|s| tagged_item(&s.addr, &s.tags))
+        .collect();
+    fit_brief(&head, &items, &tests, &tail, max_chars, limit)
 }
 
 pub fn word_text(
@@ -456,8 +541,8 @@ pub fn word_text(
     let mut head = vec![format!("word {}  idx={idx}", info.word)];
     if let Some(st) = &info.stats {
         head.push(format!(
-            "stats: uso={} alcance={} grau={} espec={:.2} central={:.3}",
-            st.uso, st.alcance, st.grau, st.especificidade, st.centralidade
+            "stats: uso={} alcance={} grau={} espec={:.2} central={:.3} coer={:.2}",
+            st.uso, st.alcance, st.grau, st.especificidade, st.centralidade, st.coerencia
         ));
         if st.esqueleto {
             head.push("esqueleto: sim (nunca âncora)".to_string());
@@ -467,8 +552,8 @@ pub fn word_text(
         list_line("verbos", &info.verbs),
         list_line("papéis", &info.roles),
         list_line("camadas", &info.layers),
-        list_line("vizinhas", &info.neighbors),
     ]);
+    head.extend(bridge_lines(&info.bridges));
     if !info.ignored.is_empty() {
         head.push(list_line("ignoradas", &info.ignored));
     }
@@ -476,7 +561,11 @@ pub fn word_text(
     if info.symbols.is_empty() {
         head.push("  nenhum".to_string());
     }
-    let items: Vec<String> = info.symbols.iter().map(item).collect();
+    let items: Vec<String> = info
+        .symbols
+        .iter()
+        .map(|s| tagged_item(&s.addr, &s.tags))
+        .collect();
     fit(&head, &items, &[coverage_line(cov)], max_chars, limit)
 }
 

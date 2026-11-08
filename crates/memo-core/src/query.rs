@@ -28,14 +28,24 @@ pub struct SymbolInfo {
     pub notes: Vec<crate::notes::Note>,
 }
 
+/// Símbolo com as pontes que o ligam à palavra consultada.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaggedSymbol {
+    #[serde(flatten)]
+    pub addr: SymbolAddr,
+    pub tags: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WordInfo {
     pub word: String,
     pub verbs: Vec<String>,
     pub roles: Vec<String>,
     pub layers: Vec<String>,
-    pub symbols: Vec<SymbolAddr>,
+    pub symbols: Vec<TaggedSymbol>,
     pub neighbors: Vec<String>,
+    /// Vizinhas da palavra por tipo de ponte (a ficha do conceito).
+    pub bridges: Vec<crate::bridges::Bridge>,
     /// Palavras vizinhas marcadas `esqueleto`, fora de verbos, papéis e vizinhas.
     pub ignored: Vec<String>,
     pub stats: Option<WordStats>,
@@ -263,7 +273,59 @@ pub fn coverage(store: &SqliteStore) -> Result<Coverage, CoreError> {
     })
 }
 
-pub fn word_info(store: &SqliteStore, word: &str) -> Result<WordInfo, CoreError> {
+/// Símbolos da ficha: os que têm a palavra no nome e os que as outras pontes trazem (docstring de
+/// teste com a palavra, símbolo testado por teste com ela e módulo cujo arquivo a importa).
+fn tagged_symbols(
+    store: &SqliteStore,
+    word_id: i64,
+    by_name: Vec<SymbolAddr>,
+) -> Result<Vec<TaggedSymbol>, CoreError> {
+    let mut ids: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+    let extra = [
+        "SELECT owner_id FROM occurrence WHERE word_id = ?1 AND owner_kind = 'symbol' AND source = 'test_doc'",
+        "SELECT e.dst FROM edge e JOIN symbol t ON t.id = e.src
+         JOIN occurrence o ON o.owner_kind = 'symbol' AND o.owner_id = t.id AND o.source IN ('name', 'test_doc')
+         WHERE o.word_id = ?1 AND t.is_test = 1 AND e.kind IN ('CHAMA', 'CRIA') AND e.approx = 0 AND e.dst IS NOT NULL",
+        "SELECT s.id FROM occurrence o JOIN import i ON o.owner_kind = 'import' AND o.owner_id = i.rowid
+         JOIN symbol s ON s.file_id = i.file_id AND s.kind = 'module' WHERE o.word_id = ?1",
+    ];
+    for sql in extra {
+        let found: Vec<i64> = store
+            .conn
+            .prepare(sql)?
+            .query_map([word_id], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        ids.extend(found);
+    }
+    let mut all: Vec<SymbolAddr> = by_name;
+    for id in ids {
+        let addr = addr_by_id(store, id)?;
+        if all.iter().all(|a| a.qname != addr.qname) {
+            all.push(addr);
+        }
+    }
+    all.sort_by(|a, b| a.qname.cmp(&b.qname));
+    all.into_iter()
+        .map(|addr| {
+            let id: i64 = store.conn.query_row(
+                "SELECT id FROM symbol WHERE qname = ?1",
+                [&addr.qname],
+                |r| r.get(0),
+            )?;
+            let tags = crate::tags::bridge_tags(&store.conn, id, &[word_id])?
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+            Ok(TaggedSymbol { addr, tags })
+        })
+        .collect()
+}
+
+pub fn word_info(
+    store: &SqliteStore,
+    word: &str,
+    weights: &crate::config::BridgeWeights,
+) -> Result<WordInfo, CoreError> {
     let word = word.to_lowercase();
     let word_id: i64 = store
         .conn
@@ -278,11 +340,12 @@ pub fn word_info(store: &SqliteStore, word: &str) -> Result<WordInfo, CoreError>
          JOIN symbol s ON s.id = o.symbol_id LEFT JOIN file f ON f.id = s.file_id
          WHERE o.word_id = ?1 ORDER BY s.qname"
     );
-    let symbols = store
+    let by_name = store
         .conn
         .prepare(&sql)?
         .query_map([word_id], addr_from_row)?
         .collect::<Result<Vec<_>, _>>()?;
+    let symbols = tagged_symbols(store, word_id, by_name)?;
 
     let mut verbs = Vec::new();
     let mut roles = Vec::new();
@@ -328,6 +391,7 @@ pub fn word_info(store: &SqliteStore, word: &str) -> Result<WordInfo, CoreError>
         .collect::<Result<Vec<String>, _>>()?;
 
     let stats = word_stats(store, &word)?;
+    let bridges = crate::bridges::word_bridges(store, &word, weights)?;
     Ok(WordInfo {
         word,
         verbs,
@@ -335,6 +399,7 @@ pub fn word_info(store: &SqliteStore, word: &str) -> Result<WordInfo, CoreError>
         layers,
         symbols,
         neighbors,
+        bridges,
         ignored,
         stats,
     })

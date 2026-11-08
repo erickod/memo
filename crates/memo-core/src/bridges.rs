@@ -9,9 +9,10 @@ use crate::config::BridgeWeights;
 use crate::error::CoreError;
 use crate::store::SqliteStore;
 use rusqlite::{Connection, params};
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum BridgeKind {
     Symbol,
     Test,
@@ -34,7 +35,7 @@ impl BridgeKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Bridge {
     pub other: String,
     pub kind: BridgeKind,

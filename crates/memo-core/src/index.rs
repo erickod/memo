@@ -60,7 +60,7 @@ fn context_and_layer(path: &str, config: &Config) -> (Option<String>, Option<Str
     (context, layer)
 }
 
-fn is_test_file(path: &str) -> bool {
+pub(crate) fn is_test_file(path: &str) -> bool {
     let mut parts = path.split('/');
     let file = parts.next_back().unwrap_or("");
     file.starts_with("test_") || parts.any(|p| p == "tests")
