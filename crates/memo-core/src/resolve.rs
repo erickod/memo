@@ -590,9 +590,9 @@ fn resolve_call(
     }
 }
 
-/// Leitura `X.attr` (TASK-7, D5): `X` (ou o tipo local do receptor) resolve para uma classe com
-/// o atributo → `LE` exato; não resolve → `LE` aproximado para cada atributo com esse nome no
-/// repositório; nenhum → nada (estado 2, como referência externa).
+/// Leitura `X.attr` (TASK-7, D5 e D5a): `X` (ou o tipo local do receptor) resolve para uma
+/// classe com o atributo → `LE` exato; não resolve → `LE` aproximado só se um único atributo do
+/// repositório tem esse nome; nenhum ou vários → nada (estado 2, como referência externa).
 fn resolve_attr_read(
     tx: &Transaction,
     resolver: &mut Resolver,
@@ -634,10 +634,12 @@ fn resolve_attr_read(
     let candidates: Vec<i64> = stmt
         .query_map([attr], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
-    for &dst in &candidates {
-        insert_edge(tx, &edge(dst, true))?;
+    // Nome comum (`id`, `status`) em várias classes viraria ruído: só o nome único conta.
+    if let [only] = candidates.as_slice() {
+        insert_edge(tx, &edge(*only, true))?;
+        return mark(tx, raw, 1);
     }
-    mark(tx, raw, if candidates.is_empty() { 2 } else { 1 })
+    mark(tx, raw, 2)
 }
 
 fn resolve_ref(
