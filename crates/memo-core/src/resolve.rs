@@ -590,6 +590,56 @@ fn resolve_call(
     }
 }
 
+/// Leitura `X.attr` (TASK-7, D5): `X` (ou o tipo local do receptor) resolve para uma classe com
+/// o atributo → `LE` exato; não resolve → `LE` aproximado para cada atributo com esse nome no
+/// repositório; nenhum → nada (estado 2, como referência externa).
+fn resolve_attr_read(
+    tx: &Transaction,
+    resolver: &mut Resolver,
+    file_id: i64,
+    raw: &RawRef,
+) -> Result<(), CoreError> {
+    let Some((owner, attr)) = raw.text.as_deref().and_then(|t| t.rsplit_once('.')) else {
+        return mark(tx, raw, 2);
+    };
+    let class = match raw.receiver.as_deref() {
+        Some(receiver) => resolver.resolve_type(file_id, receiver)?,
+        None => None,
+    };
+    let class = match class {
+        Some(c) => Some(c),
+        None => resolver.resolve_type(file_id, owner)?,
+    };
+    let edge = |dst: i64, approx: bool| NewEdge {
+        kind: "LE",
+        src: raw.src,
+        dst: Some(dst),
+        dst_text: None,
+        line: raw.line,
+        attr: None,
+        pos: None,
+        approx,
+    };
+    if let Some(class) = class {
+        return match resolver.resolve_path(class, attr)? {
+            Some(dst) => {
+                insert_edge(tx, &edge(dst, false))?;
+                mark(tx, raw, 1)
+            }
+            None => mark(tx, raw, 2),
+        };
+    }
+    let mut stmt =
+        tx.prepare("SELECT id FROM symbol WHERE kind = 'attribute' AND name = ?1 ORDER BY qname")?;
+    let candidates: Vec<i64> = stmt
+        .query_map([attr], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    for &dst in &candidates {
+        insert_edge(tx, &edge(dst, true))?;
+    }
+    mark(tx, raw, if candidates.is_empty() { 2 } else { 1 })
+}
+
 fn resolve_ref(
     tx: &Transaction,
     resolver: &mut Resolver,
@@ -598,6 +648,7 @@ fn resolve_ref(
 ) -> Result<(), CoreError> {
     let text = raw.text.as_deref();
     match raw.kind.as_str() {
+        "LE_ATTR" => resolve_attr_read(tx, resolver, file_id, raw)?,
         "ESCREVE" | "LE" => {
             let class_id: Option<i64> = tx.query_row(
                 "SELECT parent_id FROM symbol WHERE id = ?1",
