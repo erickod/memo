@@ -4,7 +4,7 @@ workdir: raiz do repositório (onde está o `Cargo.toml`)
 created_at: 2026-11-08
 
 ## Status
-- Estado: DEFINITION (terceira rodada: inferência aditiva, depois da medição no `bope` e da CODE_REVIEW com 🔴 R1; ver §9 e §10). A primeira rodada foi mergeada no PR #1 sem revisão.
+- Estado: review (terceira rodada implementada; falta a re-revisão). A primeira rodada foi mergeada no PR #1 sem revisão.
 - Owner: Erick Duarte
 - ROLE requerida: eng (começa em DEFINITION)
 
@@ -109,15 +109,15 @@ Revistos na revisão do merge (§10, 2026-11-08): os desmarcados não tinham tes
 
 ### Terceira rodada
 C7 da segunda rodada fica revogado pela D17.
-- [ ] **C13, aditividade:** para todo alvo de uma fixture com usos em `ref` e em `type`, o conjunto de símbolos listados no `por palavra` contém o conjunto da regra da primeira rodada (palavras de `ref` ou `type` do símbolo contêm todas as palavras do nome do alvo; menos arestas, alvo e testes), calculado à parte no teste
-- [ ] **C14, sem filtro:** não existe mais `by_word_name_only` no JSON nem `+N só pelo nome` no texto; usos sem evidência aparecem listados com o rótulo `só nome`
-- [ ] **C15, identificador exato:** para `Alpha.run`, `AlphaBeta(1).run()` não é `forte` nem `média`; `SubAlpha(1).run()` é `forte`; para um alvo cuja família tem o Protocol `OrderDebtCodeRepository`, `ClearOrderDebtCodeRepository(s).run()` não é `forte` nem `média`
-- [ ] **C16, tipo:** um atributo `receipts: list[ReceiptOut]` aparece no `impact` de um alvo cujas palavras do nome estão no tipo, como item com rótulo `tipo` e a linha do atributo
-- [ ] **C17, ordem:** itens ordenados por nível (`forte`, `média`, `só nome`), depois `qname` e linha; mesma árvore dá a mesma saída byte a byte
-- [ ] **C18, desempenho:** os 6 alvos da medição de 2026-11-08 rodam `impact` em até 500 ms cada no clone do `bope` (binário `--release`, `--no-index`), medido e registrado no §10
-- [ ] **C19, R1:** nota `word:x` vira `orfa` quando `x` só aparece em texto de uso; o snapshot de eventos não lista palavra que só existe em `ref` ou `type`
-- [ ] **C20, Y2:** `by_word` dividido em funções com uma responsabilidade cada; nenhuma função nova acima de 60 linhas
-- [ ] **C21:** `--limit`, `--max-chars` e `+N omitidos` seguem valendo no `por palavra`; `cargo fmt --check`, `clippy -D warnings` e `cargo test` sem falhas
+- [x] **C13, aditividade:** para todo alvo de uma fixture com usos em `ref` e em `type`, o conjunto de símbolos listados no `por palavra` contém o conjunto da regra da primeira rodada (palavras de `ref` ou `type` do símbolo contêm todas as palavras do nome do alvo; menos arestas, alvo e testes), calculado à parte no teste
+- [x] **C14, sem filtro:** não existe mais `by_word_name_only` no JSON nem `+N só pelo nome` no texto; usos sem evidência aparecem listados com o rótulo `só nome`
+- [x] **C15, identificador exato:** para `Alpha.run`, `AlphaBeta(1).run()` não é `forte` nem `média`; `SubAlpha(1).run()` é `forte`; para um alvo cuja família tem o Protocol `OrderDebtCodeRepository`, `ClearOrderDebtCodeRepository(s).run()` não é `forte` nem `média`
+- [x] **C16, tipo:** um atributo `receipts: list[ReceiptOut]` aparece no `impact` de um alvo cujas palavras do nome estão no tipo, como item com rótulo `tipo` e a linha do atributo
+- [x] **C17, ordem:** itens ordenados por nível (`forte`, `média`, `só nome`), depois `qname` e linha; mesma árvore dá a mesma saída byte a byte
+- [x] **C18, desempenho:** os 6 alvos da medição de 2026-11-08 rodam `impact` em até 500 ms cada no clone do `bope` (binário `--release`, `--no-index`), medido e registrado no §10
+- [x] **C19, R1:** nota `word:x` vira `orfa` quando `x` só aparece em texto de uso; o snapshot de eventos não lista palavra que só existe em `ref` ou `type`
+- [x] **C20, Y2:** `by_word` dividido em funções com uma responsabilidade cada; nenhuma função nova acima de 60 linhas
+- [x] **C21:** `--limit`, `--max-chars` e `+N omitidos` seguem valendo no `por palavra`; `cargo fmt --check`, `clippy -D warnings` e `cargo test` sem falhas
 
 ---
 
@@ -462,6 +462,16 @@ VERIFY: reli o diff `8835ee4..c144bd45` do zero (crates/memo-core/src/{store,ind
 - cohesion.evidence: co-mudança medida só nos 22 commits do diff (janela: 8835ee4..c144bd45) · drift: não aplicável — sem estado empilhado de DEFINITION
 
 ## 10. Log de Decisões e Alterações
+
+### [2026-11-08] — ENGINEERING da terceira rodada
+- Tipo: implementação (aprovação única da rodada pelo humano; um commit por arquivo)
+- R1 (D16): `VOCABULARY_SOURCES` em `store.rs`; âncora `word:` de nota (criação, presença e transição) e eventos de palavra só com fontes de vocabulário (`e9e3c31`, `5f9b336` red; `56ead68`, `de03a2f`, `b2c516f` green).
+- Inferência aditiva (D17 a D20): `evidence.rs` compara o nome da classe como identificador inteiro; `query.rs` reescreve o `by_word` em funções pequenas (`candidate_symbols`, `uses_of`, `typed_with_name`, `anchor_for`, `item_level`, `candidate_items`; a maior tem 48 linhas), com carga em lote, item `tipo` e o nível só como rótulo e ordem; `by_word_name_only` sai do `Impact`; índice `raw_ref(src, line)` e `schema_version` 5 (`aca461c`, `805e3a3`, `d2bd37c`, `0918acd`, `950add7` red; `752353c`, `f73557e`, `1a4e53a`, `5557cc2`, `7b0d0f6`, `21fec2f`, `04ab918` green). Os commits red de `evidence.rs`, `use_words.rs` e do CLI falhavam por compilação (a API mudou), não por asserção.
+- 345 testes, `fmt` e `clippy` verdes. Golden novo aceito sob a aprovação única: lista os seis usos da fixture U com o rótulo, em ordem de nível.
+- C18 medido no clone do `bope` (`--release`, `--no-index`, uma execução): 65, 57, 50, 63, 80 e 63 ms nos seis alvos. Índice completo 54 s.
+- Aditividade conferida no `bope`: nos seis alvos, os símbolos listados agora são exatamente os da rodada 1 (160, 248, 27, 0, 7, 119), nenhum faltando; `OrderOut.receipt` recuperou os itens de tipo (29 itens `tipo`).
+- Evidência no `bope`: os falsos `forte` de `run` sumiram; o único `forte` dos seis alvos é `resources.py:154` (`operation.execute(input)`, verdadeiro); todo o resto é `só nome`, porque o código usa injeção de dependência e o receptor não cita a classe (registrado em `docs/limitacoes.md`).
+- Não verificado: custo no gerador sintético e com um arquivo alterado.
 
 ### [2026-11-08] — Medição no `bope` e reabertura em DEFINITION (terceira rodada)
 - Tipo: medição e decisão
