@@ -19,13 +19,10 @@ símbolos:
   M ChargeUseCase.execute   app/collections/application/usecases/charge_usecase.py:L5-L6 [chamada, tipo]
   M CalculateLimitUseCase.execute   app/billing/application/usecases/calculate_limit_usecase.py:L8-L13 [vizinho]
 contorno:
-  CalculateLimitUseCase <- +1 testes
+  nenhum
 padrão(calculate): verbos - · papéis usecase · camadas application
 escritores:
   CalculateLimitUseCase._repo <- CalculateLimitUseCase.__init__
   CheckoutUseCase._calculate <- CheckoutUseCase.__init__
-testes:
-  mod test_calculate_limit_usecase   app/billing/application/tests/unit/test_calculate_limit_usecase.py:L1-L8 [nome, import]
-  T test_given_amount_when_calculate_then_returns_limit   app/billing/application/tests/unit/test_calculate_limit_usecase.py:L5-L7 [nome, chamada]
 notas: nenhuma
-cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro
+cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro, 3 testes ocultos
