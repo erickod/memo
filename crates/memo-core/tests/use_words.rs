@@ -61,7 +61,11 @@ fn test_given_chained_call_when_indexed_then_receiver_words_belong_to_caller() {
             "from a import Alpha, Beta\n\ndef go():\n    Alpha(1).run()\n",
         ),
     ]);
-    assert!(i.use_words("m.go").contains("alpha"));
+    let words = i.use_words("m.go");
+    assert!(
+        words.contains("alpha") && words.contains("run"),
+        "{words:?}"
+    );
 }
 
 /// GIVEN a function whose parameter and return are annotated with 'Optional[LockResult]'
@@ -91,12 +95,12 @@ fn test_given_resolved_and_unresolved_calls_when_indexed_then_both_emit_words() 
         (
             "m.py",
             "from a import Alpha, Beta\n\ndef helper():\n    pass\n\n\
-             def one():\n    helper()\n\ndef two():\n    Alpha(1).run()\n",
+             def one():\n    helper()\n\ndef two(obj):\n    obj.run()\n",
         ),
     ]);
     assert!(i.count("SELECT COUNT(*) FROM raw_ref WHERE resolved = 0") > 0);
     assert!(i.use_words("m.one").contains("helper"));
-    assert!(i.use_words("m.two").contains("alpha"));
+    assert!(i.use_words("m.two").contains("run"));
 }
 
 /// GIVEN any indexed repository
@@ -164,7 +168,7 @@ fn by_word_names(files: &[(&str, &str)], target: &str) -> (Vec<String>, Vec<Stri
     )
 }
 
-/// GIVEN 'run' defined in two classes and called through a chained instantiation (no edge)
+/// GIVEN 'run' defined in two classes and called on an untyped parameter (no edge)
 /// WHEN  impact runs on 'a.Alpha.run'
 /// THEN  the caller appears in the by-word level, approximate; code without the word does not
 #[test]
@@ -174,7 +178,7 @@ fn test_given_unresolved_call_when_impact_then_by_word_lists_caller() {
             ("a.py", TWO_RUNNERS),
             (
                 "m.py",
-                "from a import Alpha, Beta\n\ndef go():\n    Alpha(1).run()\n\n\
+                "from a import Alpha, Beta\n\ndef go(obj):\n    obj.run()\n\n\
                  def typed(x: Alpha):\n    return x\n",
             ),
         ],
