@@ -1082,3 +1082,116 @@ fn test_given_no_tests_flag_when_brief_hub_fixture_then_production_order_unchang
     assert!(all.len() >= 4, "{all:?}");
     assert_eq!(all, hidden);
 }
+
+/// Fixture U (TASK-6, §7): uma família de `run` e usos com e sem evidência da classe dona.
+const FIXTURE_U_A: &str = "from typing import Protocol\n\n\
+                           class Runner(Protocol):\n    def run(self):\n        ...\n\n\
+                           class Alpha:\n    def run(self):\n        pass\n\n\
+                           class SubAlpha(Alpha):\n    pass\n\n\
+                           class Beta:\n    def run(self):\n        pass\n";
+const FIXTURE_U_M: &str = "from a import Alpha, SubAlpha, Beta, Runner\n\n\
+                           def strong_owner():\n    Alpha(1).run()\n\n\
+                           def strong_sub():\n    SubAlpha(1).run()\n\n\
+                           def medium_owner(items: list[Alpha]):\n    for it in items:\n        it.run()\n\n\
+                           def medium_protocol(items: list[Runner]):\n    for it in items:\n        it.run()\n\n\
+                           def only_beta():\n    Beta(1).run()\n\n\
+                           def only_obj(obj):\n    obj.run()\n";
+
+fn repo_u() -> Repo {
+    let repo = Repo::empty();
+    repo.write("a.py", FIXTURE_U_A);
+    repo.write("m.py", FIXTURE_U_M);
+    repo.commit_all();
+    repo
+}
+
+/// GIVEN fixture U
+/// WHEN  'memo query impact Alpha.run' runs
+/// THEN  golden: 'por palavra' lists strong and medium uses with '~', the line and the level, then '+2 só pelo nome'
+#[test]
+fn test_given_name_only_uses_when_impact_text_then_only_count_line() {
+    let out = memo(&repo_u(), &["query", "impact", "a.Alpha.run"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN fixture U
+/// WHEN  impact runs with --json
+/// THEN  data.by_word has each item with its level and line, and the name-only items are listed
+#[test]
+fn test_given_name_only_uses_when_impact_json_then_listed() {
+    let out = memo(&repo_u(), &["--json", "query", "impact", "a.Alpha.run"]);
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let data = &json["data"];
+    let listed = data["by_word"].as_array().unwrap();
+    assert!(!listed.is_empty());
+    for item in listed {
+        assert!(item["line"].is_i64(), "{item}");
+        assert!(
+            ["forte", "media"].contains(&item["nivel"].as_str().unwrap()),
+            "{item}"
+        );
+    }
+    let names: Vec<&str> = data["by_word_name_only"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["addr"]["qname"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["m.only_beta", "m.only_obj"]);
+}
+
+/// GIVEN fixture U
+/// WHEN  impact runs with a --max-chars that cuts inside 'por palavra'
+/// THEN  the output stays under the limit and ends with '+N omitidos'
+#[test]
+fn test_given_max_chars_when_impact_by_word_then_cut_with_omitted() {
+    let repo = repo_u();
+    let full = stdout(&memo(&repo, &["query", "impact", "a.Alpha.run"]));
+    let limit = full.find("forte\n").expect("a strong line") + 1;
+    let out = stdout(&memo(
+        &repo,
+        &[
+            "--max-chars",
+            &limit.to_string(),
+            "query",
+            "impact",
+            "a.Alpha.run",
+        ],
+    ));
+    assert!(out.chars().count() <= limit, "{out}");
+    let last = out.lines().last().unwrap();
+    assert!(last.starts_with('+') && last.ends_with("omitidos"), "{out}");
+}
+
+/// GIVEN fixture U plus tests/test_m.py with a helper calling 'Alpha(1).run()'
+/// WHEN  impact runs with and without --no-tests
+/// THEN  the test use is never listed in 'por palavra' nor counted as name only
+#[test]
+fn test_given_use_in_test_file_when_impact_then_never_listed() {
+    let repo = Repo::empty();
+    repo.write("a.py", FIXTURE_U_A);
+    repo.write("m.py", FIXTURE_U_M);
+    repo.write(
+        "tests/test_m.py",
+        "from a import Alpha\n\ndef helper_in_tests():\n    Alpha(1).run()\n",
+    );
+    repo.commit_all();
+    for flags in [&[][..], &["--no-tests"][..]] {
+        let mut args = flags.to_vec();
+        args.extend(["--json", "query", "impact", "a.Alpha.run"]);
+        let json: serde_json::Value = serde_json::from_str(&stdout(&memo(&repo, &args))).unwrap();
+        for key in ["by_word", "by_word_name_only"] {
+            let paths: Vec<&str> = json["data"][key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|i| i["addr"]["path"].as_str().unwrap())
+                .collect();
+            assert!(
+                paths.iter().all(|p| !p.starts_with("tests/")),
+                "{flags:?} {key} {paths:?}"
+            );
+        }
+    }
+}
