@@ -15,16 +15,36 @@ Estas são as TASKs do `memo`, em ordem. Cada arquivo é um registro completo e 
 | [TASK-3](TASK-3-coerencia-sem-ruido-e-config-no-indice_2026-11-08.md) | done | Esqueleto só pela lista `skeleton`; índice que reindexa quando a config muda (hash em `meta`); representatividade em arquivos na ficha `query word` | `e7ff342` a `7a21ca5`, `73e522f` |
 | [TASK-4](TASK-4-brief-sem-dominancia-de-hubs_2026-11-09.md) | done | `brief` com dois níveis (quem carrega a âncora antes; vizinhos depois, com cota 10/5) e amortecimento do salto pelo grau do vizinho | `a691499` a `d0871b0` |
 | [TASK-5](TASK-5-brief-centralidade-no-nivel-1_2026-11-08.md) | **draft** | Nada ainda. Rascunho: o nível 1 do `brief order` virou uma lista de módulos; falta medir três candidatos antes de definir | nenhum |
-| [TASK-6](TASK-6-camada-relacional-palavra-item_2026-11-08.md) | **draft** | Nada ainda. Rascunho: camada relacional palavra ↔ item completa por construção (texto das referências e tipos viram ocorrências, sem depender de resolução) e `impact` por palavra como primeira inferência; reestruturar o código pelos conceitos fica para depois | nenhum |
-| [TASK-7](TASK-7-chamada-sobre-criacao-de-classe_2026-11-08.md) | **review** | `Classe(...).metodo()` resolve para `Classe.metodo` (`CHAMA ~`) quando exatamente uma classe criada na linha tem o método; bope: não resolvidas 1385 → 1193 | neste PR |
+| [TASK-6](TASK-6-camada-relacional-palavra-item_2026-11-08.md) | **review** | Camada relacional palavra ↔ item completa por construção (texto das referências e tipos viram ocorrências `ref`/`type`, sem depender de resolução), seção `por palavra` no `impact`, `(N por palavra)` na cobertura, `schema_version` 3 | PR #1 (branch `feat/task-6-word-item-layer`) |
+| [TASK-7](TASK-7-chamada-sobre-criacao-de-classe_2026-11-08.md) | **review** | `Classe(...).metodo()` resolve para `Classe.metodo` (`CHAMA ~`) quando exatamente uma classe criada na linha tem o método; bope: não resolvidas 1385 → 1193; `schema_version` 4 | PR #1 |
 
 (Os nomes dos arquivos têm datas de criação; a TASK-4 saiu com a data 2026-11-09 e a TASK-5 com 2026-11-08 por causa do relógio da máquina na época. A numeração é a ordem real.)
 
 ## Próximo passo
 
-A **TASK-5**. A etapa 0 dela é só medir, sem alterar código: ver o §3 e o §9 dela, `docs/medicoes.md` e `scripts/measure/`. Depois vem a DEFINITION, que precisa de decisões do dono do projeto (Q1 a Q4 no §9 da TASK-5).
+**Estado em 2026-11-08.** As TASKs 6 e 7 estão implementadas e testadas (314 testes, `fmt` e `clippy` limpos) no PR #1, branch `feat/task-6-word-item-layer`, **à espera de revisão**. Nada foi mergeado. A branch padrão do repositório é `master`.
 
-Pendências conhecidas que cabem numa TASK ou numa limpeza: ver "Dívida técnica declarada" em `docs/limitacoes.md` (três delas citam as TASKs 2, 3 e 4 como origem) e o `brief` em 0,66 s no gerador versionado, acima da meta de 500 ms da spec (causa não investigada).
+**Modelo que guia o trabalho (decisão do dono, TASK-6 §2).** O motor tem duas partes: a **relacional** (palavra ↔ item; item é símbolo, arquivo, import, ponto de chamada, linha, cluster, a própria palavra) e a **inferência** (arestas `CHAMA`/`CRIA`/`RECEBE`, resolução, pontes, ranking, `impact`). A relacional é incidência e deve ser completa por construção, sem depender de resolver nada; ajustes vão na inferência. O código ainda não reflete esses conceitos em módulos e tipos próprios: é uma reestruturação planejada, fora das TASKs 6 e 7.
+
+**O que fazer, em ordem de recomendação:**
+
+1. **Medir o ganho de verdade.** Falta comparar o memo atual com o `grep -w` nos 39 símbolos do relatório de integração das skills (PR #26 de outro repositório): contar símbolos com consumidor de produção, como o relatório fez (memo 12 de 39, `grep` 28 de 39, antes das TASKs 6 e 7). Só foi conferido à mão o caso `GetOrdersAndTaxesByIdempotencyKeyRepository.run`. Os scripts desse relatório (`/tmp/scripts/cmp*.py`) não estão no repositório.
+2. **Q6 da TASK-6:** o `por palavra` de um método exige hoje só a palavra do nome do método (`run`), e traz ~160 itens para `…Repository.run`. Exigir também as palavras da classe dona (ou o qualificado) deve tirar a maior parte. É a mudança de menor escopo.
+3. **Regra 7** (`resolve.rs`, "só o nome do método"): liga métodos de biblioteca (`.label()`, `super().__init__`) ao único símbolo do repositório com o mesmo nome (ex.: `OrderStatus.label`). Precisa de critério (por exemplo, não aplicar quando o receptor é claramente externo ou o nome é comum).
+4. **Acesso a atributo de classe** (`OrderStatus.X`) não é chamada e não vira `raw_ref`; no relatório, `OrderStatus` sozinho tinha 58 dos 75 arquivos que o memo não achava. Exige um extrator novo (referência a identificador solto).
+5. **Ranking do `por palavra`** pelas pontes e pela representatividade (hoje é ordem de `qname`).
+6. **TASK-5** (o nível 1 do `brief` virou lista de módulos), ainda rascunho; começa com uma medição sem alterar código.
+7. **Reestruturar o código** pelos conceitos acima.
+
+**Números de referência no bope** (repositório privado, 1.017 arquivos, 8.291 símbolos), para quem tiver acesso: não resolvidas 1385 → 1193, aproximadas 2105 → 2297; `?.metodo` não resolvidos 228 → 36; índice completo 35,7 s. No gerador sintético de `docs/medicoes.md`: índice completo 1,45 s → 1,85 s e banco 29,5 → 35,1 MiB depois da TASK-6. Reproduzir a precisão da regra do construtor: `scripts/measure/precisao_chamada_criacao.py` (lê o índice e o código, não altera nada).
+
+**Armadilhas que custaram tempo nesta etapa:**
+- Mudou o resolvedor ou as fontes de palavras? Suba `SCHEMA_VERSION` em `store.rs` (hoje `"4"`) e o número esperado em `tests/schema.rs`; sem isso, um índice existente não re-resolve arquivos que não mudaram.
+- Fonte de palavra nova em `occurrence` precisa de `symbol_id = NULL` (como `test_doc`, `ref`, `type`) e toda consulta que junta por `owner_id` deve filtrar `owner_kind` e `source`; duas consultas de `bridges.rs` vazaram a fonte nova para a ponte `teste` até serem corrigidas.
+- Na TASK-6 afirmei que `Classe(...).metodo()` não era extraído; era (`?.metodo` em `raw_ref`). Confira o banco (`.git/memo/base.db`, SQLite) antes de afirmar o que o extrator emite.
+- `tasks/` está no `.git/info/exclude` da máquina do autor; os arquivos são versionados com `git add -f`.
+
+Pendências antigas: "Dívida técnica declarada" em `docs/limitacoes.md` e o `brief` em 0,66 s no gerador versionado, acima da meta de 500 ms da spec (causa não investigada).
 
 ## Como se trabalha
 
@@ -33,7 +53,7 @@ Pendências conhecidas que cabem numa TASK ou numa limpeza: ver "Dívida técnic
 ```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test --no-fail-fast        # 304 testes na última execução
+cargo test --no-fail-fast        # 314 testes na última execução
 cargo build --release            # target/release/memo
 ```
 
