@@ -232,6 +232,41 @@ Função pura de evidência (`memo-core`). Ela recebe as palavras do uso, as pal
 - [ ] test_given_coverage_json_when_rendered_then_no_by_word_field  (61 chars)
     - GIVEN any repository; WHEN a query runs with --json; THEN cobertura has no 'nao_resolvidas_por_palavra' key
 
+### Terceira rodada (TEST_ANALYSIS)
+**Fixtures novas**
+- **U2**: a fixture U mais `class AlphaBeta` com `run` em `a.py`, e em `m.py`: `def lookalike(): AlphaBeta(1).run()`; `class Holder` com `runner: Alpha` e `backups: list[Alpha]`; `def spread(): x = Alpha; x.go(); obj.run()` (as palavras do alvo espalhadas em usos diferentes do mesmo símbolo).
+- **P** (Protocol estrutural): `class OrderDebtCodeRepository(Protocol)` com `run`; `class UpdateGroupRepository` com `run` (implementa por estrutura); `class ClearOrderDebtCodeRepository` com `run`; `def caller(s): ClearOrderDebtCodeRepository(s).run()`.
+
+**Rastreabilidade**
+- C13 → `additive_when_impact_then_round_one_symbols_all_listed`
+- C14 → `no_evidence_when_impact_then_listed_with_name_only_label` (memo-core), `name_only_uses_when_impact_text_then_listed_with_label` (golden, substitui `..._then_only_count_line`), `name_only_uses_when_impact_json_then_listed` (adaptado: lista única), `coverage_json_...` (mantido)
+- C15 → unitários `lookalike_class_when_classified_then_not_strong`, `protocol_lookalike_when_classified_then_name_only`; integração `lookalike_class_when_impact_then_not_strong`, `protocol_lookalike_when_impact_then_name_only`
+- C16 → `typed_attribute_when_impact_then_listed_with_type_label`
+- C17 → `items_when_impact_then_ordered_by_level_qname_line`, `same_tree_twice_when_impact` (mantido)
+- C18 → não coberto por teste: medição no `bope`, no §10
+- C19 → `word_anchor_only_in_use_text_when_reindexed_then_note_orfa`, `word_anchor_only_in_use_text_when_added_then_not_found`, `word_only_in_use_text_when_indexed_then_no_word_event`
+- C20 → não coberto por teste: conferido por contagem de linhas na revisão
+- C21 → `max_chars_when_impact_by_word` (mantido), `fmt`, `clippy`, `test`
+
+**Testes obsoletos pela D17 e D18 (aval dado na aprovação única da rodada 3)**
+- Unitários de `tests/evidence.rs`: passam a receber textos (identificadores), não conjuntos de palavras; os nove casos e os valores esperados ficam iguais.
+- `family_uses_when_impact_then_strong_medium_and_name_only_split` e `homonym_call_when_impact_then_name_only_counted`: `só nome` passa a vir de `by_word`, não de `by_word_name_only`.
+- `use_in_test_file_when_impact_then_never_listed`: deixa de olhar `by_word_name_only`.
+- Golden `query__given_name_only_uses_when_impact_text_then_only_count_line`: substituído.
+
+**Testes novos (nomes e docstrings)**
+- [ ] test_given_lookalike_class_when_classified_then_not_strong  (59 chars) — GIVEN family {Alpha} and a use 'AlphaBeta(1).run'; WHEN classified; THEN name only
+- [ ] test_given_protocol_lookalike_when_classified_then_name_only  (61 chars) — GIVEN family {OrderDebtCodeRepository} and a use 'ClearOrderDebtCodeRepository(s).run'; WHEN classified; THEN name only
+- [ ] test_given_additive_when_impact_then_round_one_symbols_all_listed  (66 chars) — GIVEN fixture U2; WHEN impact runs on a.Alpha.run; THEN every symbol whose ref or type words contain the target name words (minus edges, target and tests) is listed
+- [ ] test_given_no_evidence_when_impact_then_listed_with_name_only_label  (68 chars) — GIVEN fixture U; WHEN impact on a.Alpha.run; THEN only_beta and only_obj are listed with level so_nome
+- [ ] test_given_lookalike_class_when_impact_then_not_strong  (55 chars) — GIVEN fixture U2; WHEN impact on a.Alpha.run; THEN lookalike is listed as so_nome
+- [ ] test_given_protocol_lookalike_when_impact_then_name_only  (57 chars) — GIVEN fixture P; WHEN impact on UpdateGroupRepository.run; THEN caller is listed as so_nome
+- [ ] test_given_typed_attribute_when_impact_then_listed_with_type_label  (67 chars) — GIVEN fixture U2; WHEN impact on a.Alpha (class); THEN Holder.backups is listed with origin 'tipo' and the attribute line
+- [ ] test_given_items_when_impact_then_ordered_by_level_qname_line  (63 chars) — GIVEN fixture U2; WHEN impact on a.Alpha.run; THEN items are sorted by level, then qname, then line
+- [ ] test_given_word_anchor_only_in_use_text_when_reindexed_then_note_orfa  (72 chars) — GIVEN a note word:x and x left only in a call text; WHEN reindexed; THEN the note is orfa
+- [ ] test_given_word_anchor_only_in_use_text_when_added_then_not_found  (68 chars) — GIVEN a word that only appears in a call text; WHEN a note anchored on it is added; THEN NotFound
+- [ ] test_given_word_only_in_use_text_when_indexed_then_no_word_event  (68 chars) — GIVEN a new call to an unknown name; WHEN reindexed; THEN no WORD_CREATED event for its words
+
 ---
 
 ## 8. Dependências
