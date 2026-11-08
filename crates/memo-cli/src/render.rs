@@ -1,10 +1,11 @@
 //! Formatação de saída em texto compacto (spec §8.3).
 
 use memo_core::brief::Brief;
+use memo_core::evidence::Evidence;
 use memo_core::notes::Note;
 use memo_core::query::{
-    Chain, ChainItem, Coverage, EdgeView, Impact, RelItem, Relation, SymbolAddr, SymbolInfo,
-    TestsInfo, TypeInfo, WordInfo,
+    ByWordItem, Chain, ChainItem, Coverage, EdgeView, Impact, RelItem, Relation, SymbolAddr,
+    SymbolInfo, TestsInfo, TypeInfo, WordInfo,
 };
 
 fn coverage_line(c: &Coverage) -> String {
@@ -246,6 +247,16 @@ fn rel_item(i: &RelItem) -> String {
     format!("{}{attr}{approx}{line}", item(&i.addr))
 }
 
+/// Uso do nível por palavra: o item, com `~` e a linha, e o nível no fim.
+fn by_word_item(b: &ByWordItem) -> String {
+    let nivel = match b.nivel {
+        Evidence::Forte => "forte",
+        Evidence::Media => "média",
+        Evidence::SoNome => "só nome",
+    };
+    format!("{} {nivel}", rel_item(&b.item))
+}
+
 pub fn relation_text(
     label: &str,
     rel: &Relation,
@@ -371,11 +382,11 @@ pub fn impact_text(
         info.protocol.iter().map(rel_item).collect(),
         &mut items,
     );
-    section(
-        "por palavra",
-        info.by_word.iter().map(|b| rel_item(&b.item)).collect(),
-        &mut items,
-    );
+    let mut by_word: Vec<String> = info.by_word.iter().map(by_word_item).collect();
+    if !info.by_word_name_only.is_empty() {
+        by_word.push(format!("  +{} só pelo nome", info.by_word_name_only.len()));
+    }
+    section("por palavra", by_word, &mut items);
     tests_sections(&info.tests, &mut items);
     let mut tail = notes_lines(&info.notes);
     tail.extend(unchanged_line(info.unchanged));
