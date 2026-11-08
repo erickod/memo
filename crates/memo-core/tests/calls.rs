@@ -1,7 +1,8 @@
 mod common;
 
 use common::Repo;
-use memo_core::index::index;
+use memo_core::config::Config;
+use memo_core::index::{index, index_with};
 use memo_core::query::{EdgeView, coverage, symbol_info};
 use memo_core::source::WorkTree;
 use memo_core::store::SqliteStore;
@@ -146,4 +147,69 @@ fn test_given_protocol_dep_when_save_called_then_protocol_edge_exact_impl_edge_a
     let edges = out_edges(&store, "CalculateLimitUseCase.execute", "CHAMA");
     assert!(has(&edges, "LimitRepository.save", false), "{edges:?}");
     assert!(has(&edges, "SqlLimitRepository.save", true), "{edges:?}");
+}
+
+const ORDER: &str = "class Order:\n    def cancel(self):\n        return 1\n";
+const RESERVATION: &str = "class Reservation:\n    def cancel(self):\n        return 2\n";
+const OTHER: &str = "class Other:\n    def run(self):\n        return 3\n";
+
+fn cancel_files(imports: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("a.py", ORDER.to_string()),
+        ("b.py", RESERVATION.to_string()),
+        ("o.py", OTHER.to_string()),
+        (
+            "c.py",
+            format!("{imports}\n\ndef run(thing):\n    thing.cancel()\n"),
+        ),
+    ]
+}
+
+fn index_cancel(imports: &str) -> (Repo, SqliteStore) {
+    let files = cancel_files(imports);
+    let refs: Vec<(&str, &str)> = files.iter().map(|(p, s)| (*p, s.as_str())).collect();
+    indexed(&refs)
+}
+
+/// GIVEN two classes with a 'cancel' method and a file that imports only Order, then calls
+///       'thing.cancel()' on an unannotated receiver
+/// WHEN  the repository is indexed
+/// THEN  c.run has an approximate CHAMA edge to 'Order.cancel' and the call counts as resolved
+#[test]
+fn test_given_ambiguous_call_and_one_imported_class_when_resolved_then_chama_approx() {
+    let (_r, s) = index_cancel("from a import Order");
+    let edges = out_edges(&s, "c.run", "CHAMA");
+    assert!(has(&edges, "Order.cancel", true), "{edges:?}");
+    assert_eq!(coverage(&s).unwrap().nao_resolvidas, 0);
+}
+
+/// GIVEN the same two classes and a file that imports both of them
+/// WHEN  the repository is indexed
+/// THEN  c.run has no CHAMA edge and the call stays unresolved
+#[test]
+fn test_given_two_imported_classes_with_method_when_resolved_then_no_edge() {
+    let (_r, s) = index_cancel("from a import Order\nfrom b import Reservation");
+    assert!(out_edges(&s, "c.run", "CHAMA").is_empty());
+    assert!(coverage(&s).unwrap().nao_resolvidas >= 1);
+}
+
+/// GIVEN a file that imports only a class without a 'cancel' method
+/// WHEN  the repository is indexed
+/// THEN  c.run has no CHAMA edge (the import is no evidence for an unrelated method)
+#[test]
+fn test_given_import_of_class_without_the_method_when_resolved_then_no_edge() {
+    let (_r, s) = index_cancel("from o import Other");
+    assert!(out_edges(&s, "c.run", "CHAMA").is_empty());
+}
+
+/// GIVEN c.run resolved to Order.cancel through its import
+/// WHEN  the import is removed and the repository is reindexed
+/// THEN  the edge is gone
+#[test]
+fn test_given_import_removed_when_reindexed_then_import_evidence_edge_disappears() {
+    let (repo, mut s) = index_cancel("from a import Order");
+    assert!(has(&out_edges(&s, "c.run", "CHAMA"), "Order.cancel", true));
+    repo.write("c.py", "def run(thing):\n    thing.cancel()\n");
+    index_with(&WorkTree::new(repo.path()), &mut s, &Config::default()).unwrap();
+    assert!(out_edges(&s, "c.run", "CHAMA").is_empty());
 }
