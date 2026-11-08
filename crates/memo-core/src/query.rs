@@ -28,6 +28,62 @@ pub struct SymbolInfo {
     pub edges: Vec<EdgeView>,
     /// Notas visíveis ancoradas no símbolo; preenchidas por quem conhece o diretório de notas.
     pub notes: Vec<crate::notes::Note>,
+    /// Trechos que vale ler: o alvo e até 4 chamadores exatos (TASK-7, D4).
+    pub ler: Vec<ReadSpot>,
+}
+
+/// Trecho de código para ler, com o motivo como fato (`alvo`, `chama o alvo em :L<n>`, …).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReadSpot {
+    pub path: String,
+    pub start: i64,
+    pub end: i64,
+    pub motivo: String,
+}
+
+/// Até este tamanho o trecho é o símbolo inteiro; acima, uma janela.
+const READ_FULL_MAX: i64 = 60;
+const READ_WINDOW: i64 = 20;
+const READ_CALLERS: usize = 4;
+
+/// Trecho de um símbolo: inteiro até 60 linhas; acima, 20 linhas a partir do início ou ao redor
+/// de `focus` (a linha da chamada), sem sair do símbolo.
+pub(crate) fn read_spot(addr: &SymbolAddr, focus: Option<i64>, motivo: String) -> ReadSpot {
+    let (start, end) = (addr.line_start, addr.line_end);
+    let (from, to) = if end - start < READ_FULL_MAX {
+        (start, end)
+    } else {
+        let from = focus.map_or(start, |f| (f - READ_WINDOW / 2).max(start));
+        (from, (from + READ_WINDOW - 1).min(end))
+    };
+    ReadSpot {
+        path: addr.path.clone(),
+        start: from,
+        end: to,
+        motivo,
+    }
+}
+
+/// `ler:` do `symbol`: o alvo e até 4 chamadores exatos d1 de produção, na ordem dos chamadores.
+fn symbol_read_spots(
+    store: &SqliteStore,
+    qname: &str,
+    addr: &SymbolAddr,
+) -> Result<Vec<ReadSpot>, CoreError> {
+    let mut spots = vec![read_spot(addr, None, "alvo".to_string())];
+    for item in callers(store, qname, 1)?.items.iter().filter(|i| !i.approx) {
+        if let (Some(caller), Some(line)) = (&item.addr, item.line) {
+            if caller.in_tests() {
+                continue;
+            }
+            let motivo = format!("chama o alvo em :L{line}");
+            spots.push(read_spot(caller, Some(line), motivo));
+            if spots.len() > READ_CALLERS {
+                break;
+            }
+        }
+    }
+    Ok(spots)
 }
 
 /// Símbolo com as pontes que o ligam à palavra consultada.
@@ -189,9 +245,11 @@ pub fn symbol_info(store: &SqliteStore, target: &str) -> Result<SymbolInfo, Core
             sig_hash: r.get(6)?,
             edges: Vec::new(),
             notes: Vec::new(),
+            ler: Vec::new(),
         })
     })?;
     info.edges = direct_edges(store, &qname)?;
+    info.ler = symbol_read_spots(store, &qname, &info.addr)?;
     Ok(info)
 }
 
