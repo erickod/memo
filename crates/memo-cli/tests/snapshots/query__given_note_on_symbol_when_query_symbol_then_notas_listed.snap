@@ -13,8 +13,7 @@ arestas:
   RECEBE -> ? amount :L8
   RECEBE -> int rate :L8
   RETORNA -> int :L8
-  CHAMA <- test_given_amount_when_calculate_then_returns_limit ~ :L7
   CHAMA <- CheckoutUseCase.execute :L9
 notas:
   n-4qipqdn2 regra confirmada  CalculateLimitUseCase.execute: Limite é inteiro.
-cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro
+cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro, 1 testes ocultos
