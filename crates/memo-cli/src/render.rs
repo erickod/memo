@@ -303,6 +303,7 @@ pub fn symbol_text(
         .collect();
     items.extend(grouped(rest, all));
     let mut tail = notes_lines(&info.notes);
+    tail.extend(read_lines(&info.ler));
     tail.push(coverage_line(cov));
     fit(&head, &items, &tail, max_chars, limit)
 }
@@ -483,6 +484,20 @@ pub fn impact_text(
     tail.extend(unchanged_line(info.unchanged));
     tail.push(coverage_line(cov));
     fit(&head, &items, &tail, max_chars, limit)
+}
+
+/// Seção `ler:` (TASK-7, D4): um trecho por linha, `caminho:Lini-Lfim — motivo`.
+fn read_lines(spots: &[memo_core::query::ReadSpot]) -> Vec<String> {
+    if spots.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec!["ler:".to_string()];
+    lines.extend(
+        spots
+            .iter()
+            .map(|s| format!("  {}:L{}-L{} — {}", s.path, s.start, s.end, s.motivo)),
+    );
+    lines
 }
 
 /// Seção `notas`: `nenhuma`, ou uma linha por nota com o peso implícito na ordem.
@@ -688,6 +703,7 @@ pub fn brief_text(
         lines
     };
     tail.extend(unchanged_line(b.unchanged));
+    tail.extend(read_lines(&b.ler));
     tail.push(coverage_line(cov));
     let tests: Vec<String> = b
         .symbols
