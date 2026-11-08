@@ -1279,3 +1279,77 @@ fn test_given_default_when_query_tests_then_tests_listed() {
     ));
     assert!(out.contains("test_"), "{out}");
 }
+
+/// Repositório com `h.hub` e chamadores: `n1` funções em `a1.py` e `n2` em `a2.py`.
+fn callers_repo(n1: usize, n2: usize) -> Repo {
+    let repo = Repo::empty();
+    repo.write("h.py", "def hub():\n    pass\n");
+    for (path, n) in [("a1.py", n1), ("a2.py", n2)] {
+        let body: String = (0..n)
+            .map(|i| format!("def f{i:02}():\n    hub()\n\n"))
+            .collect();
+        repo.write(path, &format!("from h import hub\n\n{body}"));
+    }
+    repo.commit_all();
+    repo
+}
+
+fn caller_lines(out: &str) -> Vec<&str> {
+    out.lines().filter(|l| l.starts_with("  F ")).collect()
+}
+
+/// GIVEN 25 callers of hub, 15 in module a1 and 10 in module a2
+/// WHEN  'memo query callers hub' runs
+/// THEN  10 callers are listed and the rest is one line counted by module, biggest first (TASK-7, D3)
+#[test]
+fn test_given_section_over_ten_when_rendered_then_grouped_by_module() {
+    let out = stdout(&memo(&callers_repo(15, 10), &["query", "callers", "h.hub"]));
+    assert_eq!(caller_lines(&out).len(), 10, "{out}");
+    assert!(out.contains("\n  +15 em: a2 ×10 · a1 ×5\n"), "{out}");
+}
+
+/// GIVEN exactly 10 callers of hub
+/// WHEN  'memo query callers hub' runs
+/// THEN  all 10 are listed and there is no grouped line (TASK-7, D3)
+#[test]
+fn test_given_section_of_ten_when_rendered_then_not_grouped() {
+    let out = stdout(&memo(&callers_repo(6, 4), &["query", "callers", "h.hub"]));
+    assert_eq!(caller_lines(&out).len(), 10, "{out}");
+    assert!(!out.contains(" em: "), "{out}");
+}
+
+/// GIVEN 25 callers of hub
+/// WHEN  'memo --all query callers hub' runs
+/// THEN  all 25 callers are listed (TASK-7, D3)
+#[test]
+fn test_given_all_flag_when_rendered_then_every_item_listed() {
+    let out = stdout(&memo(
+        &callers_repo(15, 10),
+        &["--all", "query", "callers", "h.hub"],
+    ));
+    assert_eq!(caller_lines(&out).len(), 25, "{out}");
+}
+
+/// GIVEN hub imported by 30 modules, 15 in package p1 and 15 in package p2
+/// WHEN  'memo query symbol hub' runs, with and without '--all'
+/// THEN  the imports are one line counted by package; with '--all' each import is listed (TASK-7, D3)
+#[test]
+fn test_given_many_imports_when_query_symbol_then_imports_as_counts() {
+    let repo = Repo::empty();
+    repo.write("h.py", "def hub():\n    pass\n");
+    for pkg in ["p1", "p2"] {
+        repo.write(&format!("{pkg}/__init__.py"), "");
+        for i in 0..15 {
+            repo.write(&format!("{pkg}/m{i:02}.py"), "from h import hub\n");
+        }
+    }
+    repo.commit_all();
+    let out = stdout(&memo(&repo, &["query", "symbol", "h.hub"]));
+    assert!(
+        out.contains("\n  IMPORTA <- 30 em: p1 ×15 · p2 ×15\n"),
+        "{out}"
+    );
+    assert!(!out.contains("IMPORTA <- m00"), "{out}");
+    let all = stdout(&memo(&repo, &["--all", "query", "symbol", "h.hub"]));
+    assert_eq!(all.matches("IMPORTA <- ").count(), 30, "{all}");
+}
