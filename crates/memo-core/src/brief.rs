@@ -320,7 +320,6 @@ pub fn brief_with(store: &SqliteStore, request: &str, notes: &[Note]) -> Result<
     brief_weighted(store, request, notes, &BridgeWeights::default())
 }
 
-/// Como `brief_with`, com os pesos de ponte do repositório (`[bridges]` do `memo.toml`).
 type Ranked = Vec<(i64, f64, SymbolAddr)>;
 
 /// Arestas `CHAMA`, `RECEBE` e `RETORNA` resolvidas que tocam cada símbolo, nos dois sentidos.
@@ -367,6 +366,7 @@ fn pick_slots(first: Ranked, second: Ranked, total: usize, reserved: usize) -> R
         .collect()
 }
 
+/// Como `brief_with`, com os pesos de ponte do repositório (`[bridges]` do `memo.toml`).
 pub fn brief_weighted(
     store: &SqliteStore,
     request: &str,
