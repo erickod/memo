@@ -12,6 +12,35 @@ const WRITE_METHODS: &[&str] = &[
     "save", "add", "insert", "update", "delete", "publish", "send", "commit", "flush",
 ];
 
+/// Pesos das pontes entre palavras (D18); valores iniciais, editáveis em `[bridges]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BridgeWeights {
+    pub symbol: f64,
+    pub test: f64,
+    pub import: f64,
+    pub import_external: f64,
+    pub call: f64,
+    pub file: f64,
+    pub context: f64,
+    /// Fator aplicado a uma ponte aproximada (`~`).
+    pub approximate: f64,
+}
+
+impl Default for BridgeWeights {
+    fn default() -> Self {
+        Self {
+            symbol: 0.0,
+            test: 0.0,
+            import: 0.0,
+            import_external: 0.0,
+            call: 0.0,
+            file: 0.0,
+            context: 0.0,
+            approximate: 0.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub main_branch: Option<String>,
@@ -25,6 +54,7 @@ pub struct Config {
     pub context_root: String,
     /// Segmentos de caminho que nomeiam a camada.
     pub layers: Vec<String>,
+    pub bridges: BridgeWeights,
 }
 
 fn own(list: &[&str]) -> Vec<String> {
@@ -43,6 +73,7 @@ impl Default for Config {
             stale_on: own(&["sig", "body"]),
             context_root: "app".to_string(),
             layers: own(&["domain", "application", "infra"]),
+            bridges: BridgeWeights::default(),
         }
     }
 }
