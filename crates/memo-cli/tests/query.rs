@@ -1368,3 +1368,20 @@ fn test_given_enum_when_query_symbol_then_members_line() {
     let out = stdout(&memo(&repo, &["query", "symbol", "m.Status"]));
     assert!(out.contains("\nmembros: A = \"a\" · B · C = 3\n"), "{out}");
 }
+
+/// GIVEN functions order_payments_total, order_items and list_payments
+/// WHEN  'memo query word order_payments' runs
+/// THEN  golden: 'interpretado como: order + payments', a short card per part and the symbols with both (TASK-7, D7)
+#[test]
+fn test_given_composite_word_when_query_word_then_golden_card() {
+    let repo = Repo::empty();
+    repo.write(
+        "m.py",
+        "def order_payments_total():\n    pass\n\ndef order_items():\n    pass\n\n\
+         def list_payments():\n    pass\n",
+    );
+    repo.commit_all();
+    let out = memo(&repo, &["query", "word", "order_payments"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
