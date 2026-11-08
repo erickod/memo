@@ -16,6 +16,7 @@ Estas são as TASKs do `memo`, em ordem. Cada arquivo é um registro completo e 
 | [TASK-4](TASK-4-brief-sem-dominancia-de-hubs_2026-11-09.md) | done | `brief` com dois níveis (quem carrega a âncora antes; vizinhos depois, com cota 10/5) e amortecimento do salto pelo grau do vizinho | `a691499` a `d0871b0` |
 | [TASK-5](TASK-5-brief-centralidade-no-nivel-1_2026-11-08.md) | **draft** | Nada ainda. Rascunho: o nível 1 do `brief order` virou uma lista de módulos; falta medir três candidatos antes de definir | nenhum |
 | [TASK-6](TASK-6-camada-relacional-palavra-item_2026-11-08.md) | **draft** | Nada ainda. Rascunho: camada relacional palavra ↔ item completa por construção (texto das referências e tipos viram ocorrências, sem depender de resolução) e `impact` por palavra como primeira inferência; reestruturar o código pelos conceitos fica para depois | nenhum |
+| [TASK-7](TASK-7-chamada-sobre-criacao-de-classe_2026-11-08.md) | **review** | `Classe(...).metodo()` resolve para `Classe.metodo` (`CHAMA ~`) quando exatamente uma classe criada na linha tem o método; bope: não resolvidas 1385 → 1193 | neste PR |
 
 (Os nomes dos arquivos têm datas de criação; a TASK-4 saiu com a data 2026-11-09 e a TASK-5 com 2026-11-08 por causa do relógio da máquina na época. A numeração é a ordem real.)
 
