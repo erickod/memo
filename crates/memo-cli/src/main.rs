@@ -12,8 +12,8 @@ use memo_core::error::CoreError;
 use memo_core::hide;
 use memo_core::notes::{NewNote, NoteDir, format_utc, is_generic_anchor, notes_for};
 use memo_core::query::{
-    callees, callers, coverage, impact, readers, symbol_info, tests_for, type_info, word_info,
-    writers,
+    callees, callers, composite_word, coverage, impact, readers, symbol_info, tests_for, type_info,
+    word_info, word_parts, writers,
 };
 use memo_core::store::SqliteStore;
 use std::path::PathBuf;
@@ -380,7 +380,23 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             }
             Err(e) => return Err(e.into()),
         },
+        Query::Word { word } if word_parts(word, &config).len() > 1 => {
+            let parts = word_parts(word, &config);
+            let mut info = composite_word(&store, word, &parts)?;
+            if !cli.tests {
+                let before = info.symbols.len();
+                info.symbols.retain(|s| !s.in_tests());
+                cov.testes_ocultos = count(before - info.symbols.len());
+            }
+            (
+                "query word",
+                json_value(&info)?,
+                render::composite_word_text(&info, "ok", &cov, max, limit, cli.all),
+            )
+        }
         Query::Word { word } => {
+            let parts = word_parts(word, &config);
+            let word = parts.first().unwrap_or(word);
             let mut info = word_info(&store, word, &config.bridges)?;
             if !cli.tests {
                 cov.testes_ocultos = count(hide::word(&mut info));
