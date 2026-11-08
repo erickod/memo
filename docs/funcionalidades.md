@@ -23,6 +23,7 @@ O que o `memo` faz hoje. Cada item diz como foi verificado: **teste** (coberto p
 
 - `brief "<pedido>"`: âncoras, símbolos com a etiqueta das pontes que os trouxeram, contorno, padrão, escritores e notas. Os símbolos que carregam a palavra vêm primeiro (até 10), os que chegam só por vizinhança depois (até 5), com amortecimento por grau para um hub não dominar; os testes ficam numa seção própria. (teste; medido)
 - `query symbol`, `callers`, `callees`, `impact`, `writers`, `readers`, `type`, `tests` e `word`. (teste)
+- `query impact` tem a seção `por palavra`: símbolos de produção cujo texto de uso (chamadas, receptores, tipos) contém todas as palavras do nome do alvo e que nenhuma aresta cobre. Vem da camada palavra ↔ item, que não depende de a chamada ter sido resolvida; é sempre aproximada (`~`). (teste)
 - `--no-tests`, `--limit`, `--max-chars`, `--json`, `--no-index`, e os deltas por task (`--since-last`, `--full`). (teste)
 - Saída compacta, sempre com endereços `caminho:Linicio-Lfim`, e a linha final `cobertura`. (teste)
 
