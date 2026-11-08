@@ -4,7 +4,7 @@ workdir: raiz do repositório (onde está o `Cargo.toml`)
 created_at: 2026-11-08
 
 ## Status
-- Estado: review — Requer alterações (CODE_REVIEW 2026-11-08: 🔴 R1, ver §9). A primeira rodada foi mergeada no PR #1 sem revisão (ver §10).
+- Estado: DEFINITION (terceira rodada: inferência aditiva, depois da medição no `bope` e da CODE_REVIEW com 🔴 R1; ver §9 e §10). A primeira rodada foi mergeada no PR #1 sem revisão.
 - Owner: Erick Duarte
 - ROLE requerida: eng (começa em DEFINITION)
 
@@ -57,6 +57,13 @@ Garantir, por construção do índice, que toda palavra que aparece em um item d
   A família é a classe dona, as bases e as subclasses (arestas `ESPECIALIZA` exatas, nos dois sentidos) e os Protocols que ela implementa (`ESPECIALIZA` exata ou estrutural, D9a). Alvo que não é método (função, classe, módulo) não tem família; a evidência é o módulo (D13): o uso é `forte` se está no mesmo módulo do alvo ou se o arquivo do uso importa o alvo ou o módulo dele (`import.target` igual ao `qname` do alvo ou ao módulo); sem isso, é `só nome`. Não existe `média` para esses alvos.
 - *Inferência:* o campo `nao_resolvidas_por_palavra` sai da `cobertura` e do JSON; a completude da camada relacional passa a ser garantida por teste de propriedade.
 
+**Terceira rodada (decisões D17 a D21, §9):**
+- *Inferência aditiva:* o `por palavra` lista **todo** item que a primeira rodada listava (símbolos de produção cujas palavras de uso, `ref` ou `type`, contêm as palavras do nome do alvo, menos os cobertos por aresta), agora por uso e com a linha. O nível de evidência é **rótulo e ordem**, nunca filtro. A lista `só nome` à parte e a linha `+N só pelo nome` saem (revoga a D8).
+- *Evidência por identificador:* uma classe da família conta só quando o nome dela aparece como identificador inteiro no texto ou no receptor de um uso (`Alpha(`, `Alpha.`, `[Alpha]`); `SubAlpha` não conta como `Alpha`, e `ClearOrderDebtCodeRepository` não conta como `OrderDebtCodeRepository`.
+- *Item de tipo:* um atributo cujo tipo anotado contém as palavras do nome do alvo volta como item próprio, com o rótulo `tipo`; a linha é a do atributo, e o nível segue a mesma regra de identificador sobre o texto do tipo.
+- *Desempenho:* `impact` de cada um dos 6 alvos da medição em até 500 ms no clone do `bope`; palavras dos usos candidatos carregadas em lote e índice `raw_ref(src, line)`; `schema_version` 4 → 5.
+- *Revisão:* R1 (D16: notas `word:` e snapshot de eventos só com fontes de vocabulário) e Y2 (`by_word` dividido em funções).
+
 ### Fora do escopo
 - Reestruturar o código para refletir os conceitos (item, linha, cluster, palavra ↔ palavra como tipos e módulos próprios). É a task seguinte, depois que a base e a inferência mínima provarem o desenho.
 - Ranking do nível por palavra pelas pontes e pela representatividade.
@@ -99,6 +106,18 @@ Revistos na revisão do merge (§10, 2026-11-08): os desmarcados não tinham tes
 - [x] **C11:** estatísticas, pontes, `brief` e `query word` não mudam (goldens desses comandos sem revisão)
 - [ ] **C12:** *não medido: pulado por decisão do humano (2026-11-08); não bloqueia o aceite.* custo medido no gerador de `docs/medicoes.md` (índice completo, sem mudança e com um arquivo alterado), antes e depois, registrado no §10; não bloqueia o aceite
 - [x] `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` e `cargo test` sem falhas
+
+### Terceira rodada
+C7 da segunda rodada fica revogado pela D17.
+- [ ] **C13, aditividade:** para todo alvo de uma fixture com usos em `ref` e em `type`, o conjunto de símbolos listados no `por palavra` contém o conjunto da regra da primeira rodada (palavras de `ref` ou `type` do símbolo contêm todas as palavras do nome do alvo; menos arestas, alvo e testes), calculado à parte no teste
+- [ ] **C14, sem filtro:** não existe mais `by_word_name_only` no JSON nem `+N só pelo nome` no texto; usos sem evidência aparecem listados com o rótulo `só nome`
+- [ ] **C15, identificador exato:** para `Alpha.run`, `AlphaBeta(1).run()` não é `forte` nem `média`; `SubAlpha(1).run()` é `forte`; para um alvo cuja família tem o Protocol `OrderDebtCodeRepository`, `ClearOrderDebtCodeRepository(s).run()` não é `forte` nem `média`
+- [ ] **C16, tipo:** um atributo `receipts: list[ReceiptOut]` aparece no `impact` de um alvo cujas palavras do nome estão no tipo, como item com rótulo `tipo` e a linha do atributo
+- [ ] **C17, ordem:** itens ordenados por nível (`forte`, `média`, `só nome`), depois `qname` e linha; mesma árvore dá a mesma saída byte a byte
+- [ ] **C18, desempenho:** os 6 alvos da medição de 2026-11-08 rodam `impact` em até 500 ms cada no clone do `bope` (binário `--release`, `--no-index`), medido e registrado no §10
+- [ ] **C19, R1:** nota `word:x` vira `orfa` quando `x` só aparece em texto de uso; o snapshot de eventos não lista palavra que só existe em `ref` ou `type`
+- [ ] **C20, Y2:** `by_word` dividido em funções com uma responsabilidade cada; nenhuma função nova acima de 60 linhas
+- [ ] **C21:** `--limit`, `--max-chars` e `+N omitidos` seguem valendo no `por palavra`; `cargo fmt --check`, `clippy -D warnings` e `cargo test` sem falhas
 
 ---
 
@@ -245,6 +264,12 @@ Função pura de evidência (`memo-core`). Ela recebe as palavras do uso, as pal
 - Decidido D14 (humano, recomendação aceita, na ENGINEERING): o "mesmo uso" da evidência `forte` é a linha do símbolo. O extrator divide `Alpha(1).run()` em duas `raw_ref` na mesma linha, `?.run` (sem receptor) e `Alpha`, e por isso a classe nunca aparecia no mesmo uso que o método. A alternativa de gravar o receptor no extrator foi recusada: o resolvedor lê o receptor e passaria a criar arestas novas. Efeito colateral aceito: `x = Alpha(); y.run()` numa linha só vira `forte`.
 - Decidido D15 (humano, recomendação aceita, na ENGINEERING): o `por palavra` só mostra usos de produção, como já fazia desde o PR #1 (`s.is_test = 0` no SQL), e o teste do C8 afirma isso. O extrator não grava chamadas no nível do módulo, e toda função em arquivo de teste é `is_test = 1`, então um uso de teste nunca chega à seção; o `--no-tests` não tem efeito nela.
 - Decidido D16 (humano, recomendação aceita, na CODE_REVIEW [2026-11-08T15:37-0300]): a palavra de uma nota `word:` e do snapshot de eventos vem só do vocabulário (`name`, `path`, `import`, `test_doc`), como em estatísticas, pontes e `brief`; as fontes de uso (`ref`, `type`) não contam.
+**Terceira rodada (2026-11-08, depois da medição no `bope`):**
+- Decidido D17 (humano, recomendação aceita): a estrutura só adiciona conexões, e a inferência as considera sem esconder nada; o `por palavra` é aditivo, e o nível é rótulo e ordem. Revoga a D8 e o C7.
+- Decidido D18 (humano, recomendação aceita): a evidência de classe exige o nome da classe como identificador inteiro no texto ou no receptor do uso; o subconjunto de palavras deixa de valer. A família da D9/D9a fica como está.
+- Decidido D19 (humano, recomendação aceita): atributo cujo tipo anotado contém o nome do alvo volta como item próprio, com o rótulo `tipo`.
+- Decidido D20 (humano, recomendação aceita): critério de desempenho de até 500 ms por alvo no `bope`, com carga em lote e índice `raw_ref(src, line)`.
+- Decidido D21 (humano, recomendação aceita): R1 e Y2 da revisão entram nesta rodada.
 - Decidido D10 (humano, recomendação aceita): `nao_resolvidas_por_palavra` sai da `cobertura` e do JSON; a completude vira teste de propriedade (C1, C2).
 - Decidido D11 (humano, recomendação aceita): a reconstrução das palavras de uso fica incremental, com medição antes e depois.
 - Decidido D12 (humano): plano aprovado; fluxo DEFINITION → TEST_ANALYSIS → ENGINEERING (`test:` red, depois `feat:` green, sem `Co-Authored-By`, cada alteração aprovada antes) → medição → docs.
@@ -402,6 +427,13 @@ VERIFY: reli o diff `8835ee4..c144bd45` do zero (crates/memo-core/src/{store,ind
 - cohesion.evidence: co-mudança medida só nos 22 commits do diff (janela: 8835ee4..c144bd45) · drift: não aplicável — sem estado empilhado de DEFINITION
 
 ## 10. Log de Decisões e Alterações
+
+### [2026-11-08] — Medição no `bope` e reabertura em DEFINITION (terceira rodada)
+- Tipo: medição e decisão
+- Medição (clones isolados em `/tmp/memo-cmp`, binários `--release` de `8835ee4` e da branch, `--no-index`, uma execução): índice completo 54 s → 52 s; `impact` por alvo, antes → agora: `UpdateOrderGroupForRenegotiationRepository.run` 160 listados, 0,07 s → forte 2, média 18, só nome 197, 4,33 s; `GroupRenegotiate.execute` 248, 0,07 s → 1/0/384, 7,63 s; `ImhotepReceiveNfeAccessKeysPort.call` 27 → 0/0/35, 0,75 s; `ManuallyLockedOrder.is_renegotiation` 7 → 0/2/10, 0,30 s; `ProcessReceivableLockRequestMessage.build` 37 → 0/0/51, 1,08 s; `OrderOut.receipt` 119 → 4/3/160, 3,49 s.
+- Achados conferidos no código do `bope`: os dois `forte` de `run` são falsos (`UpdateOrdersStatusByDebtCodeRepository(session).run`, `ClearOrderDebtCodeRepository(session).run`), pela família com o Protocol estrutural `OrderDebtCodeRepository` somada ao casamento por subconjunto de palavras; o `forte` de `execute` é verdadeiro (`operation.execute(input)`); cinco símbolos de `OrderOut.receipt` sumiram porque a busca de candidatos não lê mais `type`; o `impact` ficou de 10 a 100 vezes mais lento.
+- Decisão tomada: D17 a D21 (§9); critérios C13 a C21 (§4).
+- Impacto: `Estado: DEFINITION`; C7 revogado.
 
 ### [2026-11-08T15:37-0300] — code review Requer alterações
 - Tipo: revisão
