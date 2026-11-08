@@ -74,7 +74,7 @@ Com `--task`, a segunda chamada de `brief` ou `query impact` devolve só o que m
 
 O `memo` trata a palavra como o conceito central. Ela nasce de nomes de símbolos, de diretórios, de imports (nome e caminho do módulo) e das docstrings de testes (só palavras que já existem em algum identificador; `GIVEN`, `WHEN` e `THEN` marcam o trecho). Duas palavras se ligam por *pontes*: o mesmo símbolo, um teste e o símbolo que ele chama de forma exata, um import, uma chamada, o mesmo arquivo ou o mesmo contexto.
 
-`memo query word <palavra>` devolve a ficha: estatísticas (inclui `coer=`, a coerência da vizinhança), verbos, papéis e camadas, as vizinhas por tipo de ponte com os pesos, e os símbolos com as pontes que os trazem (`[nome, teste, import]`). O `memo brief` usa a mesma vizinhança só para ranquear: cada símbolo mostra por que entrou, a produção vem primeiro e os testes ficam numa seção `testes:` ao final.
+`memo query word <palavra>` devolve a ficha: estatísticas (inclui `coer=`, a coerência da vizinhança), verbos, papéis e camadas, as vizinhas por tipo de ponte com os pesos, e os símbolos com as pontes que os trazem (`[nome, teste, import]`). O `memo brief` usa a mesma vizinhança só para ranquear: cada símbolo mostra por que entrou, a produção vem primeiro e os testes ficam numa seção `testes:` ao final. Também mostra a **representatividade em arquivos**: em quantos arquivos do repositório a palavra aparece, a fração de cada contexto, e as vizinhas mais fortes com `P(palavra|vizinha)` e `P(vizinha|palavra)` (por exemplo, `order|reservation=0.65 reservation|order=0.39`: 65% dos arquivos com `reservation` também têm `order`, mas só 39% dos com `order` têm `reservation`). É informação, não classificação.
 
 Uma palavra só vira `esqueleto` (nunca âncora de `brief` nem de nota) se estiver na lista `skeleton` do `memo.toml`. O `memo` não decide sozinho se uma palavra é de domínio: `order`, `get` e `data` viram âncora, a menos que você as coloque na lista. Especificidade e coerência aparecem em `query word` só como informação.
 
@@ -160,7 +160,7 @@ O protocolo foi escrito sem teste contra clientes reais (Claude Code, Codex). Co
 
 Mudar o `memo.toml` não reextrai arquivos inalterados; rode `memo index --full`.
 
-**Atualização de versão:** o banco do `memo` é derivado. Quando o esquema muda (`schema_version`), o primeiro comando depois da atualização descarta o banco e reindexa tudo. As notas (`.md`) não são tocadas.
+**Atualização de versão:** o banco do `memo` é derivado. Quando o esquema muda (`schema_version`), o primeiro comando depois da atualização descarta o banco e reindexa tudo. As notas (`.md`) não são tocadas. Do mesmo modo, mudar no `memo.toml` o `skeleton`, `context_root`, `layers`, `verbs`, `roles`, `write_methods` ou os pesos de `[bridges]` faz o próximo comando reindexar tudo (as notas não mudam); `min_specificity` e `min_coherence` não têm mais efeito.
 
 Variáveis de ambiente: `MEMO_TASK` (equivale a `--task`) e `MEMO_LOCK_TIMEOUT_MS` (espera pelo lock do banco, padrão 30000).
 
@@ -197,7 +197,7 @@ O workspace tem quatro crates: `memo-core` (extração, grafo, consultas, notas 
 - Âncoras secundárias de uma nota não geram `stale` nem `orfa`.
 - Escrita em variável de módulo ou `global` ainda não gera a aresta `ESCREVE`.
 - Sem a regra automática, palavras de infraestrutura fora da lista `skeleton` (`is`, `id`, `usecase`) também viram âncora e podem trazer ruído ao `brief`; ajuste a lista no seu repositório.
-- Desempenho em repositório grande: num repositório sintético de 5.000 arquivos, a indexação completa levou cerca de 43 s, a reindexação sem mudança 0,04 s e o `brief` 0,36 s. `query word` leva cerca de 1 s e chega a 2 s em palavras que aparecem em quase todo arquivo.
+- Desempenho em repositório grande: num repositório sintético de 5.000 arquivos, a indexação completa levou cerca de 42 s, a reindexação sem mudança 0,04 s, o `brief` 0,36 s e `query word` de 1 a 2 s (2,3 s em palavra presente em quase todo arquivo).
 - Os formatos de `.mcp.json` e `.codex/config.toml` vieram da documentação por busca resumida; confira com o seu cliente.
 - Docstrings e comentários de produção ainda não geram palavras (só as de testes).
 - O relatório de aliases por vizinhança sugere pares sem sentido em repositórios pequenos; use-o como lista para revisar.

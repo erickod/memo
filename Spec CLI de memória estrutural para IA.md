@@ -66,7 +66,7 @@ O núcleo é uma biblioteca; o CLI, o servidor MCP e os adaptadores de harness s
 O grafo vive em SQLite, com uma tabela por entidade. O esquema abaixo é o contrato: o agente pode ajustar tipos e índices, mas não os nomes nem a semântica das colunas.
 
 ```sql
-CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);   -- schema_version, indexed_ref, indexed_commit
+CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);   -- schema_version, config_hash, indexed_ref, indexed_commit
 CREATE TABLE file(
   id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, hash TEXT NOT NULL,
   mtime_ns INTEGER, size INTEGER, context TEXT, layer TEXT, parse_error TEXT);
@@ -195,6 +195,7 @@ Após cada indexação, recalcular `word_stats` com SQL e uma iteração de Page
 - `centralidade` = PageRank (amortecimento 0,85, 20 iterações) no grafo de co-ocorrência por símbolo, sem palavras `skeleton`;
 - `coerencia` = peso das 10 vizinhas mais fortes (peso decrescente, nome crescente) dividido pelo peso total das pontes da palavra, de 0 a 1; vizinhas da lista `skeleton` não contam; sem vizinhas, 0;
 - `esqueleto = 1` se, e somente se, a palavra está na lista `skeleton` (decisão explícita do humano; TASK-3, D2). `especificidade` e `coerencia` ficam gravadas e aparecem em `query word`, só como informação: não decidem esqueleto, e `min_specificity` e `min_coherence` seguem aceitas no `memo.toml` sem efeito. O `memo` não decide sozinho se uma palavra é de domínio.
+- **representatividade** (só na ficha `query word`, derivada na consulta, sem tabela): em arquivos, conta os arquivos que têm a palavra em nome de símbolo sobre todos os arquivos (repositório), sobre os arquivos de cada contexto onde ela aparece, e, para cada vizinha com pelo menos 3 arquivos em comum (as 10 com mais arquivos em comum, empate por nome), `P(palavra|vizinha)` (dos arquivos da vizinha, quantos têm a palavra) e `P(vizinha|palavra)`. A assimetria mostra quem vive dentro do mundo de quem. Arquivo sem contexto conta só no repositório. É informação: não classifica a palavra como de domínio nem altera o ranking do `brief`.
 
 **Pontes entre palavras** (derivadas, sem tabela): símbolo (mesmo nome) 1,0 · teste e símbolo testado, só por chamada exata 0,8 · import 0,6 (externo 0,3) · chamada 0,5 · mesmo arquivo 0,3 · mesmo contexto 0,1; ponte aproximada (`~`) vale metade. Pesos em `[bridges]` do `memo.toml`. As pontes de arquivo e contexto só são calculadas por palavra (na ficha); a coerência usa símbolo, teste, import e chamada.
 
@@ -232,7 +233,7 @@ A indexação lê de uma abstração `SourceTree` com duas implementações: a �
 4. Recalcular `word_stats`.
 5. Comparar o conjunto de símbolos antes e depois e emitir os eventos da seção 10, todos no mesmo `batch`, dentro de uma transação.
 
-Indexar duas vezes seguidas sem mudança não escreve nada e não emite eventos. Meta inicial: reindexação sem mudanças abaixo de 300 ms em 5.000 arquivos.
+Indexar duas vezes seguidas sem mudança não escreve nada e não emite eventos. O banco guarda em `meta.config_hash` um hash das chaves do `memo.toml` que moldam o índice (`skeleton`, `context_root`, `layers`, `verbs`, `roles`, `write_methods` e os pesos de `[bridges]`); quando ele muda, ou falta (banco de uma versão anterior), o próximo `index` reextrai todos os arquivos, sem apagar eventos nem notas. `min_specificity`, `min_coherence`, `stale_on`, `main_branch` e `entrypoint_decorators` não entram no hash. Meta inicial: reindexação sem mudanças abaixo de 300 ms em 5.000 arquivos.
 
 ### 6.4 Derivar, promover e descartar
 
@@ -334,7 +335,7 @@ Flags: `--repo <caminho>` (padrão: raiz git atual), `--task <id>`, `--json`, `-
 | `query callees <sym> [--depth n]` | o que o símbolo chama |
 | `query impact <sym>` | callers, consumidores do tipo (`RECEBE`, `RETORNA`), Protocol e implementações, testes, notas |
 | `query writers <attr>` e `query readers <attr>` | símbolos que escrevem ou leem o atributo |
-| `query word <w>` | a ficha do conceito: estatísticas (inclui coerência), verbos, papéis, camadas, vizinhas por tipo de ponte com os pesos e os símbolos com as pontes que os trazem |
+| `query word <w>` | a ficha do conceito: estatísticas (inclui coerência), verbos, papéis, camadas, vizinhas por tipo de ponte com os pesos, a representatividade em arquivos (repositório, cada contexto e as 10 vizinhas mais fortes com `P(palavra\|vizinha)` e `P(vizinha\|palavra)`, piso de 3 arquivos em comum) e os símbolos com as pontes que os trazem |
 | `query aliases` | pares de palavras que provavelmente são o mesmo conceito (prefixo comum, ou vizinhança parecida), com o `note add` pronto; somente leitura |
 | `query type <T>` | quem produz e quem consome o tipo |
 | `query tests <sym>` | testes que chamam o símbolo (exato) e por sobreposição de palavras (`~`) |
