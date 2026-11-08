@@ -280,3 +280,157 @@ fn test_given_edge_consumer_when_impact_then_by_word_does_not_repeat_it() {
     assert!(consumers.contains(&"m.typed".to_string()), "{consumers:?}");
     assert!(!found.contains(&"m.typed".to_string()), "{found:?}");
 }
+
+fn words_of(conn: &Connection, sql: &str, id: i64) -> BTreeSet<String> {
+    conn.prepare(sql)
+        .unwrap()
+        .query_map([id], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// GIVEN fixture U plus a class with annotated attributes (type_text is only set on attributes)
+/// WHEN  the repository is indexed
+/// THEN  every symbol's 'type' occurrences are exactly the words of its type_text, and none without it
+#[test]
+fn test_given_typed_symbols_when_indexed_then_type_words_match_type_text() {
+    let holder = "from a import Alpha\n\nclass Holder:\n    runner: Alpha\n\n\
+                  def __init__(self):\n        self.backup: Optional[Alpha] = None\n";
+    let i = indexed(&[
+        ("a.py", FIXTURE_U_A),
+        ("m.py", FIXTURE_U_M),
+        ("h.py", holder),
+    ]);
+    let symbols: Vec<(i64, Option<String>)> = i
+        .conn
+        .prepare("SELECT id, type_text FROM symbol ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(symbols.iter().any(|(_, t)| t.is_some()));
+    let config = Config::default();
+    for (id, type_text) in symbols {
+        let expected: BTreeSet<String> = type_text
+            .iter()
+            .flat_map(|t| use_words(t, &config))
+            .map(|w| w.text)
+            .collect();
+        let owned = words_of(
+            &i.conn,
+            "SELECT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
+             WHERE o.owner_kind = 'symbol' AND o.owner_id = ?1 AND o.source = 'type'",
+            id,
+        );
+        assert_eq!(owned, expected, "symbol {id}");
+    }
+}
+
+/// GIVEN 'one()' in m.py calling 'helper()', resolved to the single definition in h.py
+/// WHEN  h.py drops 'helper' and is reindexed, with the caller file untouched
+/// THEN  the call's resolved state changes and the words of that use are identical
+#[test]
+fn test_given_call_made_ambiguous_elsewhere_when_reindexed_then_use_words_unchanged() {
+    let repo = Repo::empty();
+    repo.write("h.py", "def helper():\n    pass\n");
+    repo.write("m.py", "def one():\n    helper()\n");
+    let db = repo.path().join(".git/use-words-test.db");
+    let mut store = SqliteStore::open(&db).unwrap();
+    let state = |conn: &Connection| -> (i64, i64) {
+        conn.query_row(
+            "SELECT r.id, r.resolved FROM raw_ref r JOIN symbol s ON s.id = r.src
+             WHERE s.qname = 'm.one' AND r.callee_text = 'helper'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    };
+    let ref_words = "SELECT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
+                     WHERE o.owner_kind = 'ref' AND o.owner_id = ?1 AND o.source = 'ref'";
+    index(&WorkTree::new(repo.path()), &mut store).unwrap();
+    let conn = Connection::open(&db).unwrap();
+    let (id, before) = state(&conn);
+    let words_before = words_of(&conn, ref_words, id);
+    repo.write("h.py", "def other():\n    pass\n");
+    index(&WorkTree::new(repo.path()), &mut store).unwrap();
+    let (id_after, after) = state(&conn);
+    assert_ne!(before, after, "resolved should change");
+    assert_eq!(id, id_after);
+    assert_eq!(words_of(&conn, ref_words, id), words_before);
+}
+
+/// Ids das referências de `path` e rowids das ocorrências delas, em ordem.
+fn use_rows(conn: &Connection, path: &str) -> Vec<(i64, i64)> {
+    conn.prepare(
+        "SELECT r.id, o.rowid FROM raw_ref r JOIN file f ON f.id = r.file_id
+         JOIN occurrence o ON o.owner_kind = 'ref' AND o.owner_id = r.id
+         WHERE f.path = ?1 ORDER BY r.id, o.rowid",
+    )
+    .unwrap()
+    .query_map([path], |r| Ok((r.get(0)?, r.get(1)?)))
+    .unwrap()
+    .collect::<Result<_, _>>()
+    .unwrap()
+}
+
+/// GIVEN fixture U indexed
+/// WHEN  only a.py changes and the repository is reindexed
+/// THEN  the raw_ref ids of m.py and the rows of their occurrences are the same as before
+#[test]
+fn test_given_one_file_changed_when_reindexed_then_other_files_use_rows_untouched() {
+    let repo = Repo::empty();
+    repo.write("a.py", FIXTURE_U_A);
+    repo.write("m.py", FIXTURE_U_M);
+    let db = repo.path().join(".git/use-words-test.db");
+    let mut store = SqliteStore::open(&db).unwrap();
+    index(&WorkTree::new(repo.path()), &mut store).unwrap();
+    let conn = Connection::open(&db).unwrap();
+    let before = use_rows(&conn, "m.py");
+    assert!(!before.is_empty());
+    repo.write("a.py", &format!("{FIXTURE_U_A}\ndef extra():\n    pass\n"));
+    index(&WorkTree::new(repo.path()), &mut store).unwrap();
+    assert_eq!(use_rows(&conn, "m.py"), before);
+}
+
+/// (palavra, fonte, qname do símbolo, linha do uso) de todas as palavras de uso, com repetição.
+fn use_multiset(conn: &Connection) -> Vec<(String, String, String, Option<i64>)> {
+    conn.prepare(
+        "SELECT w.text, o.source, s.qname, r.line FROM occurrence o
+         JOIN word w ON w.id = o.word_id
+         JOIN raw_ref r ON o.owner_kind = 'ref' AND o.owner_id = r.id
+         JOIN symbol s ON s.id = r.src
+         WHERE o.source = 'ref'
+         UNION ALL
+         SELECT w.text, o.source, s.qname, NULL FROM occurrence o
+         JOIN word w ON w.id = o.word_id
+         JOIN symbol s ON o.owner_kind = 'symbol' AND o.owner_id = s.id
+         WHERE o.source = 'type'
+         ORDER BY 1, 2, 3, 4",
+    )
+    .unwrap()
+    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+    .unwrap()
+    .collect::<Result<_, _>>()
+    .unwrap()
+}
+
+/// GIVEN fixture U indexed, then a.py changed and reindexed
+/// WHEN  compared with a fresh index of the final tree
+/// THEN  the multiset of (word, source, owner symbol, line) of the use words is equal
+#[test]
+fn test_given_incremental_reindex_when_compared_then_equals_fresh_index() {
+    let changed = format!("{FIXTURE_U_A}\ndef extra(x: Beta):\n    x.run()\n");
+    let repo = Repo::empty();
+    repo.write("a.py", FIXTURE_U_A);
+    repo.write("m.py", FIXTURE_U_M);
+    let db = repo.path().join(".git/use-words-test.db");
+    let mut store = SqliteStore::open(&db).unwrap();
+    index(&WorkTree::new(repo.path()), &mut store).unwrap();
+    repo.write("a.py", &changed);
+    index(&WorkTree::new(repo.path()), &mut store).unwrap();
+    let incremental = use_multiset(&Connection::open(&db).unwrap());
+    let fresh = indexed(&[("a.py", &changed), ("m.py", FIXTURE_U_M)]);
+    assert_eq!(incremental, use_multiset(&fresh.conn));
+}
