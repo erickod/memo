@@ -268,3 +268,24 @@ fn test_given_word_only_in_import_when_import_removed_then_word_destroyed_event(
             .any(|e| e.subject.as_deref() == Some("stripe"))
     );
 }
+
+/// GIVEN a new call to an unknown name 'quokka_call'
+/// WHEN  the repository is reindexed
+/// THEN  no WORD_CREATED event is recorded for its words (TASK-6, D16)
+#[test]
+fn test_given_word_only_in_use_text_when_indexed_then_no_word_event() {
+    let (repo, mut store) = setup();
+    edit(
+        &repo,
+        "        self._repo.save(limit)\n",
+        "        self._repo.save(limit)\n        quokka_call()\n",
+    );
+    reindex(&repo, &mut store);
+    let created = of_kind(&store.events().unwrap(), "WORD_CREATED");
+    assert!(
+        created
+            .iter()
+            .all(|e| e.subject.as_deref() != Some("quokka")),
+        "{created:?}"
+    );
+}
