@@ -36,9 +36,38 @@ pub enum Anchor<'a> {
 /// Classifica um uso. `use_words` são as palavras do próprio uso; `symbol_words`, as dos outros
 /// usos e do tipo do símbolo que o contém.
 pub fn classify(
-    _use_words: &BTreeSet<String>,
-    _symbol_words: &BTreeSet<String>,
-    _anchor: &Anchor,
+    use_words: &BTreeSet<String>,
+    symbol_words: &BTreeSet<String>,
+    anchor: &Anchor,
 ) -> Evidence {
-    Evidence::SoNome
+    match anchor {
+        Anchor::Family(family) => {
+            // Uma classe conta quando todas as palavras do nome dela estão no texto.
+            let has_class = |words: &BTreeSet<String>| {
+                family
+                    .iter()
+                    .any(|class| !class.is_empty() && class.is_subset(words))
+            };
+            if has_class(use_words) {
+                Evidence::Forte
+            } else if has_class(symbol_words) {
+                Evidence::Media
+            } else {
+                Evidence::SoNome
+            }
+        }
+        Anchor::Module {
+            target,
+            target_module,
+            use_module,
+            imports,
+        } => {
+            let imported = imports.iter().any(|i| i == target || i == target_module);
+            if use_module == target_module || imported {
+                Evidence::Forte
+            } else {
+                Evidence::SoNome
+            }
+        }
+    }
 }
