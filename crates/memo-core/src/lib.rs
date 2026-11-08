@@ -1,5 +1,6 @@
 //! Núcleo: extração, grafo, consultas, notas e eventos.
 
+pub mod aliases;
 pub mod bridges;
 pub mod brief;
 pub mod config;

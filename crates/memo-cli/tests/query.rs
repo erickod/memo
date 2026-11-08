@@ -900,3 +900,19 @@ fn test_given_note_on_generic_word_when_status_then_marked_ancora_generica() {
         "{out}"
     );
 }
+
+/// GIVEN the fixture plus modules using cancel, canceled and cancelled
+/// WHEN  'memo query aliases' runs
+/// THEN  the golden report lists each pair with its reason and a ready 'memo note add' command
+#[test]
+fn test_given_alias_report_cli_when_run_then_note_add_command_ready() {
+    let repo = open_repo();
+    repo.write(
+        "app/hold/m.py",
+        "def cancel_a():\n    return 1\n\ndef canceled_b():\n    return 2\n\ndef cancelled_c():\n    return 3\n",
+    );
+    repo.commit_all();
+    let out = memo(&repo, &["query", "aliases"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
