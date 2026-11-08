@@ -8,7 +8,7 @@
 use crate::config::BridgeWeights;
 use crate::error::CoreError;
 use crate::store::SqliteStore;
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -178,113 +178,178 @@ fn call_bridges(
     Ok(())
 }
 
-/// Palavras do arquivo: nome do módulo e caminho.
-fn file_words(conn: &Connection, file_id: i64) -> Result<Vec<String>, CoreError> {
-    column(
-        conn,
-        "SELECT DISTINCT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
-         WHERE (o.owner_kind = 'file' AND o.owner_id = ?1 AND o.source = 'path')
-            OR (o.owner_kind = 'symbol' AND o.source = 'name' AND o.owner_id IN
-                (SELECT id FROM symbol WHERE file_id = ?1 AND kind = 'module'))
-         ORDER BY w.text",
-        [file_id],
-    )
+/// Palavras e donos carregados de uma vez (uma consulta por tipo), para as pontes de import,
+/// arquivo e contexto trabalharem em memória em vez de uma consulta por import ou por arquivo.
+struct Corpus {
+    /// arquivo -> palavras de nome dos símbolos dele
+    file_names: BTreeMap<i64, BTreeSet<i64>>,
+    /// arquivo -> palavras do caminho e do módulo
+    file_words: BTreeMap<i64, BTreeSet<i64>>,
+    /// arquivo -> contexto
+    file_context: BTreeMap<i64, String>,
+    /// import (rowid) -> palavras
+    imported: BTreeMap<i64, BTreeSet<i64>>,
+    texts: BTreeMap<i64, String>,
+    /// prefixos de `qname` que existem no repositório (para saber se um import é interno)
+    prefixes: HashSet<String>,
 }
 
-fn import_is_external(conn: &Connection, target: &str) -> Result<bool, CoreError> {
-    let internal: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM symbol WHERE qname = ?1 OR substr(qname, 1, length(?1) + 1) = ?1 || '.')",
-        [target],
-        |r| r.get(0),
+fn pairs(conn: &Connection, sql: &str) -> Result<BTreeMap<i64, BTreeSet<i64>>, CoreError> {
+    let mut map: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+    for row in rows {
+        let (owner, word) = row?;
+        map.entry(owner).or_default().insert(word);
+    }
+    Ok(map)
+}
+
+fn qname_prefixes(conn: &Connection) -> Result<HashSet<String>, CoreError> {
+    let mut prefixes = HashSet::new();
+    for qname in column(conn, "SELECT qname FROM symbol", [])? {
+        let mut end = 0;
+        for part in qname.split('.') {
+            end += part.len();
+            prefixes.insert(qname[..end].to_string());
+            end += 1;
+        }
+    }
+    Ok(prefixes)
+}
+
+fn load_corpus(conn: &Connection) -> Result<Corpus, CoreError> {
+    let file_names = pairs(
+        conn,
+        "SELECT s.file_id, o.word_id FROM occurrence o JOIN symbol s ON s.id = o.owner_id
+         WHERE o.owner_kind = 'symbol' AND o.source = 'name' AND s.file_id IS NOT NULL
+         ORDER BY s.file_id, o.word_id",
     )?;
-    Ok(!internal)
+    let mut file_words = pairs(
+        conn,
+        "SELECT owner_id, word_id FROM occurrence
+         WHERE owner_kind = 'file' AND source = 'path' ORDER BY owner_id, word_id",
+    )?;
+    let module_words = pairs(
+        conn,
+        "SELECT s.file_id, o.word_id FROM occurrence o JOIN symbol s ON s.id = o.owner_id
+         WHERE o.owner_kind = 'symbol' AND o.source = 'name' AND s.kind = 'module'
+         ORDER BY s.file_id, o.word_id",
+    )?;
+    for (file, words) in module_words {
+        file_words.entry(file).or_default().extend(words);
+    }
+    let file_context: BTreeMap<i64, String> = conn
+        .prepare("SELECT id, context FROM file WHERE context IS NOT NULL ORDER BY id")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    let imported = pairs(
+        conn,
+        "SELECT owner_id, word_id FROM occurrence WHERE owner_kind = 'import' ORDER BY owner_id, word_id",
+    )?;
+    let texts: BTreeMap<i64, String> = conn
+        .prepare("SELECT id, text FROM word ORDER BY id")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    Ok(Corpus {
+        file_names,
+        file_words,
+        file_context,
+        imported,
+        texts,
+        prefixes: qname_prefixes(conn)?,
+    })
 }
 
 fn import_bridges(
     conn: &Connection,
-    word: &str,
+    corpus: &Corpus,
+    word_id: i64,
     w: &BridgeWeights,
     acc: &mut Acc,
 ) -> Result<(), CoreError> {
+    let word = corpus.texts[&word_id].as_str();
     let imports: Vec<(i64, i64, String)> = conn
         .prepare_cached("SELECT rowid, file_id, target FROM import ORDER BY rowid")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<Result<_, _>>()?;
+    let empty = BTreeSet::new();
     for (rowid, file_id, target) in imports {
-        let weight = if import_is_external(conn, &target)? {
-            w.import_external
-        } else {
+        let imported = corpus.imported.get(&rowid).unwrap_or(&empty);
+        let in_file = corpus.file_words.get(&file_id).unwrap_or(&empty);
+        let (word_in_file, word_imported) =
+            (in_file.contains(&word_id), imported.contains(&word_id));
+        if !word_in_file && !word_imported {
+            continue;
+        }
+        let weight = if corpus.prefixes.contains(&target) {
             w.import
+        } else {
+            w.import_external
         };
-        let imported = column(
-            conn,
-            "SELECT DISTINCT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
-             WHERE o.owner_kind = 'import' AND o.owner_id = ?1 ORDER BY w.text",
-            [rowid],
-        )?;
-        let in_file = file_words(conn, file_id)?;
-        let word_in_file = in_file.iter().any(|x| x == word);
-        let word_imported = imported.iter().any(|x| x == word);
         if word_in_file {
-            for other in &imported {
-                add(acc, BridgeKind::Import, other, word, weight);
+            for other in imported {
+                add(acc, BridgeKind::Import, &corpus.texts[other], word, weight);
             }
         }
         if word_imported {
-            for other in &in_file {
-                add(acc, BridgeKind::Import, other, word, weight);
+            for other in in_file {
+                add(acc, BridgeKind::Import, &corpus.texts[other], word, weight);
             }
         }
     }
     Ok(())
 }
 
-fn file_and_context_bridges(
-    conn: &Connection,
-    word: &str,
-    word_id: i64,
-    w: &BridgeWeights,
-    acc: &mut Acc,
-) -> Result<(), CoreError> {
-    let rows: Vec<(String, i64)> = conn
-        .prepare_cached(
-            "SELECT w2.text, COUNT(DISTINCT s1.file_id)
-             FROM occurrence o1 JOIN symbol s1 ON s1.id = o1.owner_id
-             JOIN symbol s2 ON s2.file_id = s1.file_id
-             JOIN occurrence o2 ON o2.owner_kind = 'symbol' AND o2.owner_id = s2.id AND o2.source = 'name'
-             JOIN word w2 ON w2.id = o2.word_id
-             WHERE o1.word_id = ?1 AND o1.owner_kind = 'symbol' AND o1.source = 'name' AND o2.word_id != o1.word_id
-             GROUP BY w2.text ORDER BY w2.text",
-        )?
-        .query_map(params![word_id], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<Result<_, _>>()?;
-    for (other, files) in rows {
-        add(acc, BridgeKind::File, &other, word, w.file * files as f64);
+/// Arquivo: palavras de símbolos do mesmo arquivo, `file` por arquivo em comum. Contexto: o mesmo
+/// para os arquivos do mesmo contexto, `context` por contexto em comum.
+fn file_and_context_bridges(corpus: &Corpus, word_id: i64, w: &BridgeWeights, acc: &mut Acc) {
+    let word = corpus.texts[&word_id].as_str();
+    let mut by_file: BTreeMap<i64, usize> = BTreeMap::new();
+    let mut contexts: BTreeMap<&str, BTreeSet<i64>> = BTreeMap::new();
+    let mut files_with_word: BTreeSet<&str> = BTreeSet::new();
+    for (file, words) in &corpus.file_names {
+        if !words.contains(&word_id) {
+            continue;
+        }
+        for other in words.iter().filter(|o| **o != word_id) {
+            *by_file.entry(*other).or_insert(0) += 1;
+        }
+        if let Some(context) = corpus.file_context.get(file) {
+            files_with_word.insert(context.as_str());
+        }
     }
-    let rows: Vec<(String, i64)> = conn
-        .prepare_cached(
-            "SELECT w2.text, COUNT(DISTINCT f1.context)
-             FROM occurrence o1 JOIN symbol s1 ON s1.id = o1.owner_id
-             JOIN file f1 ON f1.id = s1.file_id AND f1.context IS NOT NULL
-             JOIN file f2 ON f2.context = f1.context
-             JOIN symbol s2 ON s2.file_id = f2.id
-             JOIN occurrence o2 ON o2.owner_kind = 'symbol' AND o2.owner_id = s2.id AND o2.source = 'name'
-             JOIN word w2 ON w2.id = o2.word_id
-             WHERE o1.word_id = ?1 AND o1.owner_kind = 'symbol' AND o1.source = 'name' AND o2.word_id != o1.word_id
-             GROUP BY w2.text ORDER BY w2.text",
-        )?
-        .query_map(params![word_id], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<Result<_, _>>()?;
-    for (other, contexts) in rows {
+    for (other, count) in by_file {
+        add(
+            acc,
+            BridgeKind::File,
+            &corpus.texts[&other],
+            word,
+            w.file * count as f64,
+        );
+    }
+    for (file, words) in &corpus.file_names {
+        if let Some(context) = corpus.file_context.get(file)
+            && files_with_word.contains(context.as_str())
+        {
+            contexts.entry(context.as_str()).or_default().extend(words);
+        }
+    }
+    let mut by_context: BTreeMap<i64, usize> = BTreeMap::new();
+    for words in contexts.values() {
+        for other in words.iter().filter(|o| **o != word_id) {
+            *by_context.entry(*other).or_insert(0) += 1;
+        }
+    }
+    for (other, count) in by_context {
         add(
             acc,
             BridgeKind::Context,
-            &other,
+            &corpus.texts[&other],
             word,
-            w.context * contexts as f64,
+            w.context * count as f64,
         );
     }
-    Ok(())
 }
 
 /// Vizinhas de uma palavra por tipo de ponte, da mais pesada para a mais leve (desempate: tipo,
@@ -305,8 +370,9 @@ pub fn word_bridges(
     let mut acc = Acc::new();
     symbol_bridges(conn, &word, word_id, weights, &mut acc)?;
     call_bridges(conn, &word, word_id, weights, &mut acc)?;
-    import_bridges(conn, &word, weights, &mut acc)?;
-    file_and_context_bridges(conn, &word, word_id, weights, &mut acc)?;
+    let corpus = load_corpus(conn)?;
+    import_bridges(conn, &corpus, word_id, weights, &mut acc)?;
+    file_and_context_bridges(&corpus, word_id, weights, &mut acc);
     let mut out: Vec<Bridge> = acc
         .into_iter()
         .map(|((kind, other), weight)| Bridge {

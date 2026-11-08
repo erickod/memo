@@ -313,10 +313,12 @@ fn tagged_symbols(
             .collect::<Result<_, _>>()?;
         ids.extend(found);
     }
+    let mut seen: std::collections::HashSet<String> =
+        by_name.iter().map(|a| a.qname.clone()).collect();
     let mut all: Vec<SymbolAddr> = by_name;
     for id in ids {
         let addr = addr_by_id(store, id)?;
-        if all.iter().all(|a| a.qname != addr.qname) {
+        if seen.insert(addr.qname.clone()) {
             all.push(addr);
         }
     }
@@ -342,6 +344,20 @@ pub fn word_info(
     word: &str,
     weights: &crate::config::BridgeWeights,
 ) -> Result<WordInfo, CoreError> {
+    word_core(store, word, Some(weights))
+}
+
+/// Só verbos, papéis, camadas e vizinhas de símbolo da palavra, sem a ficha de pontes nem os
+/// símbolos etiquetados: barato em repositório grande (o `brief` usa para o padrão).
+pub fn word_pattern(store: &SqliteStore, word: &str) -> Result<WordInfo, CoreError> {
+    word_core(store, word, None)
+}
+
+fn word_core(
+    store: &SqliteStore,
+    word: &str,
+    weights: Option<&crate::config::BridgeWeights>,
+) -> Result<WordInfo, CoreError> {
     let word = word.to_lowercase();
     let word_id: i64 = store
         .conn
@@ -356,12 +372,17 @@ pub fn word_info(
          JOIN symbol s ON s.id = o.symbol_id LEFT JOIN file f ON f.id = s.file_id
          WHERE o.word_id = ?1 ORDER BY s.qname"
     );
-    let by_name = store
-        .conn
-        .prepare(&sql)?
-        .query_map([word_id], addr_from_row)?
-        .collect::<Result<Vec<_>, _>>()?;
-    let symbols = tagged_symbols(store, word_id, by_name)?;
+    let symbols = match weights {
+        Some(_) => {
+            let by_name = store
+                .conn
+                .prepare(&sql)?
+                .query_map([word_id], addr_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            tagged_symbols(store, word_id, by_name)?
+        }
+        None => Vec::new(),
+    };
 
     let mut verbs = Vec::new();
     let mut roles = Vec::new();
@@ -407,7 +428,10 @@ pub fn word_info(
         .collect::<Result<Vec<String>, _>>()?;
 
     let stats = word_stats(store, &word)?;
-    let bridges = crate::bridges::word_bridges(store, &word, weights)?;
+    let bridges = match weights {
+        Some(w) => crate::bridges::word_bridges(store, &word, w)?,
+        None => Vec::new(),
+    };
     Ok(WordInfo {
         word,
         verbs,

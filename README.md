@@ -197,7 +197,7 @@ O workspace tem quatro crates: `memo-core` (extração, grafo, consultas, notas 
 - Âncoras secundárias de uma nota não geram `stale` nem `orfa`.
 - Escrita em variável de módulo ou `global` ainda não gera a aresta `ESCREVE`.
 - O limiar `min_specificity` precisa de calibração num repositório real; em repositórios pequenos, até palavras do domínio caem em `esqueleto`.
-- Desempenho em repositório grande: a indexação completa de 5.000 arquivos levou cerca de 46 s numa medição sintética anterior à ficha do conceito (meta: 60 s). Depois dela, num repositório sintético de 5.000 arquivos, `brief` e `query word` ficaram lentos (minutos, contra a meta de 500 ms) e a indexação completa não foi remedida. A correção está planejada, mas ainda não foi feita.
+- Desempenho em repositório grande: num repositório sintético de 5.000 arquivos, a indexação completa levou cerca de 43 s, a reindexação sem mudança 0,04 s e o `brief` 0,36 s. `query word` leva cerca de 1 s e chega a 2 s em palavras que aparecem em quase todo arquivo.
 - Os formatos de `.mcp.json` e `.codex/config.toml` vieram da documentação por busca resumida; confira com o seu cliente.
 - Docstrings e comentários de produção ainda não geram palavras (só as de testes).
 - O relatório de aliases por vizinhança sugere pares sem sentido em repositórios pequenos; use-o como lista para revisar.

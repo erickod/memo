@@ -4,7 +4,7 @@ use crate::config::BridgeWeights;
 use crate::delta::filter_new;
 use crate::error::CoreError;
 use crate::notes::{Note, notes_for};
-use crate::query::{SymbolAddr, addr_by_id, short_name, word_info};
+use crate::query::{SymbolAddr, addr_by_id, short_name, word_pattern};
 use crate::store::SqliteStore;
 use crate::tags::bridge_tags;
 use serde::Serialize;
@@ -430,7 +430,7 @@ pub fn brief_weighted(
     let ranked_addrs: Vec<SymbolAddr> = ranked.iter().map(|(_, _, a)| a.clone()).collect();
     let pattern = match anchors.first() {
         Some(a) => {
-            let info = word_info(store, &a.word, weights)?;
+            let info = word_pattern(store, &a.word)?;
             Some(Pattern {
                 word: a.word.clone(),
                 verbs: info.verbs,
