@@ -70,7 +70,8 @@ fn symbol_words(
 ) -> Result<Vec<String>, CoreError> {
     let sql = if with_doc {
         "SELECT DISTINCT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
-         WHERE o.owner_kind = 'symbol' AND o.owner_id = ?1 ORDER BY w.text"
+         WHERE o.owner_kind = 'symbol' AND o.owner_id = ?1 AND o.source IN ('name', 'test_doc')
+         ORDER BY w.text"
     } else {
         "SELECT DISTINCT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
          WHERE o.owner_kind = 'symbol' AND o.owner_id = ?1 AND o.source = 'name' ORDER BY w.text"
@@ -83,7 +84,11 @@ fn symbol_ids_with_word(
     word_id: i64,
     with_doc: bool,
 ) -> Result<Vec<i64>, CoreError> {
-    let filter = if with_doc { "" } else { "AND source = 'name'" };
+    let filter = if with_doc {
+        "AND source IN ('name', 'test_doc')"
+    } else {
+        "AND source = 'name'"
+    };
     let sql = format!(
         "SELECT DISTINCT owner_id FROM occurrence
          WHERE word_id = ?1 AND owner_kind = 'symbol' {filter} ORDER BY owner_id"

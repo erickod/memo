@@ -5,6 +5,7 @@ use crate::index::module_of;
 use crate::store::SqliteStore;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SymbolAddr {
@@ -93,6 +94,8 @@ pub struct Coverage {
     pub resolvidas: i64,
     pub aproximadas: i64,
     pub nao_resolvidas: i64,
+    /// Das não resolvidas, as que o `impact` ainda alcança por palavra (camada relacional).
+    pub nao_resolvidas_por_palavra: i64,
     pub arquivos_com_erro: i64,
     /// Itens de teste escondidos pela flag `--no-tests` (preenchido pelo CLI).
     pub testes_ocultos: i64,
@@ -285,6 +288,11 @@ pub fn coverage(store: &SqliteStore) -> Result<Coverage, CoreError> {
         resolvidas: count("SELECT COUNT(*) FROM edge WHERE dst IS NOT NULL AND approx = 0")?,
         aproximadas: count("SELECT COUNT(*) FROM edge WHERE approx = 1")?,
         nao_resolvidas: count("SELECT COUNT(*) FROM raw_ref WHERE resolved = 0")?,
+        nao_resolvidas_por_palavra: count(
+            "SELECT COUNT(*) FROM raw_ref r WHERE r.resolved = 0 AND EXISTS (
+               SELECT 1 FROM occurrence o
+               WHERE o.owner_kind = 'symbol' AND o.owner_id = r.src AND o.source = 'ref')",
+        )?,
         arquivos_com_erro: count("SELECT COUNT(*) FROM file WHERE parse_error IS NOT NULL")?,
         notas_com_erro: 0,
         testes_ocultos: 0,
@@ -484,6 +492,9 @@ pub struct Impact {
     pub callers: Vec<ChainItem>,
     pub consumers: Vec<RelItem>,
     pub protocol: Vec<RelItem>,
+    /// Símbolos de produção cujo texto de uso contém todas as palavras do nome do alvo e que
+    /// nenhuma aresta cobre: relação por palavra, sempre aproximada.
+    pub by_word: Vec<RelItem>,
     pub tests: TestsInfo,
     pub notes: Vec<crate::notes::Note>,
     /// Itens omitidos por já terem sido entregues nesta task (spec §8.4).
@@ -684,6 +695,55 @@ fn protocol_counterparts(store: &SqliteStore, id: i64) -> Result<Vec<RelItem>, C
     Ok(rows)
 }
 
+/// Camada relacional do `impact`: símbolos de produção que têm, entre as palavras de uso
+/// (`ref` e `type`), todas as palavras do nome do alvo, menos os que as arestas já cobrem.
+fn by_word(
+    store: &SqliteStore,
+    id: i64,
+    covered: &HashSet<String>,
+) -> Result<Vec<RelItem>, CoreError> {
+    let words: Vec<i64> = store
+        .conn
+        .prepare(
+            "SELECT DISTINCT word_id FROM occurrence
+             WHERE owner_kind = 'symbol' AND owner_id = ?1 AND source = 'name' ORDER BY word_id",
+        )?
+        .query_map([id], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+    let list = words
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT {ADDR_COLUMNS} FROM symbol s LEFT JOIN file f ON f.id = s.file_id
+         WHERE s.is_test = 0 AND s.id != ?1 AND s.id IN (
+           SELECT owner_id FROM occurrence
+           WHERE owner_kind = 'symbol' AND source IN ('ref', 'type') AND word_id IN ({list})
+           GROUP BY owner_id HAVING COUNT(DISTINCT word_id) = {})
+         ORDER BY s.qname",
+        words.len()
+    );
+    let rows = store
+        .conn
+        .prepare(&sql)?
+        .query_map([id], addr_from_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .filter(|addr| !covered.contains(&addr.qname))
+        .map(|addr| RelItem {
+            addr,
+            attr: None,
+            line: None,
+            approx: true,
+        })
+        .collect())
+}
+
 /// O que muda se o símbolo mudar: chamadores, consumidores do tipo, Protocol, testes.
 pub fn impact(store: &SqliteStore, target: &str) -> Result<Impact, CoreError> {
     let qname = resolve_qname(store, target)?;
@@ -694,10 +754,23 @@ pub fn impact(store: &SqliteStore, target: &str) -> Result<Impact, CoreError> {
         consumers.extend(related(store, &qname, "RECEBE")?);
         consumers.extend(related(store, &qname, "RETORNA")?);
     }
+    let callers = walk_calls(store, id, 2, true)?;
+    let protocol = protocol_counterparts(store, id)?;
+    let covered: HashSet<String> = callers
+        .iter()
+        .filter_map(|c| c.addr.as_ref().map(|a| a.qname.clone()))
+        .chain(
+            consumers
+                .iter()
+                .chain(&protocol)
+                .map(|c| c.addr.qname.clone()),
+        )
+        .collect();
     Ok(Impact {
-        callers: walk_calls(store, id, 2, true)?,
+        by_word: by_word(store, id, &covered)?,
+        callers,
         consumers,
-        protocol: protocol_counterparts(store, id)?,
+        protocol,
         tests: tests_for(store, &qname)?,
         notes: Vec::new(),
         unchanged: None,

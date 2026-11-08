@@ -67,7 +67,7 @@ memo brief "<pedido>"                        # âncoras, símbolos, contorno, pa
 memo query symbol <símbolo>                  # endereço, assinatura, arestas diretas e notas
 memo query callers <símbolo> --depth 2       # quem chama (profundidade até 3)
 memo query callees <símbolo>                 # o que ele chama
-memo query impact <símbolo>                  # chamadores, consumidores do tipo, Protocol, testes, notas
+memo query impact <símbolo>                  # chamadores, consumidores do tipo, Protocol, por palavra (~), testes, notas
 memo query writers <Classe.atributo>         # quem escreve o atributo
 memo query readers <Classe.atributo>         # quem lê o atributo
 memo query type <Tipo>                       # quem produz e quem consome o tipo

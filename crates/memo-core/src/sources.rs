@@ -1,4 +1,5 @@
-//! Palavras que não vêm de nomes de símbolos: diretórios, imports e docstrings de teste.
+//! Palavras que não vêm de nomes de símbolos: diretórios, imports, docstrings de teste e o texto
+//! de uso (chamadas, receptores e tipos).
 //!
 //! Funções puras: recebem o caminho ou o texto e a configuração e devolvem palavras.
 
@@ -100,4 +101,13 @@ pub fn doc_words(text: &str, known: &HashSet<String>, config: &Config) -> Vec<Wo
         }
     }
     out
+}
+
+/// Palavras de um texto de uso (`Repo(session).run`, `Optional[LockResult]`): cada trecho
+/// alfanumérico vira as palavras de um nome, sem filtro e sem marcador de segmento.
+pub fn use_words(text: &str, config: &Config) -> Vec<WordOcc> {
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|chunk| !chunk.is_empty())
+        .flat_map(|chunk| classify_name_with(chunk, NameKind::Callable, &config.vocabulary))
+        .collect()
 }

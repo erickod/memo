@@ -58,6 +58,7 @@ pub fn impact(i: &mut Impact) -> usize {
         })
         + drop_where(&mut i.consumers, |c| c.addr.in_tests())
         + drop_where(&mut i.protocol, |c| c.addr.in_tests())
+        + drop_where(&mut i.by_word, |c| c.addr.in_tests())
 }
 
 /// Esconde os símbolos de teste e a linha de pontes `teste`; as estatísticas ficam como estão.

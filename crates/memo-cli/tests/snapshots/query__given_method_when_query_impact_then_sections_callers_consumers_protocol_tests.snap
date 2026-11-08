@@ -11,6 +11,8 @@ consumidores:
   nenhum
 protocolo:
   M LimitRepository.save   app/billing/domain/protocols/limit_repository.py:L5-L5 ~
+por palavra:
+  nenhum
 testes exatos:
   nenhum
 testes ~:

@@ -15,6 +15,7 @@ Estas são as TASKs do `memo`, em ordem. Cada arquivo é um registro completo e 
 | [TASK-3](TASK-3-coerencia-sem-ruido-e-config-no-indice_2026-11-08.md) | done | Esqueleto só pela lista `skeleton`; índice que reindexa quando a config muda (hash em `meta`); representatividade em arquivos na ficha `query word` | `e7ff342` a `7a21ca5`, `73e522f` |
 | [TASK-4](TASK-4-brief-sem-dominancia-de-hubs_2026-11-09.md) | done | `brief` com dois níveis (quem carrega a âncora antes; vizinhos depois, com cota 10/5) e amortecimento do salto pelo grau do vizinho | `a691499` a `d0871b0` |
 | [TASK-5](TASK-5-brief-centralidade-no-nivel-1_2026-11-08.md) | **draft** | Nada ainda. Rascunho: o nível 1 do `brief order` virou uma lista de módulos; falta medir três candidatos antes de definir | nenhum |
+| [TASK-6](TASK-6-camada-relacional-palavra-item_2026-11-08.md) | **draft** | Nada ainda. Rascunho: camada relacional palavra ↔ item completa por construção (texto das referências e tipos viram ocorrências, sem depender de resolução) e `impact` por palavra como primeira inferência; reestruturar o código pelos conceitos fica para depois | nenhum |
 
 (Os nomes dos arquivos têm datas de criação; a TASK-4 saiu com a data 2026-11-09 e a TASK-5 com 2026-11-08 por causa do relógio da máquina na época. A numeração é a ordem real.)
 

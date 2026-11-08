@@ -6,7 +6,7 @@ use crate::events::{Delta, EventSummary};
 use crate::extract::{FileFacts, SymbolKind, extract_python_file};
 use crate::resolve::resolve_files;
 use crate::source::{SourceFile, SourceTree};
-use crate::sources::{doc_words, import_words, path_words};
+use crate::sources::{doc_words, import_words, path_words, use_words};
 use crate::store::SqliteStore;
 use crate::words::{NameKind, Segment, Slot, WordOcc, classify_name_with};
 use rayon::prelude::*;
@@ -218,6 +218,54 @@ fn rebuild_doc_words(tx: &Transaction, config: &Config) -> Result<(), CoreError>
             source: "test_doc",
         };
         insert_owned_words(tx, &owner, &doc_words(&text, &known, config))?;
+    }
+    Ok(())
+}
+
+/// Reconstrói as palavras de uso: o texto de cada referência (chamada, receptor, tipo recebido ou
+/// devolvido) e o tipo anotado de cada símbolo. Não dependem de a referência ter sido resolvida,
+/// e ficam sem `symbol_id` para as estatísticas e o `brief` não as verem.
+fn rebuild_use_words(tx: &Transaction, config: &Config) -> Result<(), CoreError> {
+    tx.execute("DELETE FROM occurrence WHERE source IN ('ref', 'type')", [])?;
+    let mut stmt = tx.prepare(
+        "SELECT src, callee_text, receiver FROM raw_ref
+         WHERE callee_text IS NOT NULL OR receiver IS NOT NULL ORDER BY src, rowid",
+    )?;
+    let rows: Vec<(i64, Option<String>, Option<String>)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    let mut by_owner: Vec<(i64, Vec<WordOcc>)> = Vec::new();
+    for (src, text, receiver) in rows {
+        if by_owner.last().is_none_or(|(owner, _)| *owner != src) {
+            by_owner.push((src, Vec::new()));
+        }
+        let words = &mut by_owner.last_mut().expect("just pushed").1;
+        for part in [text, receiver].into_iter().flatten() {
+            words.extend(use_words(&part, config));
+        }
+    }
+    for (owner_id, words) in by_owner {
+        let owner = OwnedWords {
+            owner_kind: "symbol",
+            owner_id,
+            symbol_id: None,
+            source: "ref",
+        };
+        insert_owned_words(tx, &owner, &words)?;
+    }
+    let mut stmt =
+        tx.prepare("SELECT id, type_text FROM symbol WHERE type_text IS NOT NULL ORDER BY id")?;
+    let typed: Vec<(i64, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    for (owner_id, text) in typed {
+        let owner = OwnedWords {
+            owner_kind: "symbol",
+            owner_id,
+            symbol_id: None,
+            source: "type",
+        };
+        insert_owned_words(tx, &owner, &use_words(&text, config))?;
     }
     Ok(())
 }
@@ -548,6 +596,7 @@ fn run_index(
     }
     rebuild_import_words(&tx, config)?;
     rebuild_doc_words(&tx, config)?;
+    rebuild_use_words(&tx, config)?;
     resolve_files(&tx, &to_resolve, &config.write_methods)?;
     crate::stats::recompute(&tx, config)?;
     let after = crate::events::snapshot(&tx)?;
