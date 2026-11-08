@@ -1,6 +1,6 @@
 //! Servidor MCP por stdio, em JSON-RPC mínimo à mão (D11 da TASK; spec §9.4).
 //!
-//! O protocolo e o contrato das quatro ferramentas vivem aqui; quem executa uma ferramenta é um
+//! O protocolo e o contrato das seis ferramentas vivem aqui; quem executa uma ferramenta é um
 //! [`Backend`], que roda o mesmo comando do CLI, então a saída é idêntica à do shell.
 
 use serde_json::{Map, Value, json};
@@ -41,7 +41,7 @@ fn error(id: &Value, code: i64, message: &str) -> String {
     reply(id, json!({ "error": { "code": code, "message": message } }))
 }
 
-/// As quatro ferramentas da spec §9.4, com descrições curtas para gastar pouco contexto.
+/// As ferramentas da spec §9.4, com descrições curtas para gastar pouco contexto.
 fn tools() -> Value {
     json!([
         {
@@ -85,6 +85,23 @@ fn tools() -> Value {
                     "confirm": { "type": "boolean", "description": "Só para decisão vinda de rodada humana." }
                 },
                 "required": ["tipo", "ancora", "texto"]
+            }
+        },
+        {
+            "name": "note_show",
+            "description": "Texto inteiro de uma nota (o brief e o symbol mostram só o resumo e o id).",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "string", "description": "Id da nota, como n-abc12345." } },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "note_list",
+            "description": "Todas as notas visíveis, uma por linha: id, tipo, estado, escopo e âncora.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "task": { "type": "string" } }
             }
         },
         {
@@ -159,6 +176,8 @@ impl<B: Backend> Server<B> {
                 }
                 push(&mut argv, &["--", texto]);
             }
+            "note_show" => push(&mut argv, &["note", "show", "--", required(args, "id")?]),
+            "note_list" => push(&mut argv, &["note", "list"]),
             "status" => push(&mut argv, &["status"]),
             other => return Err(format!("unknown tool '{other}'")),
         }
