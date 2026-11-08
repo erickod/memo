@@ -470,7 +470,6 @@ fn impact_of(files: &[(&str, &str)], target: &str) -> Impact {
 fn level(info: &Impact, nivel: Evidence) -> BTreeSet<String> {
     info.by_word
         .iter()
-        .chain(&info.by_word_name_only)
         .filter(|i| i.nivel == nivel)
         .map(|i| i.item.addr.qname.clone())
         .collect()
@@ -496,7 +495,7 @@ fn minus(names: &[&str], drop: &BTreeSet<String>) -> BTreeSet<String> {
 
 /// GIVEN fixture U
 /// WHEN  impact runs on a.Alpha.run
-/// THEN  uses split into strong, medium and name only, minus whatever edges already cover
+/// THEN  uses are labeled strong, medium and name only, all listed, minus whatever edges cover
 #[test]
 fn test_given_family_uses_when_impact_then_strong_medium_and_name_only_split() {
     let info = impact_of(
@@ -515,12 +514,6 @@ fn test_given_family_uses_when_impact_then_strong_medium_and_name_only_split() {
     assert_eq!(
         level(&info, Evidence::SoNome),
         minus(&["m.only_beta", "m.only_obj"], &edges)
-    );
-    assert!(info.by_word.iter().all(|i| i.nivel != Evidence::SoNome));
-    assert!(
-        info.by_word_name_only
-            .iter()
-            .all(|i| i.nivel == Evidence::SoNome)
     );
 }
 
@@ -542,25 +535,22 @@ const FIXTURE_F: &[(&str, &str)] = &[
 
 /// GIVEN fixture F
 /// WHEN  impact runs on m.helper
-/// THEN  other_use is counted as name only and never listed as strong or medium
+/// THEN  other_use is listed as name only and never as strong or medium
 #[test]
 fn test_given_homonym_call_when_impact_then_name_only_counted() {
     let info = impact_of(FIXTURE_F, "m.helper");
     assert!(
         level(&info, Evidence::SoNome).contains("w.other_use"),
         "{:?}",
-        info.by_word_name_only
-    );
-    assert!(
         info.by_word
-            .iter()
-            .all(|i| i.item.addr.qname != "w.other_use")
     );
+    assert!(!level(&info, Evidence::Forte).contains("w.other_use"));
+    assert!(!level(&info, Evidence::Media).contains("w.other_use"));
 }
 
 /// GIVEN fixture U
 /// WHEN  impact runs on a.Alpha.run
-/// THEN  each strong and medium item carries the line of a use of 'run' inside its symbol
+/// THEN  each listed use carries the line of a use of 'run' inside its symbol
 #[test]
 fn test_given_by_word_item_when_impact_then_line_is_use_line() {
     let info = impact_of(
@@ -594,4 +584,177 @@ fn test_given_same_tree_twice_when_impact_then_identical_bytes() {
     let first = serde_json::to_string(&impact_of(&files, "a.Alpha.run")).unwrap();
     let second = serde_json::to_string(&impact_of(&files, "a.Alpha.run")).unwrap();
     assert_eq!(first, second);
+}
+
+/// Fixture U2 (TASK-6, rodada 3): U mais uma classe parecida, atributos tipados e usos espalhados.
+fn fixture_u2() -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "a.py",
+            format!("{FIXTURE_U_A}\nclass AlphaBeta:\n    def run(self):\n        pass\n"),
+        ),
+        (
+            "m.py",
+            format!(
+                "{}\nfrom a import AlphaBeta\n\n\
+                 def lookalike():\n    AlphaBeta(1).run()\n\n\
+                 class Holder:\n    runner: Alpha\n\n    def __init__(self):\n\
+                 \x20       self.backups: list[Alpha] = []\n\n\
+                 def spread(obj):\n    x = Alpha\n    obj.run()\n",
+                FIXTURE_U_M
+            ),
+        ),
+    ]
+}
+
+/// Indexa os arquivos num banco em arquivo e devolve o repositório, o store e uma conexão crua.
+fn store_and_conn(files: &[(&str, String)]) -> (Repo, SqliteStore, Connection) {
+    let repo = Repo::empty();
+    for (path, source) in files {
+        repo.write(path, source);
+    }
+    let db = repo.path().join(".git/use-words-test.db");
+    let mut store = SqliteStore::open(&db).unwrap();
+    index(&WorkTree::new(repo.path()), &mut store).unwrap();
+    let conn = Connection::open(&db).unwrap();
+    (repo, store, conn)
+}
+
+/// GIVEN fixture U2
+/// WHEN  impact runs on a.Alpha.run
+/// THEN  every symbol the first round listed (ref or type words contain the target name words, minus edges, target and tests) is listed
+#[test]
+fn test_given_additive_when_impact_then_round_one_symbols_all_listed() {
+    let (_repo, store, conn) = store_and_conn(&fixture_u2());
+    let target = "a.Alpha.run";
+    let info = memo_core::query::impact(&store, target).unwrap();
+    let round_one: BTreeSet<String> = conn
+        .prepare(
+            "WITH names AS (
+               SELECT DISTINCT o.word_id FROM occurrence o JOIN symbol t ON t.id = o.owner_id
+               WHERE o.owner_kind = 'symbol' AND o.source = 'name' AND t.qname = ?1),
+             uses AS (
+               SELECT r.src AS sym, o.word_id FROM occurrence o
+               JOIN raw_ref r ON o.owner_kind = 'ref' AND o.owner_id = r.id WHERE o.source = 'ref'
+               UNION
+               SELECT owner_id, word_id FROM occurrence WHERE owner_kind = 'symbol' AND source = 'type')
+             SELECT s.qname FROM symbol s WHERE s.is_test = 0 AND s.qname != ?1 AND s.id IN (
+               SELECT sym FROM uses WHERE word_id IN (SELECT word_id FROM names)
+               GROUP BY sym HAVING COUNT(DISTINCT word_id) = (SELECT COUNT(*) FROM names))",
+        )
+        .unwrap()
+        .query_map([target], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let edges = covered(&info);
+    let expected: BTreeSet<String> = round_one.difference(&edges).cloned().collect();
+    assert!(!expected.is_empty());
+    let listed: BTreeSet<String> = info
+        .by_word
+        .iter()
+        .map(|i| i.item.addr.qname.clone())
+        .collect();
+    assert!(
+        expected.is_subset(&listed),
+        "missing: {:?}",
+        expected.difference(&listed).collect::<Vec<_>>()
+    );
+}
+
+/// GIVEN fixture U
+/// WHEN  impact runs on a.Alpha.run
+/// THEN  only_beta and only_obj are listed with the level so_nome
+#[test]
+fn test_given_no_evidence_when_impact_then_listed_with_name_only_label() {
+    let info = impact_of(
+        &[("a.py", FIXTURE_U_A), ("m.py", FIXTURE_U_M)],
+        "a.Alpha.run",
+    );
+    let only = level(&info, Evidence::SoNome);
+    assert!(
+        only.contains("m.only_beta") && only.contains("m.only_obj"),
+        "{only:?}"
+    );
+}
+
+/// GIVEN fixture U2
+/// WHEN  impact runs on a.Alpha.run
+/// THEN  lookalike ('AlphaBeta(1).run()') is listed as so_nome, never strong or medium
+#[test]
+fn test_given_lookalike_class_when_impact_then_not_strong() {
+    let (_repo, store, _conn) = store_and_conn(&fixture_u2());
+    let info = memo_core::query::impact(&store, "a.Alpha.run").unwrap();
+    assert!(
+        level(&info, Evidence::SoNome).contains("m.lookalike"),
+        "{:?}",
+        info.by_word
+    );
+    assert!(!level(&info, Evidence::Forte).contains("m.lookalike"));
+    assert!(!level(&info, Evidence::Media).contains("m.lookalike"));
+}
+
+/// Fixture P (TASK-6, rodada 3): Protocol estrutural e uma classe de nome parecido.
+const FIXTURE_P: &str = "from typing import Protocol\n\n\
+                         class OrderDebtCodeRepository(Protocol):\n    def run(self):\n        ...\n\n\
+                         class UpdateGroupRepository:\n    def run(self):\n        pass\n\n\
+                         class ClearOrderDebtCodeRepository:\n    def run(self):\n        pass\n\n\
+                         def caller(s):\n    ClearOrderDebtCodeRepository(s).run()\n";
+
+/// GIVEN fixture P, where UpdateGroupRepository implements the Protocol OrderDebtCodeRepository by structure
+/// WHEN  impact runs on UpdateGroupRepository.run
+/// THEN  caller ('ClearOrderDebtCodeRepository(s).run()') is listed as so_nome
+#[test]
+fn test_given_protocol_lookalike_when_impact_then_name_only() {
+    let info = impact_of(&[("p.py", FIXTURE_P)], "p.UpdateGroupRepository.run");
+    assert!(
+        level(&info, Evidence::SoNome).contains("p.caller"),
+        "{:?}",
+        info.by_word
+    );
+    assert!(!level(&info, Evidence::Forte).contains("p.caller"));
+    assert!(!level(&info, Evidence::Media).contains("p.caller"));
+}
+
+/// GIVEN fixture U2
+/// WHEN  impact runs on the class a.Alpha
+/// THEN  Holder.backups is listed with origin 'tipo' and the attribute line
+#[test]
+fn test_given_typed_attribute_when_impact_then_listed_with_type_label() {
+    let (_repo, store, conn) = store_and_conn(&fixture_u2());
+    let info = memo_core::query::impact(&store, "a.Alpha").unwrap();
+    let line: i64 = conn
+        .query_row(
+            "SELECT line_start FROM symbol WHERE qname = 'm.Holder.backups'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        info.by_word
+            .iter()
+            .any(|i| i.item.addr.qname == "m.Holder.backups"
+                && i.origem == memo_core::query::Origem::Tipo
+                && i.item.line == Some(line)),
+        "{:?}",
+        info.by_word
+    );
+}
+
+/// GIVEN fixture U2
+/// WHEN  impact runs on a.Alpha.run
+/// THEN  items are sorted by level, then qname, then line
+#[test]
+fn test_given_items_when_impact_then_ordered_by_level_qname_line() {
+    let (_repo, store, _conn) = store_and_conn(&fixture_u2());
+    let info = memo_core::query::impact(&store, "a.Alpha.run").unwrap();
+    let keys: Vec<_> = info
+        .by_word
+        .iter()
+        .map(|i| (i.nivel, i.item.addr.qname.clone(), i.item.line))
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort();
+    assert!(keys.len() > 3);
+    assert_eq!(keys, sorted);
 }
