@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use std::fmt::Write;
 use std::path::Path;
 
-const SCHEMA_VERSION: &str = "1";
+const SCHEMA_VERSION: &str = "2";
 
 const SCHEMA: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
@@ -23,10 +23,13 @@ CREATE TABLE symbol(
   type_text TEXT);
 CREATE TABLE word(id INTEGER PRIMARY KEY, text TEXT UNIQUE NOT NULL);
 CREATE TABLE occurrence(
-  symbol_id INTEGER NOT NULL, word_id INTEGER NOT NULL, pos INTEGER NOT NULL,
+  symbol_id INTEGER, word_id INTEGER NOT NULL, pos INTEGER NOT NULL,
   slot TEXT NOT NULL,
   segment TEXT,
-  PRIMARY KEY(symbol_id, pos));
+  owner_kind TEXT NOT NULL DEFAULT 'symbol',
+  owner_id INTEGER NOT NULL,
+  source TEXT NOT NULL DEFAULT 'name',
+  PRIMARY KEY(owner_kind, owner_id, pos));
 CREATE TABLE edge(
   id INTEGER PRIMARY KEY, kind TEXT NOT NULL,
   src INTEGER NOT NULL REFERENCES symbol(id), dst INTEGER REFERENCES symbol(id),
@@ -44,6 +47,7 @@ CREATE TABLE session_seen(task TEXT, cmd TEXT, key TEXT, PRIMARY KEY(task, cmd, 
 CREATE INDEX edge_src_kind ON edge(src, kind);
 CREATE INDEX edge_dst_kind ON edge(dst, kind);
 CREATE INDEX occurrence_word ON occurrence(word_id);
+CREATE INDEX occurrence_symbol ON occurrence(symbol_id);
 CREATE INDEX symbol_file ON symbol(file_id);
 CREATE INDEX symbol_parent ON symbol(parent_id);
 CREATE INDEX raw_ref_file ON raw_ref(file_id);
@@ -73,19 +77,44 @@ impl SqliteStore {
         Self::init(Connection::open_in_memory()?)
     }
 
+    /// Abre o banco; um banco derivado com outra `schema_version` é descartado e recriado
+    /// (o grafo se reconstrói do código; as notas ficam em arquivos e não são tocadas).
     fn init(conn: Connection) -> Result<Self, CoreError> {
-        let has_schema: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'meta')",
+        let has_meta: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta')",
             [],
             |r| r.get(0),
         )?;
-        if !has_schema {
-            conn.execute_batch(SCHEMA)?;
-            conn.execute(
-                "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)",
-                [SCHEMA_VERSION],
-            )?;
+        let current: Option<String> = if has_meta {
+            conn.query_row(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?
+        } else {
+            None
+        };
+        if current.as_deref() == Some(SCHEMA_VERSION) {
+            return Ok(Self { conn });
         }
+        let tables: Vec<String> = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            )?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        // As chaves estrangeiras impedem apagar `file` antes de `symbol`: desligar durante a troca.
+        conn.execute_batch("PRAGMA foreign_keys = OFF")?;
+        for table in tables {
+            conn.execute_batch(&format!("DROP TABLE \"{table}\""))?;
+        }
+        conn.execute_batch("PRAGMA foreign_keys = ON")?;
+        conn.execute_batch(SCHEMA)?;
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)",
+            [SCHEMA_VERSION],
+        )?;
         Ok(Self { conn })
     }
 

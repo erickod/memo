@@ -189,8 +189,8 @@ fn insert_symbols(
             .enumerate()
         {
             tx.execute(
-                "INSERT INTO occurrence(symbol_id, word_id, pos, slot, segment)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO occurrence(symbol_id, word_id, pos, slot, segment, owner_kind, owner_id, source)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'symbol', ?1, 'name')",
                 params![
                     symbol_id,
                     word_id(tx, &occ.text)?,
