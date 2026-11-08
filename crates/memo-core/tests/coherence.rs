@@ -2,7 +2,8 @@ mod common;
 
 use common::Repo;
 use memo_core::config::Config;
-use memo_core::index::index_with;
+use memo_core::index::{index_with, index_with_notes};
+use memo_core::notes::{NewNote, NoteDir, is_generic_anchor};
 use memo_core::query::word_stats;
 use memo_core::source::WorkTree;
 use memo_core::stats::coherence;
@@ -180,4 +181,48 @@ fn test_given_same_tree_twice_when_index_then_coherence_and_esqueleto_bytes_iden
         .find(|l| l.starts_with("stats|order|"))
         .unwrap();
     assert_eq!(line.split('|').count(), 10, "{line}");
+}
+
+/// GIVEN a proposta note anchored on the word 'hub', which is not esqueleto
+/// WHEN  a test docstring is edited so 'hub' becomes esqueleto and the repository is reindexed
+/// THEN  the note is still 'proposta', no NOTE_* event was recorded, and the anchor reads as generic
+#[test]
+fn test_given_note_on_word_turned_esqueleto_when_reindexed_then_active_without_event() {
+    let (before, _) = hub_repo(0);
+    let (repo, mut store, config) = build(&before, OPEN);
+    let notes = NoteDir::new(&repo.path().join(".git/memo/notes"));
+    let new = NewNote {
+        tipo: "regra".into(),
+        ancora: "word:hub".into(),
+        secundarias: Vec::new(),
+        origem: "humano".into(),
+        text: "Hub é o conceito central.".into(),
+        task: None,
+        confirm: false,
+        substitui: None,
+        aliases: Vec::new(),
+    };
+    let note = notes.add(&store, new, "2026-11-07T14:05:00Z").unwrap().note;
+    assert!(!is_generic_anchor(&store, &note).unwrap());
+    let baseline = store.events().unwrap().len();
+
+    let (after, _) = hub_repo(100);
+    let (path, source) = after.last().unwrap();
+    repo.write(path, source);
+    index_with_notes(&WorkTree::new(repo.path()), &mut store, &config, &notes).unwrap();
+
+    assert!(stats(&store, "hub").esqueleto);
+    assert_eq!(notes.get(&note.id).unwrap().estado, "proposta");
+    let new_events: Vec<String> = store
+        .events()
+        .unwrap()
+        .into_iter()
+        .skip(baseline)
+        .map(|e| e.kind)
+        .collect();
+    assert!(
+        new_events.iter().all(|k| !k.starts_with("NOTE_")),
+        "{new_events:?}"
+    );
+    assert!(is_generic_anchor(&store, &notes.get(&note.id).unwrap()).unwrap());
 }

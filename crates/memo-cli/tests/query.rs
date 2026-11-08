@@ -850,3 +850,53 @@ fn test_given_no_tests_flag_when_brief_then_section_absent_and_count_in_cobertur
     let cov = out.lines().find(|l| l.starts_with("cobertura:")).unwrap();
     assert!(cov.contains("testes ocultos"), "{cov}");
 }
+
+/// Cria uma nota em `word:limit` e depois marca `limit` como esqueleto pela lista do memo.toml.
+fn note_on_word_turned_generic() -> (Repo, String) {
+    let repo = Repo::fixture();
+    let added = stdout(&memo(
+        &repo,
+        &[
+            "note",
+            "add",
+            "--tipo",
+            "regra",
+            "--ancora",
+            "word:limit",
+            "--origem",
+            "humano",
+            "Limite é inteiro.",
+        ],
+    ));
+    let id = added.split_whitespace().nth(1).unwrap().to_string();
+    repo.write(".git/memo/memo.toml", "skeleton = [\"limit\"]\n");
+    assert_eq!(memo(&repo, &["index", "--full"]).status.code(), Some(0));
+    (repo, id)
+}
+
+/// GIVEN a note on 'word:limit' and 'limit' later placed in the skeleton list
+/// WHEN  'memo note list' runs
+/// THEN  the note line ends with 'âncora genérica' and the note is still 'proposta'
+#[test]
+fn test_given_note_on_generic_word_when_note_list_then_marked_ancora_generica() {
+    let (repo, id) = note_on_word_turned_generic();
+    let out = stdout(&memo(&repo, &["note", "list"]));
+    let line = out.lines().find(|l| l.starts_with(&id)).unwrap();
+    assert!(
+        line.contains("proposta") && line.ends_with("âncora genérica"),
+        "{out}"
+    );
+}
+
+/// GIVEN the same note
+/// WHEN  'memo status' runs
+/// THEN  the output lists the note id under 'âncoras genéricas:'
+#[test]
+fn test_given_note_on_generic_word_when_status_then_marked_ancora_generica() {
+    let (repo, id) = note_on_word_turned_generic();
+    let out = stdout(&memo(&repo, &["status"]));
+    assert!(
+        out.lines().any(|l| l == format!("âncoras genéricas: {id}")),
+        "{out}"
+    );
+}

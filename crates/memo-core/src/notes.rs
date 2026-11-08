@@ -936,3 +936,9 @@ fn note_event(kind: &'static str, note: &Note, before: &str) -> NewEvent {
         payload: Some(serde_json::json!({ "antes": before, "depois": note.estado }).to_string()),
     }
 }
+
+/// A nota ancora (principal ou secundária) numa palavra que hoje é `esqueleto`. A nota segue
+/// ativa e sem evento (D15); isto só alimenta a marca `âncora genérica`.
+pub fn is_generic_anchor(_graph: &SqliteStore, _note: &Note) -> Result<bool, CoreError> {
+    todo!("etapa 8")
+}
