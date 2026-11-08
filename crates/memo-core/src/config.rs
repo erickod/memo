@@ -29,14 +29,14 @@ pub struct BridgeWeights {
 impl Default for BridgeWeights {
     fn default() -> Self {
         Self {
-            symbol: 0.0,
-            test: 0.0,
-            import: 0.0,
-            import_external: 0.0,
-            call: 0.0,
-            file: 0.0,
-            context: 0.0,
-            approximate: 0.0,
+            symbol: 1.0,
+            test: 0.8,
+            import: 0.6,
+            import_external: 0.3,
+            call: 0.5,
+            file: 0.3,
+            context: 0.1,
+            approximate: 0.5,
         }
     }
 }
@@ -80,7 +80,21 @@ impl Default for Config {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RawBridges {
+    symbol: Option<f64>,
+    test: Option<f64>,
+    import: Option<f64>,
+    import_external: Option<f64>,
+    call: Option<f64>,
+    file: Option<f64>,
+    context: Option<f64>,
+    approximate: Option<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Raw {
+    bridges: Option<RawBridges>,
     main_branch: Option<String>,
     roles: Option<Vec<String>>,
     verbs: Option<Vec<String>>,
@@ -110,6 +124,33 @@ impl Config {
         config.stale_on = raw.stale_on.unwrap_or(config.stale_on);
         config.context_root = raw.context_root.unwrap_or(config.context_root);
         config.layers = raw.layers.unwrap_or(config.layers);
+        if let Some(b) = raw.bridges {
+            let w = &mut config.bridges;
+            w.symbol = b.symbol.unwrap_or(w.symbol);
+            w.test = b.test.unwrap_or(w.test);
+            w.import = b.import.unwrap_or(w.import);
+            w.import_external = b.import_external.unwrap_or(w.import_external);
+            w.call = b.call.unwrap_or(w.call);
+            w.file = b.file.unwrap_or(w.file);
+            w.context = b.context.unwrap_or(w.context);
+            w.approximate = b.approximate.unwrap_or(w.approximate);
+        }
+        let w = &config.bridges;
+        let all = [
+            w.symbol,
+            w.test,
+            w.import,
+            w.import_external,
+            w.call,
+            w.file,
+            w.context,
+            w.approximate,
+        ];
+        if all.iter().any(|v| !v.is_finite() || *v < 0.0) {
+            return Err(CoreError::Config(
+                "[bridges] weights must be finite and not negative".to_string(),
+            ));
+        }
         if !(0.0..=1.0).contains(&config.min_specificity) {
             return Err(CoreError::Config(
                 "min_specificity must be between 0 and 1".to_string(),
@@ -151,6 +192,20 @@ impl Config {
         out.push_str(&format!("stale_on = {}\n", list(&self.stale_on)));
         out.push_str(&format!("context_root = {:?}\n", self.context_root));
         out.push_str(&format!("layers = {}\n", list(&self.layers)));
+        let w = &self.bridges;
+        out.push_str("\n[bridges]\n");
+        for (key, value) in [
+            ("symbol", w.symbol),
+            ("test", w.test),
+            ("import", w.import),
+            ("import_external", w.import_external),
+            ("call", w.call),
+            ("file", w.file),
+            ("context", w.context),
+            ("approximate", w.approximate),
+        ] {
+            out.push_str(&format!("{key} = {value:?}\n"));
+        }
         out
     }
 
