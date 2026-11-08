@@ -1211,3 +1211,62 @@ fn test_given_coverage_json_when_rendered_then_no_by_word_field() {
         "{cobertura:?}"
     );
 }
+
+const CALLERS_2: [&str; 5] = [
+    "query",
+    "callers",
+    "SqlLimitRepository.save",
+    "--depth",
+    "2",
+];
+
+fn with_flags(flags: &[&'static str], args: &[&'static str]) -> Vec<&'static str> {
+    let mut all = flags.to_vec();
+    all.extend(args);
+    all
+}
+
+/// GIVEN the fixture where a test reaches SqlLimitRepository.save two levels up
+/// WHEN  'memo query callers SqlLimitRepository.save --depth 2' runs without flags
+/// THEN  no test appears, production callers stay and cobertura says tests were hidden (TASK-7, D2)
+#[test]
+fn test_given_default_when_query_callers_then_tests_hidden() {
+    let out = stdout(&memo(&open_repo(), &CALLERS_2));
+    assert!(
+        !out.contains("test_given_amount") && out.contains("CalculateLimitUseCase.execute"),
+        "{out}"
+    );
+    assert!(out.contains("testes ocultos"), "{out}");
+}
+
+/// GIVEN the same fixture
+/// WHEN  the query runs with '--tests'
+/// THEN  the test caller is listed (TASK-7, D2)
+#[test]
+fn test_given_tests_flag_when_query_callers_then_tests_shown() {
+    let out = stdout(&memo(&open_repo(), &with_flags(&["--tests"], &CALLERS_2)));
+    assert!(out.contains("test_given_amount"), "{out}");
+}
+
+/// GIVEN the same fixture
+/// WHEN  the query runs with '--no-tests' and without flags
+/// THEN  both outputs are identical (TASK-7, D2)
+#[test]
+fn test_given_no_tests_flag_when_query_callers_then_same_as_default() {
+    let repo = open_repo();
+    let default = stdout(&memo(&repo, &CALLERS_2));
+    let flagged = stdout(&memo(&repo, &with_flags(&["--no-tests"], &CALLERS_2)));
+    assert_eq!(default, flagged);
+}
+
+/// GIVEN the fixture
+/// WHEN  'memo query tests CalculateLimitUseCase.execute' runs without flags
+/// THEN  tests are listed: the command exists to list them (TASK-7, D2)
+#[test]
+fn test_given_default_when_query_tests_then_tests_listed() {
+    let out = stdout(&memo(
+        &open_repo(),
+        &["query", "tests", "CalculateLimitUseCase.execute"],
+    ));
+    assert!(out.contains("test_"), "{out}");
+}
