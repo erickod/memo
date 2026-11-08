@@ -67,6 +67,8 @@ pub struct EdgeView {
     pub approx: bool,
     /// O outro extremo é um teste ou um símbolo de arquivo de teste.
     pub other_is_test: bool,
+    /// Módulo do outro extremo (`ext` quando não resolvido), para agrupar listas longas.
+    pub other_module: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -223,6 +225,11 @@ fn direct_edges(store: &SqliteStore, qname: &str) -> Result<Vec<EdgeView>, CoreE
                 line: r.get(3)?,
                 approx: r.get::<_, i64>(4)? != 0,
                 other_is_test: tested != 0 || other_in_test_file,
+                other_module: if path.is_empty() {
+                    "ext".to_string()
+                } else {
+                    crate::index::module_of(&path)
+                },
             })
         })?;
         for row in rows {
