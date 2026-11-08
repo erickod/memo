@@ -156,6 +156,7 @@ Extrair módulo, classes, funções, métodos e atributos (`self.x = ...` em qua
    - **Diretórios do arquivo** (`source = path`, dono `file`): a raiz `context_root` sai, o segmento seguinte é o contexto (slot `context`), os segmentos de `layers` saem e os demais viram palavras.
    - **Imports** (`source = import`, dono o import): o nome importado e o caminho do módulo. A raiz do pacote (último segmento de `context_root`) e as camadas saem, o segmento seguinte à raiz é o contexto (slot `context`). Alvo que não começa pela raiz (externo) usa todos os segmentos e pesa menos nas pontes.
    - **Docstring de teste** (`source = test_doc`, dono o símbolo de teste): `GIVEN`, `WHEN` e `THEN` são marcadores de `segment`, não palavras; só conta a palavra que já existe como palavra de nome, caminho ou import (vocabulário fechado).
+   - **Texto de uso** (`source = ref` e `source = type`, dono o símbolo): as palavras do texto de cada referência extraída (chamada, receptor, tipo recebido ou devolvido) e do tipo anotado do símbolo. Independem de a referência ter sido resolvida e são gravadas sem `symbol_id`, então estatísticas, pontes e `brief` não as veem; só o `query impact` as usa.
    Docstrings e comentários de produção ficam para uma segunda fase.
 
 O vocabulário vem de `memo.toml` (seção 6) com sementes embutidas: `roles` (`service`, `usecase`, `repository`, `handler`, `mapper`, `schema`, `dto`, `input`, `output`, `protocol`, `exception`, `client`, `event`, `command`, `route`), `verbs` (`get`, `set`, `create`, `calculate`, `validate`, `update`, `delete`, `find`, `list`, `handle`, `execute`, `build`, `parse`, `publish`, `consume`, `save`, `load`, `send`) e `skeleton` (`get`, `data`, `utils`, `helper`, `base`, `manager`, `common`, `process`, `service`).
@@ -333,7 +334,7 @@ Flags: `--repo <caminho>` (padrão: raiz git atual), `--task <id>`, `--json`, `-
 | `brief "<pedido>"` | âncoras, símbolos, contorno, padrão, escritores e notas para um pedido em texto |
 | `query callers <sym> [--depth n]` | quem chama o símbolo (profundidade até 3) |
 | `query callees <sym> [--depth n]` | o que o símbolo chama |
-| `query impact <sym>` | callers, consumidores do tipo (`RECEBE`, `RETORNA`), Protocol e implementações, testes, notas |
+| `query impact <sym>` | callers, consumidores do tipo (`RECEBE`, `RETORNA`), Protocol e implementações, `por palavra` (símbolos de produção cujo texto de uso contém todas as palavras do nome do alvo e que nenhuma aresta cobre; sempre `~`), testes, notas |
 | `query writers <attr>` e `query readers <attr>` | símbolos que escrevem ou leem o atributo |
 | `query word <w>` | a ficha do conceito: estatísticas (inclui coerência), verbos, papéis, camadas, vizinhas por tipo de ponte com os pesos, a representatividade em arquivos (repositório, cada contexto e as 10 vizinhas mais fortes com `P(palavra\|vizinha)` e `P(vizinha\|palavra)`, piso de 3 arquivos em comum) e os símbolos com as pontes que os trazem |
 | `query aliases` | pares de palavras que provavelmente são o mesmo conceito (prefixo comum, ou vizinhança parecida), com o `note add` pronto; somente leitura |
