@@ -302,3 +302,53 @@ fn test_given_note_flow_when_events_read_then_added_confirmed_superseded_recorde
         );
     }
 }
+
+/// GIVEN a note word:checkout and 'checkout' left only in a call text (the module file removed)
+/// WHEN  the repository is reindexed
+/// THEN  the note is 'orfa': use words do not keep a word anchor alive (TASK-6, D16)
+#[test]
+fn test_given_word_anchor_only_in_use_text_when_reindexed_then_note_orfa() {
+    let mut e = env("min_specificity = 0.0\nskeleton = []\n");
+    let id = e.add("word:checkout", false);
+    std::fs::remove_file(
+        e.repo
+            .path()
+            .join("app/billing/application/usecases/checkout_usecase.py"),
+    )
+    .unwrap();
+    e.edit(
+        "        self._repo.save(limit)\n",
+        "        self._repo.save(limit)\n        checkout_now()\n",
+    );
+    e.reindex();
+    assert_eq!(e.notes.get(&id).unwrap().estado, "orfa");
+}
+
+/// GIVEN a word that only appears in a call text
+/// WHEN  a note anchored on it is added
+/// THEN  the anchor is not found (TASK-6, D16)
+#[test]
+fn test_given_word_anchor_only_in_use_text_when_added_then_not_found() {
+    let mut e = env("min_specificity = 0.0\nskeleton = []\n");
+    e.edit(
+        "        self._repo.save(limit)\n",
+        "        self._repo.save(limit)\n        zebra_call()\n",
+    );
+    e.reindex();
+    let new = NewNote {
+        tipo: "regra".into(),
+        ancora: "word:zebra".into(),
+        secundarias: Vec::new(),
+        origem: "humano".into(),
+        text: "Zebra.".into(),
+        task: None,
+        confirm: false,
+        substitui: None,
+        aliases: Vec::new(),
+    };
+    let got = e.notes.add(&e.store, new, NOW);
+    assert!(
+        matches!(got, Err(memo_core::error::CoreError::NotFound(_))),
+        "{got:?}"
+    );
+}
