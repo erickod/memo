@@ -179,6 +179,11 @@ impl Config {
         Ok(config)
     }
 
+    /// Identidade das chaves que afetam o índice; muda quando o índice precisa ser refeito.
+    pub fn index_hash(&self) -> String {
+        String::new()
+    }
+
     /// O `memo.toml` com as sementes, para o `init` gravar.
     pub fn to_toml(&self) -> String {
         let list = |values: &[String]| {

@@ -20,6 +20,8 @@ pub struct IndexReport {
     pub files_removed: usize,
     pub files_with_error: Vec<String>,
     pub wrote: bool,
+    /// O índice foi refeito por inteiro porque a config mudou.
+    pub rebuilt: bool,
     pub events: EventSummary,
 }
 
