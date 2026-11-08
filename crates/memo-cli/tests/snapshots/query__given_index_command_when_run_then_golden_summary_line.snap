@@ -4,4 +4,4 @@ expression: stdout(&out)
 ---
 index idx=ok arquivos=10 alterados=1 removidos=0
 eventos: +0 símbolos, ~2 alterados, 1 renomeado, 0 notas stale
-cobertura: 25 resolvidas, 3 aprox, 2 não resolvidas, 0 arquivos com erro
+cobertura: 25 resolvidas, 3 aprox, 2 não resolvidas (2 por palavra), 0 arquivos com erro
