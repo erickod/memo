@@ -1195,3 +1195,18 @@ fn test_given_use_in_test_file_when_impact_then_never_listed() {
         }
     }
 }
+
+/// GIVEN any repository
+/// WHEN  a query runs with --json
+/// THEN  cobertura has no 'nao_resolvidas_por_palavra' key
+#[test]
+fn test_given_coverage_json_when_rendered_then_no_by_word_field() {
+    let out = memo(&repo_u(), &["--json", "query", "impact", "a.Alpha.run"]);
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let cobertura = json["cobertura"].as_object().unwrap();
+    assert!(cobertura.contains_key("nao_resolvidas"), "{cobertura:?}");
+    assert!(
+        !cobertura.contains_key("nao_resolvidas_por_palavra"),
+        "{cobertura:?}"
+    );
+}
