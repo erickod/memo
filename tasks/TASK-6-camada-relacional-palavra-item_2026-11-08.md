@@ -4,7 +4,7 @@ workdir: raiz do repositório (onde está o `Cargo.toml`)
 created_at: 2026-11-08
 
 ## Status
-- Estado: DEFINITION (segunda rodada; a primeira foi mergeada no PR #1 sem revisão de código, ver §10)
+- Estado: review (segunda rodada implementada na branch `feat/task-6-completion`; falta a CODE_REVIEW. A primeira rodada foi mergeada no PR #1 sem revisão, ver §10)
 - Owner: Erick Duarte
 - ROLE requerida: eng (começa em DEFINITION)
 
@@ -85,20 +85,20 @@ Revistos na revisão do merge (§10, 2026-11-08): os desmarcados não tinham tes
 - [x] `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` e `cargo test` sem falhas
 
 ### Segunda rodada
-- [ ] **C1, cobertura de uso (propriedade):** para toda `raw_ref` de uma fixture variada (chamada simples, encadeada, receptor `self`, tipo recebido e devolvido, resolvida, aproximada e não resolvida), as palavras de `callee_text` e `receiver` são exatamente as ocorrências `ref` com dono `('ref', raw_ref.id)`
-- [ ] **C2, cobertura de tipo (propriedade):** para todo símbolo com `type_text`, as palavras do tipo são exatamente as ocorrências `type` do símbolo
-- [ ] **C3, independência da resolução:** a mesma fixture com as `raw_ref` forçadas a `resolved` 0, 1 e 2 gera o mesmo conjunto de ocorrências `ref` e `type`
-- [ ] **C4, incremental:** reindexar depois de alterar um arquivo regrava só os usos e tipos desse arquivo (os `raw_ref.id` e ocorrências dos outros arquivos ficam iguais) e o resultado é igual ao de um índice do zero
-- [ ] **C5, evidência:** para o alvo `Alpha.run`: `Alpha(1).run()` e `SubAlpha().run()` (subclasse) e `p.run()` com `p: RunnerProtocol` implementado por `Alpha` são `forte` ou `média` conforme o mesmo uso ou o mesmo símbolo; `Beta(1).run()` e `obj.run()` são `só nome`
-- [ ] **C5b, alvo sem família:** para a função `m.helper`: `helper()` no próprio módulo `m`, e `from m import helper; helper()` ou `import m; m.helper()` em outro arquivo, são `forte`; `helper()` num arquivo que não importa `m` nem `m.helper` é `só nome`
-- [ ] **C6, linha:** cada item `forte` e `média` traz a linha do uso
-- [ ] **C7, só nome:** os usos `só nome` aparecem no texto só como `+N só pelo nome`, e no JSON como lista
-- [ ] **C8:** o `por palavra` respeita `--limit`, `--max-chars` e o `+N omitidos`, não repete o que as arestas já cobrem, e nunca lista nem conta usos de teste, com ou sem `--no-tests` (revisto na ENGINEERING, D15)
-- [ ] **C9:** mesma árvore e mesma config dão a mesma saída do `impact`, byte a byte, entre duas indexações do zero
-- [ ] **C10:** `nao_resolvidas_por_palavra` não existe mais na `cobertura` nem no JSON; goldens revistos um a um
-- [ ] **C11:** estatísticas, pontes, `brief` e `query word` não mudam (goldens desses comandos sem revisão)
-- [ ] **C12:** custo medido no gerador de `docs/medicoes.md` (índice completo, sem mudança e com um arquivo alterado), antes e depois, registrado no §10; não bloqueia o aceite
-- [ ] `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` e `cargo test` sem falhas
+- [x] **C1, cobertura de uso (propriedade):** para toda `raw_ref` de uma fixture variada (chamada simples, encadeada, receptor `self`, tipo recebido e devolvido, resolvida, aproximada e não resolvida), as palavras de `callee_text` e `receiver` são exatamente as ocorrências `ref` com dono `('ref', raw_ref.id)`
+- [x] **C2, cobertura de tipo (propriedade):** para todo símbolo com `type_text`, as palavras do tipo são exatamente as ocorrências `type` do símbolo
+- [x] **C3, independência da resolução:** a mesma fixture com as `raw_ref` forçadas a `resolved` 0, 1 e 2 gera o mesmo conjunto de ocorrências `ref` e `type`
+- [x] **C4, incremental:** reindexar depois de alterar um arquivo regrava só os usos e tipos desse arquivo (os `raw_ref.id` e ocorrências dos outros arquivos ficam iguais) e o resultado é igual ao de um índice do zero
+- [x] **C5, evidência:** para o alvo `Alpha.run`: `Alpha(1).run()` e `SubAlpha().run()` (subclasse) e `p.run()` com `p: RunnerProtocol` implementado por `Alpha` são `forte` ou `média` conforme o mesmo uso ou o mesmo símbolo; `Beta(1).run()` e `obj.run()` são `só nome`
+- [x] **C5b, alvo sem família:** para a função `m.helper`: `helper()` no próprio módulo `m`, e `from m import helper; helper()` ou `import m; m.helper()` em outro arquivo, são `forte`; `helper()` num arquivo que não importa `m` nem `m.helper` é `só nome`
+- [x] **C6, linha:** cada item `forte` e `média` traz a linha do uso
+- [x] **C7, só nome:** os usos `só nome` aparecem no texto só como `+N só pelo nome`, e no JSON como lista
+- [x] **C8:** o `por palavra` respeita `--limit`, `--max-chars` e o `+N omitidos`, não repete o que as arestas já cobrem, e nunca lista nem conta usos de teste, com ou sem `--no-tests` (revisto na ENGINEERING, D15)
+- [x] **C9:** mesma árvore e mesma config dão a mesma saída do `impact`, byte a byte, entre duas indexações do zero
+- [x] **C10:** `nao_resolvidas_por_palavra` não existe mais na `cobertura` nem no JSON; goldens revistos um a um
+- [x] **C11:** estatísticas, pontes, `brief` e `query word` não mudam (goldens desses comandos sem revisão)
+- [ ] **C12:** *não medido: pulado por decisão do humano (2026-11-08); não bloqueia o aceite.* custo medido no gerador de `docs/medicoes.md` (índice completo, sem mudança e com um arquivo alterado), antes e depois, registrado no §10; não bloqueia o aceite
+- [x] `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` e `cargo test` sem falhas
 
 ---
 
@@ -269,6 +269,14 @@ Segunda rodada, na branch `feat/task-6-completion`:
 (vazio)
 
 ## 10. Log de Decisões e Alterações
+
+### [2026-11-08] — ENGINEERING, passos (e) e (f), medição pulada e docs
+- Tipo: implementação e documentação
+- Feito: (e) o texto mostra o nível no fim da linha e `+N só pelo nome`; o JSON lista `by_word_name_only` (`80599d7` red, `2c40324` green; golden aceito pelo humano depois de lido). (f) `nao_resolvidas_por_palavra` saiu da `cobertura` e do JSON (`a9bf167` red, com os dois goldens editados só nesse trecho; `e916d5d` green). Docs: spec, `docs/funcionalidades.md`, `docs/limitacoes.md` e `tasks/README.md`. 334 testes, `fmt` e `clippy` verdes.
+- Decisão tomada: D15 (§9). O teste do C8 com `--no-tests` não tinha como passar e foi trocado, com aval, por `use_in_test_file_when_impact_then_never_listed`.
+- C12 não medido: a medição antes/depois (worktree do `8835ee4` e gerador de `docs/medicoes.md`) foi interrompida e pulada por decisão do humano. Os temporários foram removidos. Não bloqueia o aceite, e fica registrado em `docs/limitacoes.md`.
+- Não verificado: o custo da gravação por arquivo e da consulta por uso (uma consulta por uso candidato, o que pode pesar em alvos com muitos usos); medição em repositório real.
+- Próximo: CODE_REVIEW da segunda rodada.
 
 ### [2026-11-08] — ENGINEERING, passo (d)
 - Tipo: implementação
