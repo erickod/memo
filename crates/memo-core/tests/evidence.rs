@@ -1,21 +1,13 @@
-use memo_core::config::Config;
 use memo_core::evidence::{Anchor, Evidence, classify};
-use memo_core::sources::use_words;
-use std::collections::BTreeSet;
 
-/// Palavras de um ou mais textos, como a camada relacional as grava.
-fn words(texts: &[&str]) -> BTreeSet<String> {
-    let config = Config::default();
-    texts
-        .iter()
-        .flat_map(|t| use_words(t, &config))
-        .map(|w| w.text)
-        .collect()
+/// Textos de uso, como gravados em `raw_ref` (texto da chamada e receptor) ou no tipo anotado.
+fn texts<'a>(items: &[&'a str]) -> Vec<&'a str> {
+    items.to_vec()
 }
 
-/// Família de `a.Alpha.run`: Alpha, SubAlpha e o Protocol Runner.
-fn family() -> Vec<BTreeSet<String>> {
-    vec![words(&["Alpha"]), words(&["SubAlpha"]), words(&["Runner"])]
+/// Família de `a.Alpha.run`: Alpha, SubAlpha e o Protocol Runner, pelo nome da classe.
+fn family() -> Vec<String> {
+    vec!["Alpha".into(), "SubAlpha".into(), "Runner".into()]
 }
 
 fn module_anchor<'a>(use_module: &'a str, imports: &'a [String]) -> Anchor<'a> {
@@ -33,11 +25,7 @@ fn module_anchor<'a>(use_module: &'a str, imports: &'a [String]) -> Anchor<'a> {
 #[test]
 fn test_given_use_with_owner_class_word_when_classified_then_strong() {
     let fam = family();
-    let got = classify(
-        &words(&["Alpha(1).run"]),
-        &BTreeSet::new(),
-        &Anchor::Family(&fam),
-    );
+    let got = classify(&texts(&["Alpha(1).run"]), &[], &Anchor::Family(&fam));
     assert_eq!(got, Evidence::Forte);
 }
 
@@ -46,12 +34,8 @@ fn test_given_use_with_owner_class_word_when_classified_then_strong() {
 /// THEN  strong
 #[test]
 fn test_given_use_with_subclass_word_when_classified_then_strong() {
-    let fam = vec![words(&["SubAlpha"])];
-    let got = classify(
-        &words(&["SubAlpha(1).run"]),
-        &BTreeSet::new(),
-        &Anchor::Family(&fam),
-    );
+    let fam = vec!["SubAlpha".to_string()];
+    let got = classify(&texts(&["SubAlpha(1).run"]), &[], &Anchor::Family(&fam));
     assert_eq!(got, Evidence::Forte);
 }
 
@@ -61,11 +45,7 @@ fn test_given_use_with_subclass_word_when_classified_then_strong() {
 #[test]
 fn test_given_use_with_protocol_word_when_classified_then_strong() {
     let fam = family();
-    let got = classify(
-        &words(&["Runner.run"]),
-        &BTreeSet::new(),
-        &Anchor::Family(&fam),
-    );
+    let got = classify(&texts(&["Runner.run"]), &[], &Anchor::Family(&fam));
     assert_eq!(got, Evidence::Forte);
 }
 
@@ -76,8 +56,8 @@ fn test_given_use_with_protocol_word_when_classified_then_strong() {
 fn test_given_owner_class_only_in_other_use_when_classified_then_medium() {
     let fam = family();
     let got = classify(
-        &words(&["it.run"]),
-        &words(&["list[Alpha]"]),
+        &texts(&["it.run"]),
+        &texts(&["list[Alpha]"]),
         &Anchor::Family(&fam),
     );
     assert_eq!(got, Evidence::Media);
@@ -90,8 +70,8 @@ fn test_given_owner_class_only_in_other_use_when_classified_then_medium() {
 fn test_given_no_family_word_when_classified_then_name_only() {
     let fam = family();
     let got = classify(
-        &words(&["Beta(1).run"]),
-        &words(&["Beta"]),
+        &texts(&["Beta(1).run"]),
+        &texts(&["Beta"]),
         &Anchor::Family(&fam),
     );
     assert_eq!(got, Evidence::SoNome);
@@ -102,11 +82,7 @@ fn test_given_no_family_word_when_classified_then_name_only() {
 /// THEN  strong
 #[test]
 fn test_given_function_target_same_module_when_classified_then_strong() {
-    let got = classify(
-        &words(&["helper"]),
-        &BTreeSet::new(),
-        &module_anchor("m", &[]),
-    );
+    let got = classify(&texts(&["helper"]), &[], &module_anchor("m", &[]));
     assert_eq!(got, Evidence::Forte);
 }
 
@@ -116,11 +92,7 @@ fn test_given_function_target_same_module_when_classified_then_strong() {
 #[test]
 fn test_given_function_target_imported_when_classified_then_strong() {
     let imports = vec!["m.helper".to_string()];
-    let got = classify(
-        &words(&["helper"]),
-        &BTreeSet::new(),
-        &module_anchor("n", &imports),
-    );
+    let got = classify(&texts(&["helper"]), &[], &module_anchor("n", &imports));
     assert_eq!(got, Evidence::Forte);
 }
 
@@ -130,11 +102,7 @@ fn test_given_function_target_imported_when_classified_then_strong() {
 #[test]
 fn test_given_module_of_target_imported_when_classified_then_strong() {
     let imports = vec!["m".to_string()];
-    let got = classify(
-        &words(&["m.helper"]),
-        &BTreeSet::new(),
-        &module_anchor("k", &imports),
-    );
+    let got = classify(&texts(&["m.helper"]), &[], &module_anchor("k", &imports));
     assert_eq!(got, Evidence::Forte);
 }
 
@@ -144,10 +112,30 @@ fn test_given_module_of_target_imported_when_classified_then_strong() {
 #[test]
 fn test_given_function_target_not_imported_when_classified_then_name_only() {
     let imports = vec!["z.helper".to_string(), "mm".to_string()];
+    let got = classify(&texts(&["helper"]), &[], &module_anchor("w", &imports));
+    assert_eq!(got, Evidence::SoNome);
+}
+
+/// GIVEN family {Alpha} and a use 'AlphaBeta(1).run'
+/// WHEN  classified
+/// THEN  name only: 'AlphaBeta' is not the identifier 'Alpha' (TASK-6, D18)
+#[test]
+fn test_given_lookalike_class_when_classified_then_not_strong() {
+    let fam = vec!["Alpha".to_string()];
+    let got = classify(&texts(&["AlphaBeta(1).run"]), &[], &Anchor::Family(&fam));
+    assert_eq!(got, Evidence::SoNome);
+}
+
+/// GIVEN family {OrderDebtCodeRepository} and a use 'ClearOrderDebtCodeRepository(s).run'
+/// WHEN  classified
+/// THEN  name only (TASK-6, D18)
+#[test]
+fn test_given_protocol_lookalike_when_classified_then_name_only() {
+    let fam = vec!["OrderDebtCodeRepository".to_string()];
     let got = classify(
-        &words(&["helper"]),
-        &BTreeSet::new(),
-        &module_anchor("w", &imports),
+        &texts(&["ClearOrderDebtCodeRepository(s).run"]),
+        &texts(&["ClearOrderDebtCodeRepository"]),
+        &Anchor::Family(&fam),
     );
     assert_eq!(got, Evidence::SoNome);
 }
