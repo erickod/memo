@@ -177,7 +177,7 @@ fn test_given_same_tree_twice_when_index_then_coherence_and_esqueleto_bytes_iden
 #[test]
 fn test_given_note_on_word_turned_esqueleto_when_reindexed_then_active_without_event() {
     let (before, _) = hub_repo(0);
-    let (repo, mut store, config) = build(&before, OPEN);
+    let (repo, mut store, _config) = build(&before, OPEN);
     let notes = NoteDir::new(&repo.path().join(".git/memo/notes"));
     let new = NewNote {
         tipo: "regra".into(),
