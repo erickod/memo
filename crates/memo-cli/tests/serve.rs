@@ -128,5 +128,58 @@ fn test_given_handshake_when_serve_then_two_responses_and_exit_0() {
     );
     assert_eq!(code, 0);
     assert_eq!(replies.len(), 2);
-    assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 4);
+    assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 6);
+}
+
+fn tool_text(reply: &Value) -> String {
+    reply["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// GIVEN a note with 1.200 characters added through the CLI
+/// WHEN  note_show and note_list are called through 'memo serve'
+/// THEN  note_show returns the whole text and note_list equals `memo note list` (TASK-7, D1)
+#[test]
+fn test_given_long_note_when_note_show_via_mcp_then_full_text_and_list_matches_cli() {
+    let repo = Repo::fixture();
+    let long = "x".repeat(1_200);
+    let added = cli(
+        &repo,
+        &[
+            "note",
+            "add",
+            "--tipo",
+            "regra",
+            "--ancora",
+            "sym:CalculateLimitUseCase.execute",
+            "--origem",
+            "humano",
+            &long,
+        ],
+    );
+    let id = added.split_whitespace().nth(1).unwrap().to_string();
+    let (_, replies) = memo_serve(
+        &repo,
+        &[
+            call(1, "note_show", json!({ "id": id })),
+            call(2, "note_list", json!({})),
+        ],
+    );
+    assert!(tool_text(&replies[0]).contains(&long));
+    assert_eq!(tool_text(&replies[1]), cli(&repo, &["note", "list"]));
+}
+
+/// GIVEN no note with the id 'n-missing0'
+/// WHEN  note_show is called through 'memo serve'
+/// THEN  the result has isError true (TASK-7, D1)
+#[test]
+fn test_given_unknown_note_id_when_note_show_via_mcp_then_is_error() {
+    let repo = Repo::fixture();
+    let (_, replies) = memo_serve(
+        &repo,
+        &[call(1, "note_show", json!({ "id": "n-missing0" }))],
+    );
+    assert_eq!(replies[0]["result"]["isError"], true);
 }

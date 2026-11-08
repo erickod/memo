@@ -721,7 +721,10 @@ fn test_given_brief_when_run_then_symbols_show_bridge_tags() {
 /// THEN  no 'T' line appears before the 'testes:' section, and that section is after 'escritores:'
 #[test]
 fn test_given_tests_in_results_when_brief_then_tests_listed_in_final_section() {
-    let out = stdout(&memo(&open_repo(), &["brief", "calculate limit"]));
+    let out = stdout(&memo(
+        &open_repo(),
+        &["--tests", "brief", "calculate limit"],
+    ));
     let tests_at = out.lines().position(|l| l == "testes:").expect(&out);
     let writers_at = out.lines().position(|l| l == "escritores:").expect(&out);
     assert!(tests_at > writers_at, "{out}");
@@ -748,7 +751,10 @@ fn test_given_tests_in_results_when_brief_then_tests_listed_in_final_section() {
 ///       and the last line is '+N omitidos' with N counting the cut tests
 #[test]
 fn test_given_small_max_chars_when_brief_then_tests_cut_first_and_omitidos_per_section() {
-    let full = stdout(&memo(&open_repo(), &["brief", "calculate limit"]));
+    let full = stdout(&memo(
+        &open_repo(),
+        &["--tests", "brief", "calculate limit"],
+    ));
     let production: Vec<&str> = full
         .lines()
         .skip_while(|l| *l != "símbolos:")
@@ -759,6 +765,7 @@ fn test_given_small_max_chars_when_brief_then_tests_cut_first_and_omitidos_per_s
     let out = stdout(&memo(
         &open_repo(),
         &[
+            "--tests",
             "--max-chars",
             &limit.to_string(),
             "brief",
@@ -789,7 +796,9 @@ fn test_given_no_tests_flag_when_query_callers_then_test_callers_hidden() {
         "--depth",
         "2",
     ];
-    let full = stdout(&memo(&open_repo(), &args));
+    let mut shown_args = vec!["--tests"];
+    shown_args.extend(args);
+    let full = stdout(&memo(&open_repo(), &shown_args));
     assert!(full.contains("test_given_amount"), "{full}");
     let mut hidden_args = vec!["--no-tests"];
     hidden_args.extend(args);
@@ -829,7 +838,7 @@ fn test_given_no_tests_flag_when_word_stats_read_then_same_as_without_flag() {
         args.extend(["query", "word", "limit"]);
         serde_json::from_str(&stdout(&memo(&open_repo(), &args))).unwrap()
     };
-    let (full, hidden) = (run(&[]), run(&["--no-tests"]));
+    let (full, hidden) = (run(&["--tests"]), run(&["--no-tests"]));
     assert_eq!(full["data"]["stats"], hidden["data"]["stats"]);
     let count = |v: &serde_json::Value| v["data"]["symbols"].as_array().unwrap().len();
     assert!(count(&hidden) < count(&full));
@@ -1081,4 +1090,298 @@ fn test_given_no_tests_flag_when_brief_hub_fixture_then_production_order_unchang
     let hidden = production(&["--no-tests", "brief", "order"]);
     assert!(all.len() >= 4, "{all:?}");
     assert_eq!(all, hidden);
+}
+
+/// Fixture U (TASK-6, §7): uma família de `run` e usos com e sem evidência da classe dona.
+const FIXTURE_U_A: &str = "from typing import Protocol\n\n\
+                           class Runner(Protocol):\n    def run(self):\n        ...\n\n\
+                           class Alpha:\n    def run(self):\n        pass\n\n\
+                           class SubAlpha(Alpha):\n    pass\n\n\
+                           class Beta:\n    def run(self):\n        pass\n";
+const FIXTURE_U_M: &str = "from a import Alpha, SubAlpha, Beta, Runner\n\n\
+                           def strong_owner():\n    Alpha(1).run()\n\n\
+                           def strong_sub():\n    SubAlpha(1).run()\n\n\
+                           def medium_owner(items: list[Alpha]):\n    for it in items:\n        it.run()\n\n\
+                           def medium_protocol(items: list[Runner]):\n    for it in items:\n        it.run()\n\n\
+                           def only_beta():\n    Beta(1).run()\n\n\
+                           def only_obj(obj):\n    obj.run()\n";
+
+fn repo_u() -> Repo {
+    let repo = Repo::empty();
+    repo.write("a.py", FIXTURE_U_A);
+    repo.write("m.py", FIXTURE_U_M);
+    repo.commit_all();
+    repo
+}
+
+/// GIVEN fixture U
+/// WHEN  'memo query impact Alpha.run' runs
+/// THEN  golden: 'por palavra' lists every use with '~', the line and the level, ordered by level
+#[test]
+fn test_given_name_only_uses_when_impact_text_then_listed_with_label() {
+    let out = memo(&repo_u(), &["query", "impact", "a.Alpha.run"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// GIVEN fixture U
+/// WHEN  impact runs with --json
+/// THEN  data.by_word has each item with its level, origin and line, and the name-only items are listed in it
+#[test]
+fn test_given_name_only_uses_when_impact_json_then_listed() {
+    let out = memo(&repo_u(), &["--json", "query", "impact", "a.Alpha.run"]);
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let data = &json["data"];
+    assert!(data.get("by_word_name_only").is_none(), "{data}");
+    let listed = data["by_word"].as_array().unwrap();
+    for item in listed {
+        assert!(item["line"].is_i64(), "{item}");
+        assert!(
+            ["forte", "media", "so_nome"].contains(&item["nivel"].as_str().unwrap()),
+            "{item}"
+        );
+        assert!(
+            ["uso", "tipo"].contains(&item["origem"].as_str().unwrap()),
+            "{item}"
+        );
+    }
+    let names: Vec<&str> = listed
+        .iter()
+        .filter(|i| i["nivel"] == "so_nome")
+        .map(|i| i["addr"]["qname"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["m.only_beta", "m.only_obj"]);
+}
+
+/// GIVEN fixture U
+/// WHEN  impact runs with a --max-chars that cuts inside 'por palavra'
+/// THEN  the output stays under the limit and ends with '+N omitidos'
+#[test]
+fn test_given_max_chars_when_impact_by_word_then_cut_with_omitted() {
+    let repo = repo_u();
+    let full = stdout(&memo(&repo, &["query", "impact", "a.Alpha.run"]));
+    let limit = full.find("média\n").expect("an approximate by-word line") + 1;
+    let out = stdout(&memo(
+        &repo,
+        &[
+            "--max-chars",
+            &limit.to_string(),
+            "query",
+            "impact",
+            "a.Alpha.run",
+        ],
+    ));
+    assert!(out.chars().count() <= limit, "{out}");
+    let last = out.lines().last().unwrap();
+    assert!(last.starts_with('+') && last.ends_with("omitidos"), "{out}");
+}
+
+/// GIVEN fixture U plus tests/test_m.py with a helper calling 'Alpha(1).run()'
+/// WHEN  impact runs with and without --no-tests
+/// THEN  the test use is never listed in 'por palavra'
+#[test]
+fn test_given_use_in_test_file_when_impact_then_never_listed() {
+    let repo = Repo::empty();
+    repo.write("a.py", FIXTURE_U_A);
+    repo.write("m.py", FIXTURE_U_M);
+    repo.write(
+        "tests/test_m.py",
+        "from a import Alpha\n\ndef helper_in_tests():\n    Alpha(1).run()\n",
+    );
+    repo.commit_all();
+    for flags in [&[][..], &["--no-tests"][..]] {
+        let mut args = flags.to_vec();
+        args.extend(["--json", "query", "impact", "a.Alpha.run"]);
+        let json: serde_json::Value = serde_json::from_str(&stdout(&memo(&repo, &args))).unwrap();
+        let paths: Vec<&str> = json["data"]["by_word"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["addr"]["path"].as_str().unwrap())
+            .collect();
+        assert!(
+            paths.iter().all(|p| !p.starts_with("tests/")),
+            "{flags:?} {paths:?}"
+        );
+    }
+}
+
+/// GIVEN any repository
+/// WHEN  a query runs with --json
+/// THEN  cobertura has no 'nao_resolvidas_por_palavra' key
+#[test]
+fn test_given_coverage_json_when_rendered_then_no_by_word_field() {
+    let out = memo(&repo_u(), &["--json", "query", "impact", "a.Alpha.run"]);
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let cobertura = json["cobertura"].as_object().unwrap();
+    assert!(cobertura.contains_key("nao_resolvidas"), "{cobertura:?}");
+    assert!(
+        !cobertura.contains_key("nao_resolvidas_por_palavra"),
+        "{cobertura:?}"
+    );
+}
+
+const CALLERS_2: [&str; 5] = [
+    "query",
+    "callers",
+    "SqlLimitRepository.save",
+    "--depth",
+    "2",
+];
+
+fn with_flags(flags: &[&'static str], args: &[&'static str]) -> Vec<&'static str> {
+    let mut all = flags.to_vec();
+    all.extend(args);
+    all
+}
+
+/// GIVEN the fixture where a test reaches SqlLimitRepository.save two levels up
+/// WHEN  'memo query callers SqlLimitRepository.save --depth 2' runs without flags
+/// THEN  no test appears, production callers stay and cobertura says tests were hidden (TASK-7, D2)
+#[test]
+fn test_given_default_when_query_callers_then_tests_hidden() {
+    let out = stdout(&memo(&open_repo(), &CALLERS_2));
+    assert!(
+        !out.contains("test_given_amount") && out.contains("CalculateLimitUseCase.execute"),
+        "{out}"
+    );
+    assert!(out.contains("testes ocultos"), "{out}");
+}
+
+/// GIVEN the same fixture
+/// WHEN  the query runs with '--tests'
+/// THEN  the test caller is listed (TASK-7, D2)
+#[test]
+fn test_given_tests_flag_when_query_callers_then_tests_shown() {
+    let out = stdout(&memo(&open_repo(), &with_flags(&["--tests"], &CALLERS_2)));
+    assert!(out.contains("test_given_amount"), "{out}");
+}
+
+/// GIVEN the same fixture
+/// WHEN  the query runs with '--no-tests' and without flags
+/// THEN  both outputs are identical (TASK-7, D2)
+#[test]
+fn test_given_no_tests_flag_when_query_callers_then_same_as_default() {
+    let repo = open_repo();
+    let default = stdout(&memo(&repo, &CALLERS_2));
+    let flagged = stdout(&memo(&repo, &with_flags(&["--no-tests"], &CALLERS_2)));
+    assert_eq!(default, flagged);
+}
+
+/// GIVEN the fixture
+/// WHEN  'memo query tests CalculateLimitUseCase.execute' runs without flags
+/// THEN  tests are listed: the command exists to list them (TASK-7, D2)
+#[test]
+fn test_given_default_when_query_tests_then_tests_listed() {
+    let out = stdout(&memo(
+        &open_repo(),
+        &["query", "tests", "CalculateLimitUseCase.execute"],
+    ));
+    assert!(out.contains("test_"), "{out}");
+}
+
+/// Repositório com `h.hub` e chamadores: `n1` funções em `a1.py` e `n2` em `a2.py`.
+fn callers_repo(n1: usize, n2: usize) -> Repo {
+    let repo = Repo::empty();
+    repo.write("h.py", "def hub():\n    pass\n");
+    for (path, n) in [("a1.py", n1), ("a2.py", n2)] {
+        let body: String = (0..n)
+            .map(|i| format!("def f{i:02}():\n    hub()\n\n"))
+            .collect();
+        repo.write(path, &format!("from h import hub\n\n{body}"));
+    }
+    repo.commit_all();
+    repo
+}
+
+fn caller_lines(out: &str) -> Vec<&str> {
+    out.lines().filter(|l| l.starts_with("  F ")).collect()
+}
+
+/// GIVEN 25 callers of hub, 15 in module a1 and 10 in module a2
+/// WHEN  'memo query callers hub' runs
+/// THEN  10 callers are listed and the rest is one line counted by module, biggest first (TASK-7, D3)
+#[test]
+fn test_given_section_over_ten_when_rendered_then_grouped_by_module() {
+    let out = stdout(&memo(&callers_repo(15, 10), &["query", "callers", "h.hub"]));
+    assert_eq!(caller_lines(&out).len(), 10, "{out}");
+    assert!(out.contains("\n  +15 em: a2 ×10 · a1 ×5\n"), "{out}");
+}
+
+/// GIVEN exactly 10 callers of hub
+/// WHEN  'memo query callers hub' runs
+/// THEN  all 10 are listed and there is no grouped line (TASK-7, D3)
+#[test]
+fn test_given_section_of_ten_when_rendered_then_not_grouped() {
+    let out = stdout(&memo(&callers_repo(6, 4), &["query", "callers", "h.hub"]));
+    assert_eq!(caller_lines(&out).len(), 10, "{out}");
+    assert!(!out.contains(" em: "), "{out}");
+}
+
+/// GIVEN 25 callers of hub
+/// WHEN  'memo --all query callers hub' runs
+/// THEN  all 25 callers are listed (TASK-7, D3)
+#[test]
+fn test_given_all_flag_when_rendered_then_every_item_listed() {
+    let out = stdout(&memo(
+        &callers_repo(15, 10),
+        &["--all", "query", "callers", "h.hub"],
+    ));
+    assert_eq!(caller_lines(&out).len(), 25, "{out}");
+}
+
+/// GIVEN hub imported by 30 modules, 15 in package p1 and 15 in package p2
+/// WHEN  'memo query symbol hub' runs, with and without '--all'
+/// THEN  the imports are one line counted by package; with '--all' each import is listed (TASK-7, D3)
+#[test]
+fn test_given_many_imports_when_query_symbol_then_imports_as_counts() {
+    let repo = Repo::empty();
+    repo.write("h.py", "def hub():\n    pass\n");
+    for pkg in ["p1", "p2"] {
+        repo.write(&format!("{pkg}/__init__.py"), "");
+        for i in 0..15 {
+            repo.write(&format!("{pkg}/m{i:02}.py"), "from h import hub\n");
+        }
+    }
+    repo.commit_all();
+    let out = stdout(&memo(&repo, &["query", "symbol", "h.hub"]));
+    assert!(
+        out.contains("\n  IMPORTA <- 30 em: p1 ×15 · p2 ×15\n"),
+        "{out}"
+    );
+    assert!(!out.contains("IMPORTA <- m00"), "{out}");
+    let all = stdout(&memo(&repo, &["--all", "query", "symbol", "h.hub"]));
+    assert_eq!(all.matches("IMPORTA <- ").count(), 30, "{all}");
+}
+
+/// GIVEN 'class Status(StrEnum)' with A = "a", B = auto() and C = 3
+/// WHEN  'memo query symbol Status' runs
+/// THEN  the output has 'membros: A = "a" · B · C = 3' (TASK-7, D6)
+#[test]
+fn test_given_enum_when_query_symbol_then_members_line() {
+    let repo = Repo::empty();
+    repo.write(
+        "m.py",
+        "from enum import StrEnum, auto\n\nclass Status(StrEnum):\n    A = \"a\"\n    B = auto()\n    C = 3\n",
+    );
+    repo.commit_all();
+    let out = stdout(&memo(&repo, &["query", "symbol", "m.Status"]));
+    assert!(out.contains("\nmembros: A = \"a\" · B · C = 3\n"), "{out}");
+}
+
+/// GIVEN functions order_payments_total, order_items and list_payments
+/// WHEN  'memo query word order_payments' runs
+/// THEN  golden: 'interpretado como: order + payments', a short card per part and the symbols with both (TASK-7, D7)
+#[test]
+fn test_given_composite_word_when_query_word_then_golden_card() {
+    let repo = Repo::empty();
+    repo.write(
+        "m.py",
+        "def order_payments_total():\n    pass\n\ndef order_items():\n    pass\n\n\
+         def list_payments():\n    pass\n",
+    );
+    repo.commit_all();
+    let out = memo(&repo, &["query", "word", "order_payments"]);
+    assert_eq!(out.status.code(), Some(0));
+    insta::assert_snapshot!(stdout(&out));
 }

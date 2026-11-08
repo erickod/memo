@@ -1,0 +1,11 @@
+---
+source: crates/memo-cli/tests/query.rs
+expression: stdout(&out)
+---
+word order_payments  idx=ok
+interpretado como: order + payments
+order: uso=2 alcance=1 espec=0.00 papéis=- verbos=-
+payments: uso=2 alcance=1 espec=0.00 papéis=- verbos=list
+símbolos com todas:
+  F order_payments_total   m.py:L1-L2
+cobertura: 0 resolvidas, 0 aprox, 0 não resolvidas, 0 arquivos com erro

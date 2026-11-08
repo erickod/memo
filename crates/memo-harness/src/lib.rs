@@ -18,6 +18,7 @@ pub fn instruction_block() -> String {
         "{BEGIN}\n\
 ## memo (memória estrutural)\n\
 - Antes de começar uma tarefa: `memo brief \"<pedido>\"`. Leia só os trechos `caminho:Linicio-Lfim` indicados.\n\
+- O memo localiza; a resposta está no código. Leia os trechos da seção `ler:` antes de consultar de novo, e consulte só o que faltar.\n\
 - Antes de alterar a assinatura ou o comportamento de um símbolo: `memo query impact <símbolo>`.\n\
 - `~` marca relação aproximada. Resultado vazio não prova ausência: confirme com busca no código.\n\
 - Ao terminar, registre só conhecimento durável que o código não mostra, com `memo note add`: uma afirmação por nota, ancorada no símbolo mais específico. Não registre o que o diff já mostra.\n\

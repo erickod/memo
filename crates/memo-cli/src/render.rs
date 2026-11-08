@@ -1,10 +1,11 @@
 //! Formatação de saída em texto compacto (spec §8.3).
 
 use memo_core::brief::Brief;
+use memo_core::evidence::Evidence;
 use memo_core::notes::Note;
 use memo_core::query::{
-    Chain, ChainItem, Coverage, EdgeView, Impact, RelItem, Relation, SymbolAddr, SymbolInfo,
-    TestsInfo, TypeInfo, WordInfo,
+    ByWordItem, Chain, ChainItem, Coverage, EdgeView, Impact, Origem, RelItem, Relation,
+    SymbolAddr, SymbolInfo, TestsInfo, TypeInfo, WordInfo,
 };
 
 fn coverage_line(c: &Coverage) -> String {
@@ -18,13 +19,8 @@ fn coverage_line(c: &Coverage) -> String {
     } else {
         String::new()
     };
-    let by_word = if c.nao_resolvidas > 0 {
-        format!(" ({} por palavra)", c.nao_resolvidas_por_palavra)
-    } else {
-        String::new()
-    };
     format!(
-        "cobertura: {} resolvidas, {} aprox, {} não resolvidas{by_word}, {} arquivos com erro{notes}{hidden}",
+        "cobertura: {} resolvidas, {} aprox, {} não resolvidas, {} arquivos com erro{notes}{hidden}",
         c.resolvidas, c.aproximadas, c.nao_resolvidas, c.arquivos_com_erro
     )
 }
@@ -130,6 +126,59 @@ fn list_line(label: &str, values: &[String]) -> String {
     }
 }
 
+/// Seções com mais itens que isto mostram só os primeiros e contam o resto por módulo (D3).
+const GROUP_AFTER: usize = 10;
+/// Módulos citados na linha de contagem; o resto vira `…`.
+const GROUP_MODULES: usize = 8;
+
+/// `<n> em: mod ×a · mod ×b …`: contagem por módulo, a maior primeiro, depois pelo nome.
+fn module_counts(modules: &[&str]) -> String {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for m in modules {
+        match counts.iter_mut().find(|(name, _)| name == m) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((m, 1)),
+        }
+    }
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let mut parts: Vec<String> = counts
+        .iter()
+        .take(GROUP_MODULES)
+        .map(|(m, n)| format!("{m} ×{n}"))
+        .collect();
+    if counts.len() > GROUP_MODULES {
+        parts.push("…".to_string());
+    }
+    format!("{} em: {}", modules.len(), parts.join(" · "))
+}
+
+/// Itens de uma seção, cada um com o módulo; acima de 10, os 10 primeiros e uma linha
+/// `+N em: …` com o resto contado por módulo. Com `--all`, todos (TASK-7, D3).
+fn grouped(items: Vec<(String, String)>, all: bool) -> Vec<String> {
+    if all || items.len() <= GROUP_AFTER {
+        return items.into_iter().map(|(line, _)| line).collect();
+    }
+    let rest: Vec<&str> = items[GROUP_AFTER..]
+        .iter()
+        .map(|(_, m)| m.as_str())
+        .collect();
+    let mut lines: Vec<String> = items[..GROUP_AFTER]
+        .iter()
+        .map(|(line, _)| line.clone())
+        .collect();
+    lines.push(format!("  +{}", module_counts(&rest)));
+    lines
+}
+
+fn module_of_addr(addr: &SymbolAddr) -> String {
+    memo_core::index::module_of(&addr.path)
+}
+
+/// Pacote de um módulo (`p1.m00` → `p1`); módulo de topo é o próprio pacote.
+fn package_of(module: &str) -> &str {
+    module.rsplit_once('.').map_or(module, |(pkg, _)| pkg)
+}
+
 /// Monta `cabeçalho`, `itens` e `rodapé`; corta os itens do fim até caber em `max_chars`
 /// e termina com `+N omitidos`. O limite `limit` (se houver) também corta itens.
 pub fn fit(
@@ -220,6 +269,7 @@ pub fn symbol_text(
     cov: &Coverage,
     max_chars: usize,
     limit: Option<usize>,
+    all: bool,
 ) -> String {
     let mut head = vec![
         format!("symbol {}  idx={idx}", info.addr.qname),
@@ -228,13 +278,35 @@ pub fn symbol_text(
             "assinatura: sig={}",
             &info.sig_hash[..info.sig_hash.len().min(6)]
         ),
-        "arestas:".to_string(),
     ];
+    if !info.membros.is_empty() {
+        head.push(members_line(&info.membros, all));
+    }
+    head.push("arestas:".to_string());
     if info.edges.is_empty() {
         head.push("  nenhuma".to_string());
     }
-    let items: Vec<String> = info.edges.iter().map(edge_line).collect();
+    let mut items = Vec::new();
+    for (dir, arrow) in [("in", "<-"), ("out", "->")] {
+        let imports: Vec<&str> = info
+            .edges
+            .iter()
+            .filter(|e| !all && e.kind == "IMPORTA" && e.dir == dir)
+            .map(|e| package_of(&e.other_module))
+            .collect();
+        if !imports.is_empty() {
+            items.push(format!("  IMPORTA {arrow} {}", module_counts(&imports)));
+        }
+    }
+    let rest: Vec<(String, String)> = info
+        .edges
+        .iter()
+        .filter(|e| all || e.kind != "IMPORTA")
+        .map(|e| (edge_line(e), e.other_module.clone()))
+        .collect();
+    items.extend(grouped(rest, all));
     let mut tail = notes_lines(&info.notes);
+    tail.extend(read_lines(&info.ler));
     tail.push(coverage_line(cov));
     fit(&head, &items, &tail, max_chars, limit)
 }
@@ -246,6 +318,38 @@ fn rel_item(i: &RelItem) -> String {
     format!("{}{attr}{approx}{line}", item(&i.addr))
 }
 
+fn rel_items(items: &[RelItem]) -> Vec<(String, String)> {
+    items
+        .iter()
+        .map(|i| (rel_item(i), module_of_addr(&i.addr)))
+        .collect()
+}
+
+fn chain_items(items: &[ChainItem]) -> Vec<(String, String)> {
+    items
+        .iter()
+        .map(|i| {
+            let module = i.addr.as_ref().map_or("ext".to_string(), module_of_addr);
+            (chain_item(i), module)
+        })
+        .collect()
+}
+
+/// Item do nível por palavra: o item, com `~` e a linha, a origem `tipo` quando vem do tipo
+/// anotado, e o nível no fim.
+fn by_word_item(b: &ByWordItem) -> String {
+    let nivel = match b.nivel {
+        Evidence::Forte => "forte",
+        Evidence::Media => "média",
+        Evidence::SoNome => "só nome",
+    };
+    let origem = match b.origem {
+        Origem::Tipo => " tipo",
+        Origem::Uso => "",
+    };
+    format!("{}{origem} {nivel}", rel_item(&b.item))
+}
+
 pub fn relation_text(
     label: &str,
     rel: &Relation,
@@ -253,12 +357,13 @@ pub fn relation_text(
     cov: &Coverage,
     max_chars: usize,
     limit: Option<usize>,
+    all: bool,
 ) -> String {
     let mut head = vec![format!("{label} {}  idx={idx}", rel.target.short)];
     if rel.items.is_empty() {
         head.push("  nenhum".to_string());
     }
-    let items: Vec<String> = rel.items.iter().map(rel_item).collect();
+    let items = grouped(rel_items(&rel.items), all);
     fit(&head, &items, &[coverage_line(cov)], max_chars, limit)
 }
 
@@ -268,18 +373,19 @@ pub fn type_text(
     cov: &Coverage,
     max_chars: usize,
     limit: Option<usize>,
+    all: bool,
 ) -> String {
     let head = vec![format!("type {}  idx={idx}", info.target.short)];
     let mut items = vec!["produz:".to_string()];
     if info.producers.is_empty() {
         items.push("  nenhum".to_string());
     }
-    items.extend(info.producers.iter().map(rel_item));
+    items.extend(grouped(rel_items(&info.producers), all));
     items.push("consome:".to_string());
     if info.consumers.is_empty() {
         items.push("  nenhum".to_string());
     }
-    items.extend(info.consumers.iter().map(rel_item));
+    items.extend(grouped(rel_items(&info.consumers), all));
     fit(&head, &items, &[coverage_line(cov)], max_chars, limit)
 }
 
@@ -311,26 +417,23 @@ pub fn chain_text(
     cov: &Coverage,
     max_chars: usize,
     limit: Option<usize>,
+    all: bool,
 ) -> String {
     let mut head = vec![format!("{label} {}  idx={idx}", chain.target.short)];
     if chain.items.is_empty() {
         head.push("  nenhum".to_string());
     }
-    let items: Vec<String> = chain.items.iter().map(chain_item).collect();
+    let items = grouped(chain_items(&chain.items), all);
     fit(&head, &items, &[coverage_line(cov)], max_chars, limit)
 }
 
-fn tests_sections(tests: &TestsInfo, items: &mut Vec<String>) {
+fn tests_sections(tests: &TestsInfo, items: &mut Vec<String>, all: bool) {
     section(
         "testes exatos",
-        tests.exact.iter().map(rel_item).collect(),
+        grouped(rel_items(&tests.exact), all),
         items,
     );
-    section(
-        "testes ~",
-        tests.approx.iter().map(rel_item).collect(),
-        items,
-    );
+    section("testes ~", grouped(rel_items(&tests.approx), all), items);
 }
 
 pub fn tests_text(
@@ -340,10 +443,11 @@ pub fn tests_text(
     cov: &Coverage,
     max_chars: usize,
     limit: Option<usize>,
+    all: bool,
 ) -> String {
     let head = vec![format!("tests {}  idx={idx}", target.short)];
     let mut items = Vec::new();
-    tests_sections(tests, &mut items);
+    tests_sections(tests, &mut items, all);
     fit(&head, &items, &[coverage_line(cov)], max_chars, limit)
 }
 
@@ -353,34 +457,70 @@ pub fn impact_text(
     cov: &Coverage,
     max_chars: usize,
     limit: Option<usize>,
+    all: bool,
 ) -> String {
     let head = vec![format!("impact {}  idx={idx}", info.target.short)];
     let mut items = Vec::new();
     section(
         "chamadores",
-        info.callers.iter().map(chain_item).collect(),
+        grouped(chain_items(&info.callers), all),
         &mut items,
     );
     section(
         "consumidores",
-        info.consumers.iter().map(rel_item).collect(),
+        grouped(rel_items(&info.consumers), all),
         &mut items,
     );
     section(
         "protocolo",
-        info.protocol.iter().map(rel_item).collect(),
+        grouped(rel_items(&info.protocol), all),
         &mut items,
     );
-    section(
-        "por palavra",
-        info.by_word.iter().map(rel_item).collect(),
-        &mut items,
-    );
-    tests_sections(&info.tests, &mut items);
+    let by_word = info
+        .by_word
+        .iter()
+        .map(|b| (by_word_item(b), module_of_addr(&b.item.addr)))
+        .collect();
+    section("por palavra", grouped(by_word, all), &mut items);
+    tests_sections(&info.tests, &mut items, all);
     let mut tail = notes_lines(&info.notes);
     tail.extend(unchanged_line(info.unchanged));
     tail.push(coverage_line(cov));
     fit(&head, &items, &tail, max_chars, limit)
+}
+
+/// `membros: A = "a" · B · …` (TASK-7, D6); acima de 10, os 10 primeiros e `+N`, salvo `--all`.
+fn members_line(members: &[memo_core::query::EnumMember], all: bool) -> String {
+    let shown = if all {
+        members.len()
+    } else {
+        members.len().min(GROUP_AFTER)
+    };
+    let mut parts: Vec<String> = members[..shown]
+        .iter()
+        .map(|m| match &m.value {
+            Some(v) => format!("{} = {v}", m.name),
+            None => m.name.clone(),
+        })
+        .collect();
+    if shown < members.len() {
+        parts.push(format!("+{}", members.len() - shown));
+    }
+    format!("membros: {}", parts.join(" · "))
+}
+
+/// Seção `ler:` (TASK-7, D4): um trecho por linha, `caminho:Lini-Lfim — motivo`.
+fn read_lines(spots: &[memo_core::query::ReadSpot]) -> Vec<String> {
+    if spots.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec!["ler:".to_string()];
+    lines.extend(
+        spots
+            .iter()
+            .map(|s| format!("  {}:L{}-L{} — {}", s.path, s.start, s.end, s.motivo)),
+    );
+    lines
 }
 
 /// Seção `notas`: `nenhuma`, ou uma linha por nota com o peso implícito na ordem.
@@ -586,6 +726,7 @@ pub fn brief_text(
         lines
     };
     tail.extend(unchanged_line(b.unchanged));
+    tail.extend(read_lines(&b.ler));
     tail.push(coverage_line(cov));
     let tests: Vec<String> = b
         .symbols
@@ -602,6 +743,7 @@ pub fn word_text(
     cov: &Coverage,
     max_chars: usize,
     limit: Option<usize>,
+    all: bool,
 ) -> String {
     let mut head = vec![format!("word {}  idx={idx}", info.word)];
     if let Some(st) = &info.stats {
@@ -629,11 +771,56 @@ pub fn word_text(
     if info.symbols.is_empty() {
         head.push("  nenhum".to_string());
     }
-    let items: Vec<String> = info
+    let symbols = info
         .symbols
         .iter()
-        .map(|s| tagged_item(&s.addr, &s.tags))
+        .map(|s| (tagged_item(&s.addr, &s.tags), module_of_addr(&s.addr)))
         .collect();
+    let items = grouped(symbols, all);
+    fit(&head, &items, &[coverage_line(cov)], max_chars, limit)
+}
+
+/// Palavra composta (TASK-7, D7): a interpretação, a ficha curta de cada parte e os símbolos
+/// cujo nome tem todas as partes.
+pub fn composite_word_text(
+    info: &memo_core::query::CompositeWord,
+    idx: &str,
+    cov: &Coverage,
+    max_chars: usize,
+    limit: Option<usize>,
+    all: bool,
+) -> String {
+    let mut head = vec![
+        format!("word {}  idx={idx}", info.input),
+        format!("interpretado como: {}", info.parts.join(" + ")),
+    ];
+    for card in &info.cards {
+        let stats = card.stats.as_ref().map_or(String::new(), |st| {
+            format!(
+                " uso={} alcance={} espec={:.2}",
+                st.uso, st.alcance, st.especificidade
+            )
+        });
+        head.push(format!(
+            "{}:{stats} papéis={} verbos={}",
+            card.word,
+            dash_join(&card.roles),
+            dash_join(&card.verbs)
+        ));
+    }
+    if !info.unknown.is_empty() {
+        head.push(list_line("desconhecidas", &info.unknown));
+    }
+    head.push("símbolos com todas:".to_string());
+    if info.symbols.is_empty() {
+        head.push("  nenhum".to_string());
+    }
+    let symbols = info
+        .symbols
+        .iter()
+        .map(|s| (item(s), module_of_addr(s)))
+        .collect();
+    let items = grouped(symbols, all);
     fit(&head, &items, &[coverage_line(cov)], max_chars, limit)
 }
 

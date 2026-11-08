@@ -24,6 +24,8 @@ pub struct SymbolFact {
     pub is_protocol: bool,
     /// Tipo anotado (texto bruto) de um atributo, quando conhecido.
     pub type_text: Option<String>,
+    /// Membro de Enum: o valor literal, ou vazio quando o valor não é literal (TASK-7, D6).
+    pub value_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +35,13 @@ pub enum RefKind {
     Especializa,
     Escreve,
     Le,
+    /// Leitura `X.attr` por um nome que não é `self` (TASK-7, D5); resolvida como `LE`.
+    LeAttr,
+    EscreveAttr,
+    Inicializa,
+    SqlUpdate,
+    SqlInsert,
+    ChamaConstruida,
     Chama,
 }
 
@@ -44,6 +53,12 @@ impl RefKind {
             RefKind::Especializa => "ESPECIALIZA",
             RefKind::Escreve => "ESCREVE",
             RefKind::Le => "LE",
+            RefKind::LeAttr => "LE_ATTR",
+            RefKind::EscreveAttr => "ESCREVE_ATTR",
+            RefKind::Inicializa => "INICIALIZA",
+            RefKind::SqlUpdate => "SQL_UPDATE",
+            RefKind::SqlInsert => "SQL_INSERT",
+            RefKind::ChamaConstruida => "CHAMA_CONSTRUIDA",
             RefKind::Chama => "CHAMA",
         }
     }
@@ -89,6 +104,14 @@ pub struct FileFacts {
     pub imports: Vec<ImportFact>,
     /// Docstring (texto) de cada função ou método que a tem.
     pub docs: Vec<DocFact>,
+    pub regions: Vec<RegionFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionFact {
+    pub src_qname: String,
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,9 +185,10 @@ pub fn extract_python_file(
         body_hash: hash_of(&serialize(&ctx, root)),
         is_protocol: false,
         type_text: None,
+        value_text: None,
     });
-    visit_block(&mut ctx, root, module, false);
     collect_imports(&mut ctx, root, module, is_package, false);
+    visit_block(&mut ctx, root, module, false);
     Ok(ctx.facts)
 }
 
@@ -224,6 +248,7 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
     );
     let line = def.start_position().row + 1;
     let mut is_protocol = false;
+    let mut is_enum = false;
     if let Some(bases) = def.child_by_field_name("superclasses") {
         let mut cursor = bases.walk();
         for base in bases.named_children(&mut cursor) {
@@ -233,6 +258,7 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
             let text = ctx.text(base).split_whitespace().collect::<String>();
             let text = text.split('[').next().unwrap_or("").to_string();
             is_protocol |= text == "Protocol" || text.ends_with(".Protocol");
+            is_enum |= is_enum_base(&text);
             ctx.facts.refs.push(RefFact {
                 src_qname: qname.clone(),
                 kind: RefKind::Especializa,
@@ -255,10 +281,93 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
             body_hash: hash_of(&body_hash),
             is_protocol,
             type_text: None,
+            value_text: None,
         },
     );
     if let Some(b) = body {
         visit_block(ctx, b, &qname, true);
+        if is_enum {
+            enum_members(ctx, b, &qname);
+        }
+    }
+}
+
+fn collect_regions(ctx: &mut Ctx, node: Node, qname: &str) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if matches!(
+            child.kind(),
+            "function_definition" | "class_definition" | "decorated_definition" | "lambda"
+        ) {
+            continue;
+        }
+        if child.kind().ends_with("_statement") {
+            ctx.facts.regions.push(RegionFact {
+                src_qname: qname.to_string(),
+                start: child.start_position().row + 1,
+                end: child.end_position().row + 1,
+            });
+        }
+        collect_regions(ctx, child, qname);
+    }
+}
+
+/// Bases de Enum reconhecidas pelo nome declarado (TASK-7, D6): `Enum`, `IntEnum`, `StrEnum`,
+/// `Flag`, sozinhas ou como `enum.<nome>`. Herança indireta não é seguida.
+fn is_enum_base(text: &str) -> bool {
+    const BASES: [&str; 4] = ["Enum", "IntEnum", "StrEnum", "Flag"];
+    match text.split_once('.') {
+        None => BASES.contains(&text),
+        Some(("enum", name)) => BASES.contains(&name),
+        Some(_) => false,
+    }
+}
+
+/// Membros de um Enum: `NOME = valor` no corpo da classe, sem anotação. O valor literal (texto,
+/// número, `True`, `False`, `None`) é guardado; os demais ficam vazios (`auto()`, expressões).
+fn enum_members(ctx: &mut Ctx, body: Node, class_qname: &str) {
+    const LITERALS: [&str; 6] = ["string", "integer", "float", "true", "false", "none"];
+    let mut cursor = body.walk();
+    let statements: Vec<Node> = body.named_children(&mut cursor).collect();
+    for stmt in statements {
+        let Some(assign) = (stmt.kind() == "expression_statement")
+            .then(|| stmt.named_child(0))
+            .flatten()
+            .filter(|n| n.kind() == "assignment" && n.child_by_field_name("type").is_none())
+        else {
+            continue;
+        };
+        let Some(name) = assign
+            .child_by_field_name("left")
+            .filter(|n| n.kind() == "identifier")
+            .map(|n| ctx.text(n).to_string())
+            .filter(|n| !n.starts_with('_'))
+        else {
+            continue;
+        };
+        let value = assign
+            .child_by_field_name("right")
+            .filter(|v| LITERALS.contains(&v.kind()))
+            .map(|v| ctx.text(v).to_string())
+            .unwrap_or_default();
+        let qname = format!("{class_qname}.{name}");
+        if ctx.facts.symbols.iter().any(|s| s.qname == qname) {
+            continue;
+        }
+        add_symbol(
+            ctx,
+            SymbolFact {
+                qname,
+                kind: SymbolKind::Attribute,
+                line_start: assign.start_position().row + 1,
+                line_end: assign.end_position().row + 1,
+                sig_hash: hash_of(&value),
+                body_hash: hash_of(""),
+                is_protocol: false,
+                type_text: None,
+                value_text: Some(value),
+            },
+        );
     }
 }
 
@@ -331,12 +440,14 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
             body_hash: hash_of(&body_hash),
             is_protocol: false,
             type_text: None,
+            value_text: None,
         },
     );
     if let Some(b) = body {
         if in_class {
             self_attributes(ctx, b, prefix, &param_types);
         }
+        collect_regions(ctx, b, &qname);
         let mut locals = param_types.clone();
         collect_locals(ctx, b, &mut locals);
         scan_effects(ctx, b, &qname, in_class, &locals);
@@ -447,6 +558,7 @@ fn push_attribute(
             body_hash: hash_of(""),
             is_protocol: false,
             type_text,
+            value_text: None,
         },
     );
 }
@@ -590,7 +702,26 @@ fn write_target(
                     push_ref(ctx, src, RefKind::Escreve, path.join("."), target);
                 }
                 _ => {
-                    if let Some(b) = base {
+                    if target.kind() == "attribute"
+                        && let Some(text) = dotted_name(ctx, target)
+                    {
+                        let owner = text.rsplit_once('.').map(|(o, _)| o).unwrap_or("");
+                        ctx.facts.refs.push(RefFact {
+                            src_qname: src.to_string(),
+                            kind: RefKind::EscreveAttr,
+                            receiver: locals.get(owner).cloned(),
+                            text,
+                            line: target.start_position().row + 1,
+                        });
+                    }
+                    // `X.attr = v` escreve: só o objeto `X` é lido, não o atributo.
+                    let read = match base {
+                        Some(b) if b.kind() == "attribute" && target.kind() == "attribute" => {
+                            b.child_by_field_name("object")
+                        }
+                        other => other,
+                    };
+                    if let Some(b) = read {
                         scan_effects(ctx, b, src, track_self, locals);
                     }
                 }
@@ -633,19 +764,41 @@ fn scan_effects(
         }
         "call" => {
             let func = node.child_by_field_name("function");
+            let constructed = func.and_then(|f| constructed_receiver(ctx, f));
             if let Some(callee) = func.and_then(|f| callee_text(ctx, f)) {
                 let first = callee.split('.').next().unwrap_or("");
-                let receiver = (callee.contains('.') && !matches!(first, "self" | "cls"))
-                    .then(|| locals.get(first).cloned())
-                    .flatten();
+                let dynamic_name = !callee.contains('.') && shadowed(ctx, src, &callee, locals);
+                let receiver = if dynamic_name {
+                    Some(String::new())
+                } else {
+                    constructed
+                        .as_ref()
+                        .map(|name| {
+                            if shadowed(ctx, src, name, locals) {
+                                String::new()
+                            } else {
+                                name.clone()
+                            }
+                        })
+                        .or_else(|| {
+                            (callee.contains('.') && !matches!(first, "self" | "cls"))
+                                .then(|| locals.get(first).cloned())
+                                .flatten()
+                        })
+                };
                 ctx.facts.refs.push(RefFact {
                     src_qname: src.to_string(),
-                    kind: RefKind::Chama,
+                    kind: if constructed.is_some() || dynamic_name {
+                        RefKind::ChamaConstruida
+                    } else {
+                        RefKind::Chama
+                    },
                     text: callee,
                     receiver,
                     line: node.start_position().row + 1,
                 });
             }
+            keyword_writes(ctx, node, src, locals);
             match func {
                 Some(f) if f.kind() == "attribute" => {
                     let obj = f.child_by_field_name("object");
@@ -685,6 +838,25 @@ fn scan_effects(
                 && !path.is_empty()
             {
                 push_ref(ctx, src, RefKind::Le, path.join("."), node);
+                return;
+            }
+            if let Some(owner) = node
+                .child_by_field_name("object")
+                .filter(|o| o.kind() == "identifier")
+                .map(|o| ctx.text(o).to_string())
+                .filter(|o| !matches!(o.as_str(), "self" | "cls"))
+            {
+                let attr = node
+                    .child_by_field_name("attribute")
+                    .map(|a| ctx.text(a).to_string())
+                    .unwrap_or_default();
+                ctx.facts.refs.push(RefFact {
+                    src_qname: src.to_string(),
+                    kind: RefKind::LeAttr,
+                    text: format!("{owner}.{attr}"),
+                    receiver: locals.get(&owner).cloned(),
+                    line: node.start_position().row + 1,
+                });
                 return;
             }
         }
@@ -829,12 +1001,112 @@ fn dotted_name(ctx: &Ctx, node: Node) -> Option<String> {
 
 /// Texto do chamado; `?.m` quando o receptor não é um nome (ex.: `f().m()`), só o método importa.
 fn callee_text(ctx: &Ctx, func: Node) -> Option<String> {
+    if let Some(receiver) = constructed_receiver(ctx, func) {
+        return Some(format!(
+            "{receiver}.{}",
+            ctx.text(func.child_by_field_name("attribute")?)
+        ));
+    }
     dotted_name(ctx, func).or_else(|| {
         (func.kind() == "attribute")
             .then(|| func.child_by_field_name("attribute"))
             .flatten()
             .map(|m| format!("?.{}", ctx.text(m)))
     })
+}
+
+/// Preserve the constructor expression without claiming its result type: resolution checks it.
+fn constructed_receiver(ctx: &Ctx, func: Node) -> Option<String> {
+    if func.kind() != "attribute" {
+        return None;
+    }
+    let object = func.child_by_field_name("object")?;
+    (object.kind() == "call")
+        .then(|| dotted_name(ctx, object.child_by_field_name("function")?))
+        .flatten()
+}
+
+/// A parameter or a known local binding prevents treating a spelling as an imported identity.
+fn shadowed(ctx: &Ctx, src: &str, name: &str, locals: &HashMap<String, String>) -> bool {
+    let root = name.split('.').next().unwrap_or(name);
+    locals.contains_key(root)
+        || ctx
+            .facts
+            .receives
+            .iter()
+            .any(|r| r.src_qname == src && r.attr == root)
+}
+
+/// Only SQLAlchemy imports establish query-builder semantics; a method named values does not.
+fn sql_model(
+    ctx: &Ctx,
+    mut call: Node,
+    src: &str,
+    locals: &HashMap<String, String>,
+) -> Option<(String, RefKind)> {
+    loop {
+        if call.kind() != "call" {
+            return None;
+        }
+        let function = call.child_by_field_name("function")?;
+        if let Some(name) = dotted_name(ctx, function) {
+            if shadowed(ctx, src, &name, locals) {
+                return None;
+            }
+            for import in &ctx.facts.imports {
+                let expanded = if name == import.local_name {
+                    import.target.clone()
+                } else if let Some(rest) = name.strip_prefix(&format!("{}.", import.local_name)) {
+                    format!("{}.{rest}", import.target)
+                } else {
+                    continue;
+                };
+                let kind = match expanded.as_str() {
+                    "sqlalchemy.update"
+                    | "sqlalchemy.sql.update"
+                    | "sqlalchemy.sql.expression.update" => RefKind::SqlUpdate,
+                    "sqlalchemy.insert"
+                    | "sqlalchemy.sql.insert"
+                    | "sqlalchemy.sql.expression.insert" => RefKind::SqlInsert,
+                    _ => continue,
+                };
+                let model = call.child_by_field_name("arguments")?.named_child(0)?;
+                return Some((dotted_name(ctx, model)?, kind));
+            }
+        }
+        call = function.child_by_field_name("object")?;
+    }
+}
+
+fn keyword_writes(ctx: &mut Ctx, call: Node, src: &str, locals: &HashMap<String, String>) {
+    let Some(function) = call.child_by_field_name("function") else {
+        return;
+    };
+    let is_values = function
+        .child_by_field_name("attribute")
+        .is_some_and(|a| ctx.text(a) == "values");
+    let target = if is_values {
+        function
+            .child_by_field_name("object")
+            .and_then(|o| sql_model(ctx, o, src, locals))
+    } else {
+        dotted_name(ctx, function).map(|name| (name, RefKind::Inicializa))
+    };
+    let Some((model, kind)) = target else { return };
+    if shadowed(ctx, src, &model, locals) {
+        return;
+    }
+    let Some(args) = call.child_by_field_name("arguments") else {
+        return;
+    };
+    let mut cursor = args.walk();
+    for arg in args.named_children(&mut cursor) {
+        if arg.kind() == "keyword_argument"
+            && let Some(name) = arg.child_by_field_name("name")
+        {
+            push_ref(ctx, src, kind, format!("{model}.{}", ctx.text(name)), name);
+        }
+    }
 }
 
 /// Tipos de variáveis locais: `x: T = ...` e `x = Tipo(...)` (primeira ocorrência vale).

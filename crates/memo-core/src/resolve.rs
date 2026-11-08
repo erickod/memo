@@ -219,13 +219,19 @@ pub fn resolve_files(
             [file_id],
         )?;
         resolve_imports(tx, &mut resolver, file_id)?;
-        for raw in load_refs(tx, file_id)?.iter().filter(|r| r.kind != "CHAMA") {
+        for raw in load_refs(tx, file_id)?
+            .iter()
+            .filter(|r| !matches!(r.kind.as_str(), "CHAMA" | "CHAMA_CONSTRUIDA"))
+        {
             resolve_ref(tx, &mut resolver, file_id, raw)?;
         }
     }
     resolve_structural(tx, &mut resolver)?;
     for &file_id in file_ids {
-        for raw in load_refs(tx, file_id)?.iter().filter(|r| r.kind == "CHAMA") {
+        for raw in load_refs(tx, file_id)?
+            .iter()
+            .filter(|r| matches!(r.kind.as_str(), "CHAMA" | "CHAMA_CONSTRUIDA"))
+        {
             resolve_call(tx, &mut resolver, file_id, raw)?;
         }
     }
@@ -526,6 +532,18 @@ fn resolve_call(
     let src_class = resolver.class_of(raw.src)?;
     let last = segs[segs.len() - 1];
 
+    if raw.kind == "CHAMA_CONSTRUIDA" {
+        if let Some(receiver) = raw.receiver.as_deref()
+            && let Some(class) = resolver.resolve_type(file_id, receiver)?
+            && call_on_type(tx, resolver, raw, class, last, false)?
+        {
+            return mark(tx, raw, 1);
+        }
+        // A factory or an external constructor cannot be made exact from its spelling.
+        insert_edge(tx, &call_edge(raw, "CHAMA", None, Some(&text), false))?;
+        return mark(tx, raw, 2);
+    }
+
     let handled = if matches!(segs[0], "self" | "cls") {
         match (segs.len(), src_class) {
             (2, Some(class)) => match resolver.method_in_class(class, segs[1], 3)? {
@@ -590,6 +608,97 @@ fn resolve_call(
     }
 }
 
+/// Leitura `X.attr` (TASK-7, D5 e D5a): `X` (ou o tipo local do receptor) resolve para uma
+/// classe com o atributo → `LE` exato; não resolve → `LE` aproximado só se um único atributo do
+/// repositório tem esse nome; nenhum ou vários → nada (estado 2, como referência externa).
+fn resolve_attr_read(
+    tx: &Transaction,
+    resolver: &mut Resolver,
+    file_id: i64,
+    raw: &RawRef,
+) -> Result<(), CoreError> {
+    let Some((owner, attr)) = raw.text.as_deref().and_then(|t| t.rsplit_once('.')) else {
+        return mark(tx, raw, 2);
+    };
+    let class = match raw.receiver.as_deref() {
+        Some(receiver) => resolver.resolve_type(file_id, receiver)?,
+        None => None,
+    };
+    let class = match class {
+        Some(c) => Some(c),
+        None => resolver.resolve_type(file_id, owner)?,
+    };
+    let edge = |dst: i64, approx: bool| NewEdge {
+        kind: "LE",
+        src: raw.src,
+        dst: Some(dst),
+        dst_text: None,
+        line: raw.line,
+        attr: None,
+        pos: None,
+        approx,
+    };
+    if let Some(class) = class {
+        return match resolver.resolve_path(class, attr)? {
+            Some(dst) => {
+                insert_edge(tx, &edge(dst, false))?;
+                mark(tx, raw, 1)
+            }
+            None => mark(tx, raw, 2),
+        };
+    }
+    let mut stmt =
+        tx.prepare("SELECT id FROM symbol WHERE kind = 'attribute' AND name = ?1 ORDER BY qname")?;
+    let candidates: Vec<i64> = stmt
+        .query_map([attr], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    // Nome comum (`id`, `status`) em várias classes viraria ruído: só o nome único conta.
+    if let [only] = candidates.as_slice() {
+        insert_edge(tx, &edge(*only, true))?;
+        return mark(tx, raw, 1);
+    }
+    mark(tx, raw, 2)
+}
+
+fn resolve_attr_write(
+    tx: &Transaction,
+    resolver: &mut Resolver,
+    file_id: i64,
+    raw: &RawRef,
+) -> Result<(), CoreError> {
+    let Some((owner, name)) = raw.text.as_deref().and_then(|t| t.rsplit_once('.')) else {
+        return mark(tx, raw, 2);
+    };
+    let class = resolver.resolve_type(file_id, raw.receiver.as_deref().unwrap_or(owner))?;
+    let Some(dst) = class
+        .map(|c| resolver.resolve_path(c, name))
+        .transpose()?
+        .flatten()
+    else {
+        return mark(tx, raw, 2);
+    };
+    let origin = match raw.kind.as_str() {
+        "INICIALIZA" => "inicializacao",
+        "SQL_UPDATE" => "sql:update",
+        "SQL_INSERT" => "sql:insert",
+        _ => "atribuicao",
+    };
+    insert_edge(
+        tx,
+        &NewEdge {
+            kind: "ESCREVE",
+            src: raw.src,
+            dst: Some(dst),
+            dst_text: None,
+            line: raw.line,
+            attr: Some(origin),
+            pos: None,
+            approx: false,
+        },
+    )?;
+    mark(tx, raw, 1)
+}
+
 fn resolve_ref(
     tx: &Transaction,
     resolver: &mut Resolver,
@@ -598,6 +707,10 @@ fn resolve_ref(
 ) -> Result<(), CoreError> {
     let text = raw.text.as_deref();
     match raw.kind.as_str() {
+        "ESCREVE_ATTR" | "INICIALIZA" | "SQL_UPDATE" | "SQL_INSERT" => {
+            resolve_attr_write(tx, resolver, file_id, raw)?;
+        }
+        "LE_ATTR" => resolve_attr_read(tx, resolver, file_id, raw)?,
         "ESCREVE" | "LE" => {
             let class_id: Option<i64> = tx.query_row(
                 "SELECT parent_id FROM symbol WHERE id = ?1",

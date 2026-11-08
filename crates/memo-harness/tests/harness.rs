@@ -290,3 +290,11 @@ fn test_given_only_agents_md_when_detect_then_codex_only() {
     assert!(adapter("codex").unwrap().detect(dir.path()));
     assert!(!adapter("claude").unwrap().detect(dir.path()));
 }
+
+/// GIVEN the instruction block written by 'memo init'
+/// WHEN  it is read
+/// THEN  it recommends reading the 'ler:' spots before querying again (TASK-7, D4)
+#[test]
+fn test_given_instruction_block_when_read_then_recommends_reading() {
+    assert!(instruction_block().contains("ler:"));
+}

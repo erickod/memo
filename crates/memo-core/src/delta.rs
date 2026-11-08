@@ -88,7 +88,7 @@ pub fn apply_impact_delta(
         task,
         "impact",
         std::mem::take(&mut impact.by_word),
-        |i| format!("{target}|W|{}", rel(i)),
+        |i| format!("{target}|W|{}", rel(&i.item)),
         full,
     )?;
     impact.by_word = by_word;

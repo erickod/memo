@@ -1,6 +1,6 @@
 //! Servidor MCP por stdio, em JSON-RPC mínimo à mão (D11 da TASK; spec §9.4).
 //!
-//! O protocolo e o contrato das quatro ferramentas vivem aqui; quem executa uma ferramenta é um
+//! O protocolo e o contrato das seis ferramentas vivem aqui; quem executa uma ferramenta é um
 //! [`Backend`], que roda o mesmo comando do CLI, então a saída é idêntica à do shell.
 
 use serde_json::{Map, Value, json};
@@ -19,6 +19,10 @@ pub trait Backend {
 }
 
 const DEFAULT_PROTOCOL: &str = "2024-11-05";
+/// Instruções do servidor (TASK-7, D4): o memo localiza, o agente lê.
+const INSTRUCTIONS: &str = "O memo localiza; a resposta está no código. Fluxo: brief ou query para localizar, \
+depois leia os trechos da seção `ler:` (caminho:Lini-Lfim) e só então consulte de novo o que faltar. \
+Notas aparecem resumidas: use note_show para o texto inteiro.";
 const QUERY_KINDS: &[&str] = &[
     "symbol", "callers", "callees", "impact", "writers", "readers", "type", "tests", "word",
 ];
@@ -41,7 +45,7 @@ fn error(id: &Value, code: i64, message: &str) -> String {
     reply(id, json!({ "error": { "code": code, "message": message } }))
 }
 
-/// As quatro ferramentas da spec §9.4, com descrições curtas para gastar pouco contexto.
+/// As ferramentas da spec §9.4, com descrições curtas para gastar pouco contexto.
 fn tools() -> Value {
     json!([
         {
@@ -52,7 +56,7 @@ fn tools() -> Value {
                 "properties": {
                     "text": { "type": "string", "description": "O pedido em texto livre." },
                     "task": { "type": "string", "description": "Id da task (deltas e notas da task)." },
-                    "no_tests": { "type": "boolean", "description": "Esconde os testes da saída." }
+                    "tests": { "type": "boolean", "description": "Mostra os testes (ocultos por padrão)." }
                 },
                 "required": ["text"]
             }
@@ -67,7 +71,7 @@ fn tools() -> Value {
                     "target": { "type": "string", "description": "Símbolo (qname ou sufixo único), atributo, tipo ou palavra." },
                     "depth": { "type": "integer", "minimum": 1, "maximum": 3, "description": "Só para callers e callees." },
                     "task": { "type": "string" },
-                    "no_tests": { "type": "boolean", "description": "Esconde os testes da saída (erro em kind tests)." }
+                    "tests": { "type": "boolean", "description": "Mostra os testes (ocultos por padrão; kind tests sempre lista)." }
                 },
                 "required": ["kind", "target"]
             }
@@ -85,6 +89,23 @@ fn tools() -> Value {
                     "confirm": { "type": "boolean", "description": "Só para decisão vinda de rodada humana." }
                 },
                 "required": ["tipo", "ancora", "texto"]
+            }
+        },
+        {
+            "name": "note_show",
+            "description": "Texto inteiro de uma nota (o brief e o symbol mostram só o resumo e o id).",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "string", "description": "Id da nota, como n-abc12345." } },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "note_list",
+            "description": "Todas as notas visíveis, uma por linha: id, tipo, estado, escopo e âncora.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "task": { "type": "string" } }
             }
         },
         {
@@ -123,7 +144,9 @@ impl<B: Backend> Server<B> {
         if let Some(task) = optional(args, "task") {
             argv.extend(["--task".to_string(), task.to_string()]);
         }
-        if args.get("no_tests").and_then(Value::as_bool) == Some(true) {
+        if args.get("tests").and_then(Value::as_bool) == Some(true) {
+            argv.push("--tests".to_string());
+        } else if args.get("no_tests").and_then(Value::as_bool) == Some(true) {
             argv.push("--no-tests".to_string());
         }
         let push = |argv: &mut Vec<String>, items: &[&str]| {
@@ -159,6 +182,8 @@ impl<B: Backend> Server<B> {
                 }
                 push(&mut argv, &["--", texto]);
             }
+            "note_show" => push(&mut argv, &["note", "show", "--", required(args, "id")?]),
+            "note_list" => push(&mut argv, &["note", "list"]),
             "status" => push(&mut argv, &["status"]),
             other => return Err(format!("unknown tool '{other}'")),
         }
@@ -210,6 +235,7 @@ impl<B: Backend> Server<B> {
                     json!({ "result": {
                         "protocolVersion": version,
                         "capabilities": { "tools": {} },
+                        "instructions": INSTRUCTIONS,
                         "serverInfo": { "name": "memo", "version": env!("CARGO_PKG_VERSION") }
                     }}),
                 )

@@ -4,11 +4,13 @@ use crate::config::BridgeWeights;
 use crate::delta::filter_new;
 use crate::error::CoreError;
 use crate::notes::{Note, notes_for};
-use crate::query::{SymbolAddr, addr_by_id, short_name, word_pattern};
+use crate::query::{
+    ReadSpot, SymbolAddr, addr_by_id, short_name, structural_read_spot, word_pattern,
+};
 use crate::store::SqliteStore;
 use crate::tags::bridge_tags;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_ANCHORS: usize = 5;
 const MAX_SYMBOLS: usize = 15;
@@ -84,6 +86,8 @@ pub struct Brief {
     pub notes: Vec<String>,
     /// Itens omitidos por já terem sido entregues nesta task (spec §8.4).
     pub unchanged: Option<usize>,
+    /// Trechos que vale ler: os 5 primeiros símbolos de produção (TASK-7, D4).
+    pub ler: Vec<ReadSpot>,
 }
 
 fn strip_accent(c: char) -> char {
@@ -373,7 +377,20 @@ pub fn brief_weighted(
     notes: &[Note],
     weights: &BridgeWeights,
 ) -> Result<Brief, CoreError> {
-    let tokens = expand_aliases(tokenize(request), notes);
+    brief_with_changes(store, request, notes, weights, &[])
+}
+
+/// Rank explicit identities first, then changed feature symbols, then lexical evidence.
+pub fn brief_with_changes(
+    store: &SqliteStore,
+    request: &str,
+    notes: &[Note],
+    weights: &BridgeWeights,
+    changed: &[String],
+) -> Result<Brief, CoreError> {
+    let structural = crate::structural::resolve(store, request)?;
+    let changed_ids = crate::structural::changed_ids(store, changed)?;
+    let tokens = expand_aliases(tokenize(&structural.remaining), notes);
     let matched = match_words(store, &tokens)?;
     let mut ignored: Vec<String> = Vec::new();
     let mut usable: Vec<&Candidate> = Vec::new();
@@ -385,9 +402,11 @@ pub fn brief_weighted(
         }
     }
     usable.sort_by(|a, b| {
-        b.weight
-            .total_cmp(&a.weight)
-            .then_with(|| a.text.cmp(&b.text))
+        a.approx.cmp(&b.approx).then_with(|| {
+            b.weight
+                .total_cmp(&a.weight)
+                .then_with(|| a.text.cmp(&b.text))
+        })
     });
     usable.truncate(MAX_ANCHORS);
     let top = usable.first().map_or(0.0, |c| c.weight);
@@ -402,6 +421,10 @@ pub fn brief_weighted(
         .collect();
 
     let mut scores: BTreeMap<i64, f64> = BTreeMap::new();
+    let mut named = BTreeSet::new();
+    for id in structural.symbols.keys().chain(&changed_ids) {
+        scores.insert(*id, 1.0);
+    }
     for c in &usable {
         let mut stmt = store.conn.prepare(
             "SELECT symbol_id, slot FROM occurrence WHERE word_id = ?1 AND symbol_id IS NOT NULL",
@@ -411,6 +434,7 @@ pub fn brief_weighted(
         })?;
         for row in rows {
             let (symbol, slot) = row?;
+            named.insert(symbol);
             *scores.entry(symbol).or_insert(0.0) += normalized(c.weight) * slot_bonus(&slot);
         }
     }
@@ -464,7 +488,16 @@ pub fn brief_weighted(
             second.push((id, h / degree_of(&degrees, id)));
         }
     }
-    let (first_production, first_tests) = rank_tier(store, first)?;
+    let (mut first_production, mut first_tests) = rank_tier(store, first)?;
+    let priority = |id: i64| match structural.symbols.get(&id) {
+        Some(&"simbolo") => 0,
+        Some(_) => 1,
+        None if changed_ids.contains(&id) => 2,
+        None => 3,
+    };
+    for tier in [&mut first_production, &mut first_tests] {
+        tier.sort_by_key(|r| (priority(r.0), !named.contains(&r.0), r.2.kind == "module"));
+    }
     let (second_production, second_tests) = rank_tier(store, second)?;
     // Produção primeiro: os testes não disputam as vagas do código (D7), têm as suas.
     let mut ranked = pick_slots(
@@ -506,10 +539,16 @@ pub fn brief_weighted(
     let anchor_ids: Vec<i64> = usable.iter().map(|c| c.id).collect();
     let mut tagged = Vec::with_capacity(ranked.len());
     for (id, score, addr) in ranked {
-        let tags = bridge_tags(&store.conn, id, &anchor_ids)?
+        let mut tags: Vec<String> = bridge_tags(&store.conn, id, &anchor_ids)?
             .into_iter()
             .map(str::to_string)
             .collect();
+        if let Some(tag) = structural.symbols.get(&id) {
+            tags.insert(0, (*tag).to_string());
+        }
+        if changed_ids.contains(&id) {
+            tags.insert(0, "alterado".to_string());
+        }
         let in_tests = addr.in_tests();
         tagged.push(ScoredSymbol {
             addr,
@@ -519,6 +558,7 @@ pub fn brief_weighted(
         });
     }
     let notes_lines = related_notes(notes, &ranked_addrs, &anchors);
+    let ler = brief_read_spots(store, &tagged, &anchors)?;
     Ok(Brief {
         request: request.to_string(),
         anchors,
@@ -529,7 +569,60 @@ pub fn brief_weighted(
         pattern,
         notes: notes_lines,
         unchanged: None,
+        ler,
     })
+}
+
+/// Símbolos de produção lidos como trecho no `brief`.
+const READ_SYMBOLS: usize = 5;
+
+/// `ler:` do `brief`: os 5 primeiros símbolos de produção da lista; o motivo diz quais palavras
+/// do pedido o nome carrega, ou `vizinho` quando chegou só por vizinhança.
+fn brief_read_spots(
+    store: &SqliteStore,
+    symbols: &[ScoredSymbol],
+    anchors: &[Anchor],
+) -> Result<Vec<ReadSpot>, CoreError> {
+    let mut stmt = store.conn.prepare(
+        "SELECT w.text FROM occurrence o JOIN word w ON w.id = o.word_id
+         JOIN symbol s ON o.owner_kind = 'symbol' AND o.owner_id = s.id
+         WHERE s.qname = ?1 AND o.source = 'name' ORDER BY o.pos",
+    )?;
+    let mut spots: Vec<ReadSpot> = Vec::new();
+    for s in symbols.iter().filter(|s| !s.in_tests) {
+        let names: Vec<String> = stmt
+            .query_map([&s.addr.qname], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        let mut carried: Vec<&str> = anchors
+            .iter()
+            .map(|a| a.word.as_str())
+            .filter(|w| names.iter().any(|n| n == w))
+            .collect();
+        carried.dedup();
+        let motivo = if s.tags.iter().any(|t| t == "simbolo") {
+            "simbolo explicito".to_string()
+        } else if s.tags.iter().any(|t| t == "arquivo") {
+            "arquivo explicito".to_string()
+        } else if s.tags.iter().any(|t| t == "alterado") {
+            "alterado na feature".to_string()
+        } else if carried.is_empty() {
+            "vizinho".to_string()
+        } else {
+            format!("carrega {}", carried.join(", "))
+        };
+        let spot = structural_read_spot(store, &s.addr, None, motivo)?;
+        if spots
+            .iter()
+            .any(|seen| seen.path == spot.path && seen.start <= spot.end && spot.start <= seen.end)
+        {
+            continue;
+        }
+        spots.push(spot);
+        if spots.len() == READ_SYMBOLS {
+            break;
+        }
+    }
+    Ok(spots)
 }
 
 /// Notas dos nós listados e das palavras âncora, como linhas curtas.
@@ -552,19 +645,38 @@ pub fn apply_delta(
     full: bool,
 ) -> Result<(), CoreError> {
     let request = brief.request.clone();
+    let original = brief.symbols.clone();
+    let fingerprints: BTreeMap<String, (String, String)> = store
+        .conn
+        .prepare("SELECT qname, sig_hash, body_hash FROM symbol")?
+        .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?
+        .collect::<Result<_, _>>()?;
     let (symbols, a) = filter_new(
         store,
         task,
         "brief",
         std::mem::take(&mut brief.symbols),
         |s| {
+            let fingerprint = fingerprints.get(&s.addr.qname);
             format!(
-                "{request}|S|{}|{}:{}-{}",
-                s.addr.qname, s.addr.path, s.addr.line_start, s.addr.line_end
+                "{request}|S|{}|{}:{}-{}|{fingerprint:?}",
+                s.addr.qname, s.addr.path, s.addr.line_start, s.addr.line_end,
             )
         },
         full,
     )?;
+    // `ler:` acompanha os símbolos: só ficam os trechos de símbolos ainda listados (TASK-7, D4).
+    brief.ler.retain(|spot| {
+        let owner = original
+            .iter()
+            .filter(|s| {
+                s.addr.path == spot.path
+                    && s.addr.line_start <= spot.start
+                    && s.addr.line_end >= spot.end
+            })
+            .min_by_key(|s| s.addr.line_end - s.addr.line_start);
+        owner.is_some_and(|s| symbols.iter().any(|kept| kept.addr.qname == s.addr.qname))
+    });
     let (outline, b) = filter_new(
         store,
         task,

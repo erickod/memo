@@ -5,7 +5,11 @@ use rusqlite::{Connection, OptionalExtension};
 use std::fmt::Write;
 use std::path::Path;
 
-const SCHEMA_VERSION: &str = "3";
+const SCHEMA_VERSION: &str = "7";
+
+/// Fontes de palavra que formam o vocabulário (TASK-6, D16): as de uso (`ref`, `type`) ficam fora
+/// das âncoras de nota e dos eventos de palavra.
+pub(crate) const VOCABULARY_SOURCES: &str = "('name', 'path', 'import', 'test_doc')";
 
 const SCHEMA: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
@@ -20,7 +24,7 @@ CREATE TABLE symbol(
   line_start INTEGER, line_end INTEGER,
   sig_hash TEXT, body_hash TEXT, decorators TEXT,
   is_test INTEGER DEFAULT 0, is_entrypoint INTEGER DEFAULT 0, is_protocol INTEGER DEFAULT 0,
-  type_text TEXT);
+  type_text TEXT, value_text TEXT);
 CREATE TABLE word(id INTEGER PRIMARY KEY, text TEXT UNIQUE NOT NULL);
 CREATE TABLE occurrence(
   symbol_id INTEGER, word_id INTEGER NOT NULL, pos INTEGER NOT NULL,
@@ -31,13 +35,15 @@ CREATE TABLE occurrence(
   source TEXT NOT NULL DEFAULT 'name',
   PRIMARY KEY(owner_kind, owner_id, source, pos));
 CREATE TABLE doc(symbol_id INTEGER PRIMARY KEY, text TEXT NOT NULL);
+CREATE TABLE read_region(symbol_id INTEGER NOT NULL REFERENCES symbol(id), start INTEGER, end INTEGER);
+CREATE INDEX read_region_symbol ON read_region(symbol_id, start, end);
 CREATE TABLE edge(
   id INTEGER PRIMARY KEY, kind TEXT NOT NULL,
   src INTEGER NOT NULL REFERENCES symbol(id), dst INTEGER REFERENCES symbol(id),
   dst_text TEXT,
   line INTEGER, attr TEXT, pos INTEGER,
   approx INTEGER DEFAULT 0, count INTEGER DEFAULT 1);
-CREATE TABLE raw_ref(file_id INTEGER, src INTEGER, kind TEXT, callee_text TEXT, receiver TEXT, line INTEGER,
+CREATE TABLE raw_ref(id INTEGER PRIMARY KEY, file_id INTEGER, src INTEGER, kind TEXT, callee_text TEXT, receiver TEXT, line INTEGER,
   attr TEXT, pos INTEGER, resolved INTEGER DEFAULT 1);
 CREATE TABLE import(file_id INTEGER, local_name TEXT, target TEXT, line INTEGER, type_checking INTEGER DEFAULT 0);
 CREATE TABLE word_stats(
@@ -52,6 +58,7 @@ CREATE INDEX occurrence_symbol ON occurrence(symbol_id);
 CREATE INDEX symbol_file ON symbol(file_id);
 CREATE INDEX symbol_parent ON symbol(parent_id);
 CREATE INDEX raw_ref_file ON raw_ref(file_id);
+CREATE INDEX raw_ref_src ON raw_ref(src, line);
 CREATE INDEX import_file ON import(file_id);
 ";
 
@@ -70,6 +77,18 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
+    /// Open a compatible graph without initialization, rebuilding or any writes.
+    pub fn open_read_only(path: &Path) -> Result<Self, CoreError> {
+        let store = Self {
+            conn: Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?,
+        };
+        if store.get_meta("schema_version")?.as_deref() != Some(SCHEMA_VERSION) {
+            return Err(CoreError::Config(
+                "incompatible base graph; rebuild the base index".into(),
+            ));
+        }
+        Ok(store)
+    }
     pub fn open(path: &Path) -> Result<Self, CoreError> {
         Self::init(Connection::open(path)?)
     }

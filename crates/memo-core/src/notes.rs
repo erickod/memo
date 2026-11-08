@@ -272,6 +272,16 @@ fn exists(graph: &SqliteStore, sql: &str, param: &str) -> Result<bool, CoreError
     Ok(graph.conn.query_row(sql, [param], |r| r.get(0))?)
 }
 
+/// A palavra existe no vocabulário: alguma ocorrência de nome, caminho, import ou docstring de
+/// teste. Palavras só de uso (`ref`, `type`) não ancoram nota (TASK-6, D16).
+fn vocabulary_word_sql() -> String {
+    format!(
+        "SELECT EXISTS(SELECT 1 FROM word w JOIN occurrence o ON o.word_id = w.id
+         WHERE w.text = ?1 AND o.source IN {})",
+        crate::store::VOCABULARY_SOURCES
+    )
+}
+
 /// Confere que a âncora existe no grafo e a normaliza (spec §7.2, regras 1 e 2).
 fn resolve_anchor(graph: &SqliteStore, raw: &str) -> Result<Resolved, CoreError> {
     let (kind, rest) = raw.split_once(':').ok_or_else(|| CoreError::Validation {
@@ -300,11 +310,7 @@ fn resolve_anchor(graph: &SqliteStore, raw: &str) -> Result<Resolved, CoreError>
         }
         "word" => {
             let word = rest.to_lowercase();
-            if !exists(
-                graph,
-                "SELECT EXISTS(SELECT 1 FROM word WHERE text = ?1)",
-                &word,
-            )? {
+            if !exists(graph, &vocabulary_word_sql(), &word)? {
                 return Err(CoreError::NotFound(format!("word:{word}")));
             }
             if word_stats(graph, &word)?.is_some_and(|s| s.esqueleto) {
@@ -745,11 +751,7 @@ fn anchor_present(graph: &SqliteStore, anchor: &str) -> Result<bool, CoreError> 
     let (kind, rest) = anchor.split_once(':').unwrap_or(("", ""));
     match kind {
         "sym" => symbol_exists(graph, rest),
-        "word" => exists(
-            graph,
-            "SELECT EXISTS(SELECT 1 FROM word w JOIN occurrence o ON o.word_id = w.id WHERE w.text = ?1)",
-            rest,
-        ),
+        "word" => exists(graph, &vocabulary_word_sql(), rest),
         "file" => exists(
             graph,
             "SELECT EXISTS(SELECT 1 FROM file WHERE path = ?1)",
@@ -824,12 +826,7 @@ fn judge(
             }
         }
         "word" => {
-            let used = exists(
-                graph,
-                "SELECT EXISTS(SELECT 1 FROM word w JOIN occurrence o ON o.word_id = w.id
-                 WHERE w.text = ?1)",
-                rest,
-            )?;
+            let used = exists(graph, &vocabulary_word_sql(), rest)?;
             if used {
                 Transition::Keep
             } else {

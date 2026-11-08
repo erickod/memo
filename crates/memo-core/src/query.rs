@@ -1,11 +1,12 @@
 //! Consultas sobre o grafo (spec §8.2).
 
 use crate::error::CoreError;
+use crate::evidence::Evidence;
 use crate::index::module_of;
 use crate::store::SqliteStore;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SymbolAddr {
@@ -27,6 +28,117 @@ pub struct SymbolInfo {
     pub edges: Vec<EdgeView>,
     /// Notas visíveis ancoradas no símbolo; preenchidas por quem conhece o diretório de notas.
     pub notes: Vec<crate::notes::Note>,
+    /// Trechos que vale ler: o alvo e até 4 chamadores exatos (TASK-7, D4).
+    pub ler: Vec<ReadSpot>,
+    /// Membros, quando o símbolo é um Enum (TASK-7, D6).
+    pub membros: Vec<EnumMember>,
+}
+
+/// Membro de Enum: o nome e o valor literal, quando há.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EnumMember {
+    pub name: String,
+    pub value: Option<String>,
+}
+
+fn enum_members(store: &SqliteStore, qname: &str) -> Result<Vec<EnumMember>, CoreError> {
+    Ok(store
+        .conn
+        .prepare(
+            "SELECT m.name, m.value_text FROM symbol m JOIN symbol c ON c.id = m.parent_id
+             WHERE c.qname = ?1 AND m.kind = 'attribute' AND m.value_text IS NOT NULL
+             ORDER BY m.line_start, m.name",
+        )?
+        .query_map([qname], |r| {
+            let value: String = r.get(1)?;
+            Ok(EnumMember {
+                name: r.get(0)?,
+                value: (!value.is_empty()).then_some(value),
+            })
+        })?
+        .collect::<Result<_, _>>()?)
+}
+
+/// Trecho de código para ler, com o motivo como fato (`alvo`, `chama o alvo em :L<n>`, …).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReadSpot {
+    pub path: String,
+    pub start: i64,
+    pub end: i64,
+    pub motivo: String,
+}
+
+/// Até este tamanho o trecho é o símbolo inteiro; acima, uma janela.
+const READ_FULL_MAX: i64 = 60;
+const READ_WINDOW: i64 = 20;
+const READ_CALLERS: usize = 4;
+
+/// Trecho de um símbolo: inteiro até 60 linhas; acima, 20 linhas a partir do início ou ao redor
+/// de `focus` (a linha da chamada), sem sair do símbolo.
+pub(crate) fn read_spot(addr: &SymbolAddr, focus: Option<i64>, motivo: String) -> ReadSpot {
+    let (start, end) = (addr.line_start, addr.line_end);
+    let (from, to) = if end - start < READ_FULL_MAX {
+        (start, end)
+    } else {
+        let from = focus.map_or(start, |f| (f - READ_WINDOW / 2).max(start));
+        (from, (from + READ_WINDOW - 1).min(end))
+    };
+    ReadSpot {
+        path: addr.path.clone(),
+        start: from,
+        end: to,
+        motivo,
+    }
+}
+
+/// Complete intersected statements when the resulting spot stays within forty lines.
+pub(crate) fn structural_read_spot(
+    store: &SqliteStore,
+    addr: &SymbolAddr,
+    focus: Option<i64>,
+    motivo: String,
+) -> Result<ReadSpot, CoreError> {
+    let mut spot = read_spot(addr, focus, motivo);
+    if addr.line_end - addr.line_start < READ_FULL_MAX {
+        return Ok(spot);
+    }
+    let regions = store.conn.prepare(
+        "SELECT r.start,r.end FROM read_region r JOIN symbol s ON s.id=r.symbol_id WHERE s.qname=?1 ORDER BY r.start,r.end DESC"
+    )?.query_map([&addr.qname], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?)))?.collect::<Result<Vec<_>,_>>()?;
+    for (start, end) in regions {
+        if start > spot.end || end < spot.start {
+            continue;
+        }
+        let from = spot.start.min(start).max(addr.line_start);
+        let to = spot.end.max(end).min(addr.line_end);
+        if to - from < READ_WINDOW * 2 {
+            spot.start = from;
+            spot.end = to;
+        }
+    }
+    Ok(spot)
+}
+
+/// `ler:` do `symbol`: o alvo e até 4 chamadores exatos d1 de produção, na ordem dos chamadores.
+fn symbol_read_spots(
+    store: &SqliteStore,
+    qname: &str,
+    addr: &SymbolAddr,
+) -> Result<Vec<ReadSpot>, CoreError> {
+    let mut spots = vec![structural_read_spot(store, addr, None, "alvo".to_string())?];
+    for item in callers(store, qname, 1)?.items.iter().filter(|i| !i.approx) {
+        if let (Some(caller), Some(line)) = (&item.addr, item.line) {
+            if caller.in_tests() {
+                continue;
+            }
+            let motivo = format!("chama o alvo em :L{line}");
+            spots.push(structural_read_spot(store, caller, Some(line), motivo)?);
+            if spots.len() > READ_CALLERS {
+                break;
+            }
+        }
+    }
+    Ok(spots)
 }
 
 /// Símbolo com as pontes que o ligam à palavra consultada.
@@ -66,6 +178,8 @@ pub struct EdgeView {
     pub approx: bool,
     /// O outro extremo é um teste ou um símbolo de arquivo de teste.
     pub other_is_test: bool,
+    /// Módulo do outro extremo (`ext` quando não resolvido), para agrupar listas longas.
+    pub other_module: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -94,8 +208,6 @@ pub struct Coverage {
     pub resolvidas: i64,
     pub aproximadas: i64,
     pub nao_resolvidas: i64,
-    /// Das não resolvidas, as que o `impact` ainda alcança por palavra (camada relacional).
-    pub nao_resolvidas_por_palavra: i64,
     pub arquivos_com_erro: i64,
     /// Itens de teste escondidos pela flag `--no-tests` (preenchido pelo CLI).
     pub testes_ocultos: i64,
@@ -188,9 +300,13 @@ pub fn symbol_info(store: &SqliteStore, target: &str) -> Result<SymbolInfo, Core
             sig_hash: r.get(6)?,
             edges: Vec::new(),
             notes: Vec::new(),
+            ler: Vec::new(),
+            membros: Vec::new(),
         })
     })?;
+    info.membros = enum_members(store, &qname)?;
     info.edges = direct_edges(store, &qname)?;
+    info.ler = symbol_read_spots(store, &qname, &info.addr)?;
     Ok(info)
 }
 
@@ -224,6 +340,11 @@ fn direct_edges(store: &SqliteStore, qname: &str) -> Result<Vec<EdgeView>, CoreE
                 line: r.get(3)?,
                 approx: r.get::<_, i64>(4)? != 0,
                 other_is_test: tested != 0 || other_in_test_file,
+                other_module: if path.is_empty() {
+                    "ext".to_string()
+                } else {
+                    crate::index::module_of(&path)
+                },
             })
         })?;
         for row in rows {
@@ -249,7 +370,33 @@ fn related(store: &SqliteStore, qname: &str, edge_kind: &str) -> Result<Vec<RelI
             attr: r.get(8)?,
         })
     })?;
-    Ok(rows.collect::<Result<_, _>>()?)
+    let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+    rank_relations(&mut items, &addr_of(store, qname)?);
+    Ok(items)
+}
+
+/// Confidence precedes structural proximity; names and lines make ties reproducible.
+fn proximity(target: &SymbolAddr, other: &SymbolAddr) -> usize {
+    if target.path == other.path {
+        return usize::MAX;
+    }
+    let target_dir = target.path.rsplit_once('/').map_or("", |(d, _)| d);
+    let other_dir = other.path.rsplit_once('/').map_or("", |(d, _)| d);
+    target_dir
+        .split('/')
+        .zip(other_dir.split('/'))
+        .take_while(|(a, b)| !a.is_empty() && a == b)
+        .count()
+}
+
+fn rank_relations(items: &mut [RelItem], target: &SymbolAddr) {
+    items.sort_by(|a, b| {
+        a.approx
+            .cmp(&b.approx)
+            .then_with(|| proximity(target, &b.addr).cmp(&proximity(target, &a.addr)))
+            .then_with(|| a.addr.qname.cmp(&b.addr.qname))
+            .then_with(|| a.line.cmp(&b.line))
+    });
 }
 
 /// Símbolos que escrevem o atributo (`ESCREVE`).
@@ -288,11 +435,6 @@ pub fn coverage(store: &SqliteStore) -> Result<Coverage, CoreError> {
         resolvidas: count("SELECT COUNT(*) FROM edge WHERE dst IS NOT NULL AND approx = 0")?,
         aproximadas: count("SELECT COUNT(*) FROM edge WHERE approx = 1")?,
         nao_resolvidas: count("SELECT COUNT(*) FROM raw_ref WHERE resolved = 0")?,
-        nao_resolvidas_por_palavra: count(
-            "SELECT COUNT(*) FROM raw_ref r WHERE r.resolved = 0 AND EXISTS (
-               SELECT 1 FROM occurrence o
-               WHERE o.owner_kind = 'symbol' AND o.owner_id = r.src AND o.source = 'ref')",
-        )?,
         arquivos_com_erro: count("SELECT COUNT(*) FROM file WHERE parse_error IS NOT NULL")?,
         notas_com_erro: 0,
         testes_ocultos: 0,
@@ -355,6 +497,74 @@ pub fn word_info(
     weights: &crate::config::BridgeWeights,
 ) -> Result<WordInfo, CoreError> {
     word_core(store, word, Some(weights))
+}
+
+/// Partes de uma entrada de `query word` (TASK-7, D7): o mesmo classificador das palavras de
+/// nome, que divide em `_`, `.` e caixa e descarta os `_` do começo e do fim; sem repetição.
+pub fn word_parts(input: &str, config: &crate::config::Config) -> Vec<String> {
+    // `__init__` e `_order_`: o classificador ignora nomes com `_` nas pontas; tirá-los antes.
+    let trimmed: Vec<&str> = input.split('.').map(|p| p.trim_matches('_')).collect();
+    let mut parts: Vec<String> = Vec::new();
+    for occ in crate::sources::use_words(&trimmed.join("."), config) {
+        if !parts.contains(&occ.text) {
+            parts.push(occ.text);
+        }
+    }
+    parts
+}
+
+/// Palavra composta: a ficha curta de cada parte conhecida, as partes desconhecidas e os
+/// símbolos cujo nome tem todas as partes conhecidas.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CompositeWord {
+    pub input: String,
+    pub parts: Vec<String>,
+    pub cards: Vec<WordInfo>,
+    pub unknown: Vec<String>,
+    pub symbols: Vec<SymbolAddr>,
+}
+
+/// Cruza as partes de uma palavra composta; nenhuma parte conhecida → `NotFound`.
+pub fn composite_word(
+    store: &SqliteStore,
+    input: &str,
+    parts: &[String],
+) -> Result<CompositeWord, CoreError> {
+    let mut cards = Vec::new();
+    let mut unknown = Vec::new();
+    for part in parts {
+        match word_pattern(store, part) {
+            Ok(card) => cards.push(card),
+            Err(CoreError::NotFound(_)) => unknown.push(part.clone()),
+            Err(e) => return Err(e),
+        }
+    }
+    if cards.is_empty() {
+        return Err(CoreError::NotFound(input.to_string()));
+    }
+    let placeholders = vec!["?"; cards.len()].join(",");
+    let sql = format!(
+        "SELECT {ADDR_COLUMNS} FROM symbol s LEFT JOIN file f ON f.id = s.file_id
+         WHERE s.id IN (
+           SELECT o.owner_id FROM occurrence o JOIN word w ON w.id = o.word_id
+           WHERE o.owner_kind = 'symbol' AND o.source = 'name' AND w.text IN ({placeholders})
+           GROUP BY o.owner_id HAVING COUNT(DISTINCT w.text) = {})
+         ORDER BY s.qname",
+        cards.len()
+    );
+    let words: Vec<&str> = cards.iter().map(|c| c.word.as_str()).collect();
+    let symbols = store
+        .conn
+        .prepare(&sql)?
+        .query_map(rusqlite::params_from_iter(words), addr_from_row)?
+        .collect::<Result<_, _>>()?;
+    Ok(CompositeWord {
+        input: input.to_string(),
+        parts: parts.to_vec(),
+        cards,
+        unknown,
+        symbols,
+    })
 }
 
 /// Só verbos, papéis, camadas e vizinhas de símbolo da palavra, sem a ficha de pontes nem os
@@ -486,15 +696,32 @@ pub struct TestsInfo {
     pub approx: Vec<RelItem>,
 }
 
+/// Um uso do nível por palavra do `impact`: o símbolo que o contém, a linha e o nível.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ByWordItem {
+    #[serde(flatten)]
+    pub item: RelItem,
+    pub nivel: crate::evidence::Evidence,
+    pub origem: Origem,
+}
+
+/// De onde vem um item do nível por palavra: um uso (`raw_ref`) ou o tipo anotado de um atributo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Origem {
+    Uso,
+    Tipo,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Impact {
     pub target: SymbolAddr,
     pub callers: Vec<ChainItem>,
     pub consumers: Vec<RelItem>,
     pub protocol: Vec<RelItem>,
-    /// Símbolos de produção cujo texto de uso contém todas as palavras do nome do alvo e que
-    /// nenhuma aresta cobre: relação por palavra, sempre aproximada.
-    pub by_word: Vec<RelItem>,
+    /// Usos e tipos de produção que contêm as palavras do nome do alvo e que nenhuma aresta cobre,
+    /// cada um com a linha e o nível de evidência como rótulo; nada é escondido (TASK-6, D17).
+    pub by_word: Vec<ByWordItem>,
     pub tests: TestsInfo,
     pub notes: Vec<crate::notes::Note>,
     /// Itens omitidos por já terem sido entregues nesta task (spec §8.4).
@@ -523,7 +750,7 @@ fn walk_calls(
     let sql = format!(
         "SELECT {ADDR_COLUMNS}, e.line, e.approx, s.id FROM edge e
          JOIN symbol s ON s.id = e.{far} LEFT JOIN file f ON f.id = s.file_id
-         WHERE e.{near} = ?1 AND e.kind IN {CALL_KINDS} ORDER BY s.qname, e.line"
+         WHERE e.{near} = ?1 AND e.kind IN {CALL_KINDS} ORDER BY e.approx, s.qname, e.line"
     );
     let mut stmt = store.conn.prepare(&sql)?;
     let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::from([start]);
@@ -531,7 +758,8 @@ fn walk_calls(
     let mut items = Vec::new();
     for level in 1..=depth {
         let mut level_seen = std::collections::HashSet::new();
-        let mut next: Vec<(i64, bool)> = Vec::new();
+        let mut next = BTreeMap::<i64, bool>::new();
+        frontier.sort_by_key(|(_, approx)| *approx);
         for (node, path_approx) in &frontier {
             let rows = stmt.query_map([node], |r| {
                 Ok((
@@ -554,9 +782,10 @@ fn walk_calls(
                     line,
                     approx,
                 });
-                if level_seen.insert(id) {
-                    next.push((id, approx));
-                }
+                level_seen.insert(id);
+                next.entry(id)
+                    .and_modify(|a| *a &= approx)
+                    .or_insert(approx);
             }
             if !up && level == 1 {
                 let mut ext = store.conn.prepare(
@@ -579,8 +808,27 @@ fn walk_calls(
             }
         }
         seen.extend(level_seen);
-        frontier = next;
+        frontier = next.into_iter().collect();
     }
+    let target = addr_by_id(store, start)?;
+    items.sort_by(|a, b| {
+        a.depth
+            .cmp(&b.depth)
+            .then_with(|| (a.addr.is_none(), a.approx).cmp(&(b.addr.is_none(), b.approx)))
+            .then_with(|| {
+                let pa = a.addr.as_ref().map_or(0, |s| proximity(&target, s));
+                let pb = b.addr.as_ref().map_or(0, |s| proximity(&target, s));
+                pb.cmp(&pa)
+            })
+            .then_with(|| {
+                a.addr
+                    .as_ref()
+                    .map(|s| &s.qname)
+                    .cmp(&b.addr.as_ref().map(|s| &s.qname))
+            })
+            .then_with(|| a.ext.cmp(&b.ext))
+            .then_with(|| a.line.cmp(&b.line))
+    });
     Ok(items)
 }
 
@@ -662,6 +910,17 @@ pub fn tests_for(store: &SqliteStore, target: &str) -> Result<TestsInfo, CoreErr
             });
         }
     }
+    let target = addr_by_id(store, id)?;
+    rank_relations(&mut info.exact, &target);
+    // Calls inferred from a receiver remain stronger than a lexical overlap with no line.
+    info.approx.sort_by(|a, b| {
+        a.line
+            .is_none()
+            .cmp(&b.line.is_none())
+            .then_with(|| proximity(&target, &b.addr).cmp(&proximity(&target, &a.addr)))
+            .then_with(|| a.addr.qname.cmp(&b.addr.qname))
+            .then_with(|| a.line.cmp(&b.line))
+    });
     Ok(info)
 }
 
@@ -680,7 +939,7 @@ fn protocol_counterparts(store: &SqliteStore, id: i64) -> Result<Vec<RelItem>, C
              OR (e.dst = me.parent_id AND (SELECT is_protocol FROM symbol WHERE id = me.parent_id) = 1))
          ORDER BY s.qname"
     );
-    let rows = store
+    let mut rows: Vec<RelItem> = store
         .conn
         .prepare(&sql)?
         .query_map([id], |r| {
@@ -692,56 +951,374 @@ fn protocol_counterparts(store: &SqliteStore, id: i64) -> Result<Vec<RelItem>, C
             })
         })?
         .collect::<Result<_, _>>()?;
+    rank_relations(&mut rows, &addr_by_id(store, id)?);
     Ok(rows)
 }
 
-/// Camada relacional do `impact`: símbolos de produção que têm, entre as palavras de uso
-/// (`ref` e `type`), todas as palavras do nome do alvo, menos os que as arestas já cobrem.
-fn by_word(
-    store: &SqliteStore,
-    id: i64,
-    covered: &HashSet<String>,
-) -> Result<Vec<RelItem>, CoreError> {
-    let words: Vec<i64> = store
+/// Ids dos símbolos ligados a `start` por `ESPECIALIZA` exata, no sentido dado, de forma
+/// transitiva; `start` incluso.
+fn hierarchy(store: &SqliteStore, start: i64, up: bool) -> Result<BTreeSet<i64>, CoreError> {
+    let sql = if up {
+        "SELECT dst FROM edge WHERE kind = 'ESPECIALIZA' AND approx = 0 AND src = ?1 AND dst IS NOT NULL"
+    } else {
+        "SELECT src FROM edge WHERE kind = 'ESPECIALIZA' AND approx = 0 AND dst = ?1"
+    };
+    let mut stmt = store.conn.prepare(sql)?;
+    let mut seen = BTreeSet::from([start]);
+    let mut queue = vec![start];
+    while let Some(class) = queue.pop() {
+        let next: Vec<i64> = stmt
+            .query_map([class], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        for id in next {
+            if seen.insert(id) {
+                queue.push(id);
+            }
+        }
+    }
+    Ok(seen)
+}
+
+/// Família da classe dona de um método (TASK-6, D9 e D9a): a dona, as bases e as subclasses por
+/// `ESPECIALIZA` exata, e os Protocols que a dona ou as bases implementam, também por estrutura.
+fn family(store: &SqliteStore, owner: i64) -> Result<BTreeSet<i64>, CoreError> {
+    let up = hierarchy(store, owner, true)?;
+    let mut members = hierarchy(store, owner, false)?;
+    let mut stmt = store.conn.prepare(
+        "SELECT e.dst FROM edge e JOIN symbol p ON p.id = e.dst
+         WHERE e.kind = 'ESPECIALIZA' AND e.src = ?1 AND p.is_protocol = 1",
+    )?;
+    for class in &up {
+        let protocols: Vec<i64> = stmt
+            .query_map([class], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        members.extend(protocols);
+    }
+    members.extend(up);
+    Ok(members)
+}
+
+fn id_list(ids: impl IntoIterator<Item = i64>) -> String {
+    ids.into_iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Ids das palavras de nome do alvo.
+fn name_word_ids(store: &SqliteStore, id: i64) -> Result<Vec<i64>, CoreError> {
+    Ok(store
         .conn
         .prepare(
             "SELECT DISTINCT word_id FROM occurrence
              WHERE owner_kind = 'symbol' AND owner_id = ?1 AND source = 'name' ORDER BY word_id",
         )?
         .query_map([id], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    if words.is_empty() {
-        return Ok(Vec::new());
-    }
-    let list = words
-        .iter()
-        .map(i64::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
+        .collect::<Result<_, _>>()?)
+}
+
+/// Símbolo candidato do nível por palavra.
+struct Candidate {
+    addr: SymbolAddr,
+    id: i64,
+    file_id: Option<i64>,
+    type_text: Option<String>,
+}
+
+/// Símbolos de produção cujas palavras de uso (`ref` e `type`), somadas, contêm todas as palavras
+/// do nome do alvo: a regra da primeira rodada, que a inferência aditiva preserva (D17).
+fn candidate_symbols(
+    store: &SqliteStore,
+    id: i64,
+    words: &[i64],
+) -> Result<Vec<Candidate>, CoreError> {
+    let list = id_list(words.iter().copied());
     let sql = format!(
-        "SELECT {ADDR_COLUMNS} FROM symbol s LEFT JOIN file f ON f.id = s.file_id
+        "SELECT {ADDR_COLUMNS}, s.id, s.file_id, s.type_text FROM symbol s
+         LEFT JOIN file f ON f.id = s.file_id
          WHERE s.is_test = 0 AND s.id != ?1 AND s.id IN (
-           SELECT owner_id FROM occurrence
-           WHERE owner_kind = 'symbol' AND source IN ('ref', 'type') AND word_id IN ({list})
-           GROUP BY owner_id HAVING COUNT(DISTINCT word_id) = {})
+           SELECT sym FROM (
+             SELECT r.src AS sym, o.word_id FROM occurrence o
+             JOIN raw_ref r ON o.owner_kind = 'ref' AND o.owner_id = r.id
+             WHERE o.source = 'ref' AND o.word_id IN ({list})
+             UNION
+             SELECT owner_id, word_id FROM occurrence
+             WHERE owner_kind = 'symbol' AND source = 'type' AND word_id IN ({list}))
+           GROUP BY sym HAVING COUNT(DISTINCT word_id) = {})
          ORDER BY s.qname",
         words.len()
     );
-    let rows = store
+    Ok(store
         .conn
         .prepare(&sql)?
-        .query_map([id], addr_from_row)?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows
-        .into_iter()
-        .filter(|addr| !covered.contains(&addr.qname))
-        .map(|addr| RelItem {
-            addr,
+        .query_map([id], |r| {
+            Ok(Candidate {
+                addr: addr_from_row(r)?,
+                id: r.get(6)?,
+                file_id: r.get(7)?,
+                type_text: r.get(8)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?)
+}
+
+/// Um uso de um símbolo candidato: linha, textos e quantas palavras do nome do alvo ele tem.
+struct Use {
+    line: i64,
+    texts: Vec<String>,
+    name_hits: usize,
+}
+
+/// Usos de todos os candidatos, em duas consultas (D20), agrupados pelo símbolo.
+fn uses_of(
+    store: &SqliteStore,
+    symbols: &[i64],
+    words: &[i64],
+) -> Result<HashMap<i64, Vec<Use>>, CoreError> {
+    let syms = id_list(symbols.iter().copied());
+    let hits: HashMap<i64, i64> = store
+        .conn
+        .prepare(&format!(
+            "SELECT r.id, COUNT(DISTINCT o.word_id) FROM raw_ref r
+             JOIN occurrence o ON o.owner_kind = 'ref' AND o.owner_id = r.id AND o.source = 'ref'
+             WHERE r.src IN ({syms}) AND o.word_id IN ({}) GROUP BY r.id",
+            id_list(words.iter().copied())
+        ))?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    let mut uses: HashMap<i64, Vec<Use>> = HashMap::new();
+    let mut stmt = store.conn.prepare(&format!(
+        "SELECT src, id, line, callee_text, receiver FROM raw_ref
+         WHERE src IN ({syms}) ORDER BY src, line, id"
+    ))?;
+    let rows = stmt.query_map([], |r| {
+        let texts: Vec<String> = [r.get::<_, Option<String>>(3)?, r.get(4)?]
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get(2)?, texts))
+    })?;
+    for row in rows {
+        let (src, id, line, texts) = row?;
+        let name_hits = usize::try_from(hits.get(&id).copied().unwrap_or(0)).unwrap_or(0);
+        uses.entry(src).or_default().push(Use {
+            line,
+            texts,
+            name_hits,
+        });
+    }
+    Ok(uses)
+}
+
+/// Candidatos cujo tipo anotado contém todas as palavras do nome do alvo (D19).
+fn typed_with_name(
+    store: &SqliteStore,
+    symbols: &[i64],
+    words: &[i64],
+) -> Result<HashSet<i64>, CoreError> {
+    Ok(store
+        .conn
+        .prepare(&format!(
+            "SELECT owner_id FROM occurrence
+             WHERE owner_kind = 'symbol' AND source = 'type' AND owner_id IN ({})
+               AND word_id IN ({}) GROUP BY owner_id HAVING COUNT(DISTINCT word_id) = {}",
+            id_list(symbols.iter().copied()),
+            id_list(words.iter().copied()),
+            words.len()
+        ))?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?)
+}
+
+/// Dados da evidência para o alvo: nomes da família (método) ou módulo e imports (demais).
+enum AnchorData {
+    Family(Vec<String>),
+    Module {
+        target: String,
+        target_module: String,
+        imports: HashMap<i64, Vec<String>>,
+    },
+}
+
+fn anchor_for(
+    store: &SqliteStore,
+    id: i64,
+    files: &BTreeSet<i64>,
+) -> Result<AnchorData, CoreError> {
+    let (kind, parent, qname, path): (String, Option<i64>, String, String) = store.conn.query_row(
+        "SELECT s.kind, s.parent_id, s.qname, COALESCE(f.path, '') FROM symbol s
+             LEFT JOIN file f ON f.id = s.file_id WHERE s.id = ?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    if let ("method", Some(owner)) = (kind.as_str(), parent) {
+        let names = store
+            .conn
+            .prepare(&format!(
+                "SELECT name FROM symbol WHERE id IN ({}) ORDER BY name",
+                id_list(family(store, owner)?)
+            ))?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        return Ok(AnchorData::Family(names));
+    }
+    let mut imports: HashMap<i64, Vec<String>> = HashMap::new();
+    let mut stmt = store.conn.prepare(&format!(
+        "SELECT file_id, target FROM import WHERE file_id IN ({}) ORDER BY file_id, target",
+        id_list(files.iter().copied())
+    ))?;
+    for row in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get(1)?)))? {
+        let (file, target) = row?;
+        imports.entry(file).or_default().push(target);
+    }
+    let target_module = if kind == "module" {
+        qname.clone()
+    } else {
+        module_of(&path)
+    };
+    Ok(AnchorData::Module {
+        target: qname,
+        target_module,
+        imports,
+    })
+}
+
+/// Nível de um item: textos do próprio item (e da mesma linha, D14) contra os demais do símbolo.
+fn item_level(
+    anchor: &AnchorData,
+    c: &Candidate,
+    uses: &[Use],
+    line: i64,
+    own: &[&str],
+) -> Evidence {
+    use crate::evidence::{Anchor, classify};
+    match anchor {
+        AnchorData::Family(names) => {
+            let mut same: Vec<&str> = own.to_vec();
+            let mut rest: Vec<&str> = Vec::new();
+            for u in uses {
+                let texts = u.texts.iter().map(String::as_str);
+                if u.line == line {
+                    same.extend(texts)
+                } else {
+                    rest.extend(texts)
+                }
+            }
+            rest.extend(c.type_text.as_deref().filter(|t| !own.contains(t)));
+            classify(&same, &rest, &Anchor::Family(names))
+        }
+        AnchorData::Module {
+            target,
+            target_module,
+            imports,
+        } => {
+            let none = Vec::new();
+            let file_imports = c.file_id.and_then(|f| imports.get(&f)).unwrap_or(&none);
+            let use_module = module_of(&c.addr.path);
+            let anchor = Anchor::Module {
+                target,
+                target_module,
+                use_module: &use_module,
+                imports: file_imports,
+            };
+            classify(&[], &[], &anchor)
+        }
+    }
+}
+
+/// Itens de um candidato: cada uso com todas as palavras do nome, o tipo anotado que as tem, e,
+/// se as palavras só aparecem somadas, o primeiro uso que tem alguma (D17).
+fn candidate_items(
+    anchor: &AnchorData,
+    c: &Candidate,
+    uses: &[Use],
+    typed: bool,
+    words: usize,
+) -> Vec<ByWordItem> {
+    let item = |line: i64, origem: Origem, own: &[&str]| ByWordItem {
+        item: RelItem {
+            addr: c.addr.clone(),
             attr: None,
-            line: None,
+            line: Some(line),
             approx: true,
-        })
-        .collect())
+        },
+        nivel: item_level(anchor, c, uses, line, own),
+        origem,
+    };
+    let mut items: Vec<ByWordItem> = uses
+        .iter()
+        .filter(|u| u.name_hits == words)
+        .map(|u| item(u.line, Origem::Uso, &[]))
+        .collect();
+    if typed {
+        let own: Vec<&str> = c.type_text.iter().map(String::as_str).collect();
+        items.push(item(c.addr.line_start, Origem::Tipo, &own));
+    }
+    if items.is_empty() {
+        let line = uses
+            .iter()
+            .find(|u| u.name_hits > 0)
+            .map_or(c.addr.line_start, |u| u.line);
+        items.push(item(line, Origem::Uso, &[]));
+    }
+    items
+}
+
+/// Camada relacional do `impact`: todo símbolo de produção cujas palavras de uso contêm as do nome
+/// do alvo, menos os que as arestas cobrem, com um item por uso (e por tipo) e o nível como rótulo
+/// e ordem, nunca como filtro (TASK-6, D17 a D20).
+fn by_word(
+    store: &SqliteStore,
+    id: i64,
+    covered: &HashSet<String>,
+) -> Result<Vec<ByWordItem>, CoreError> {
+    let words = name_word_ids(store, id)?;
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+    let candidates: Vec<Candidate> = candidate_symbols(store, id, &words)?
+        .into_iter()
+        .filter(|c| !covered.contains(&c.addr.qname))
+        .collect();
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<i64> = candidates.iter().map(|c| c.id).collect();
+    let uses = uses_of(store, &ids, &words)?;
+    let typed = typed_with_name(store, &ids, &words)?;
+    let files: BTreeSet<i64> = candidates.iter().filter_map(|c| c.file_id).collect();
+    let anchor = anchor_for(store, id, &files)?;
+    let none = Vec::new();
+    let mut best: BTreeMap<(String, i64, Origem), ByWordItem> = BTreeMap::new();
+    for c in &candidates {
+        let symbol_uses = uses.get(&c.id).unwrap_or(&none);
+        for item in candidate_items(&anchor, c, symbol_uses, typed.contains(&c.id), words.len()) {
+            let key = (
+                c.addr.qname.clone(),
+                item.item.line.unwrap_or(0),
+                item.origem,
+            );
+            // Dois usos na mesma linha do mesmo símbolo: vale o de evidência mais forte.
+            if best.get(&key).is_none_or(|kept| item.nivel < kept.nivel) {
+                best.insert(key, item);
+            }
+        }
+    }
+    let mut items: Vec<ByWordItem> = best.into_values().collect();
+    let target = addr_by_id(store, id)?;
+    items.sort_by(|a, b| {
+        a.nivel
+            .cmp(&b.nivel)
+            .then_with(|| proximity(&target, &b.item.addr).cmp(&proximity(&target, &a.item.addr)))
+            .then_with(|| {
+                (&a.item.addr.qname, a.item.line, a.origem).cmp(&(
+                    &b.item.addr.qname,
+                    b.item.line,
+                    b.origem,
+                ))
+            })
+    });
+    Ok(items)
 }
 
 /// O que muda se o símbolo mudar: chamadores, consumidores do tipo, Protocol, testes.
@@ -766,8 +1343,9 @@ pub fn impact(store: &SqliteStore, target: &str) -> Result<Impact, CoreError> {
                 .map(|c| c.addr.qname.clone()),
         )
         .collect();
+    let by_word = by_word(store, id, &covered)?;
     Ok(Impact {
-        by_word: by_word(store, id, &covered)?,
+        by_word,
         callers,
         consumers,
         protocol,

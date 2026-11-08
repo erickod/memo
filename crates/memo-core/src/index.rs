@@ -119,8 +119,17 @@ fn load_files(store: &SqliteStore) -> Result<HashMap<String, StoredFile>, CoreEr
 
 fn delete_file_symbols(tx: &Transaction, file_id: i64) -> Result<(), CoreError> {
     tx.execute(
+        "DELETE FROM read_region WHERE symbol_id IN (SELECT id FROM symbol WHERE file_id = ?1)",
+        [file_id],
+    )?;
+    tx.execute(
         "DELETE FROM edge WHERE src IN (SELECT id FROM symbol WHERE file_id = ?1)
             OR dst IN (SELECT id FROM symbol WHERE file_id = ?1)",
+        [file_id],
+    )?;
+    tx.execute(
+        "DELETE FROM occurrence
+         WHERE owner_kind = 'ref' AND owner_id IN (SELECT id FROM raw_ref WHERE file_id = ?1)",
         [file_id],
     )?;
     tx.execute("DELETE FROM raw_ref WHERE file_id = ?1", [file_id])?;
@@ -222,54 +231,6 @@ fn rebuild_doc_words(tx: &Transaction, config: &Config) -> Result<(), CoreError>
     Ok(())
 }
 
-/// Reconstrói as palavras de uso: o texto de cada referência (chamada, receptor, tipo recebido ou
-/// devolvido) e o tipo anotado de cada símbolo. Não dependem de a referência ter sido resolvida,
-/// e ficam sem `symbol_id` para as estatísticas e o `brief` não as verem.
-fn rebuild_use_words(tx: &Transaction, config: &Config) -> Result<(), CoreError> {
-    tx.execute("DELETE FROM occurrence WHERE source IN ('ref', 'type')", [])?;
-    let mut stmt = tx.prepare(
-        "SELECT src, callee_text, receiver FROM raw_ref
-         WHERE callee_text IS NOT NULL OR receiver IS NOT NULL ORDER BY src, rowid",
-    )?;
-    let rows: Vec<(i64, Option<String>, Option<String>)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-        .collect::<Result<_, _>>()?;
-    let mut by_owner: Vec<(i64, Vec<WordOcc>)> = Vec::new();
-    for (src, text, receiver) in rows {
-        if by_owner.last().is_none_or(|(owner, _)| *owner != src) {
-            by_owner.push((src, Vec::new()));
-        }
-        let words = &mut by_owner.last_mut().expect("just pushed").1;
-        for part in [text, receiver].into_iter().flatten() {
-            words.extend(use_words(&part, config));
-        }
-    }
-    for (owner_id, words) in by_owner {
-        let owner = OwnedWords {
-            owner_kind: "symbol",
-            owner_id,
-            symbol_id: None,
-            source: "ref",
-        };
-        insert_owned_words(tx, &owner, &words)?;
-    }
-    let mut stmt =
-        tx.prepare("SELECT id, type_text FROM symbol WHERE type_text IS NOT NULL ORDER BY id")?;
-    let typed: Vec<(i64, String)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<Result<_, _>>()?;
-    for (owner_id, text) in typed {
-        let owner = OwnedWords {
-            owner_kind: "symbol",
-            owner_id,
-            symbol_id: None,
-            source: "type",
-        };
-        insert_owned_words(tx, &owner, &use_words(&text, config))?;
-    }
-    Ok(())
-}
-
 fn insert_symbols(
     tx: &Transaction,
     file_id: i64,
@@ -300,8 +261,8 @@ fn insert_symbols(
             .and_then(|(p, _)| ids.get(p).copied());
         tx.execute(
             "INSERT INTO symbol(qname, name, kind, nivel, parent_id, file_id, line_start, line_end,
-                                sig_hash, body_hash, is_test, is_protocol, type_text)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                                sig_hash, body_hash, is_test, is_protocol, type_text, value_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 sym.qname,
                 name,
@@ -315,11 +276,22 @@ fn insert_symbols(
                 sym.body_hash,
                 is_test,
                 sym.is_protocol,
-                sym.type_text
+                sym.type_text,
+                sym.value_text
             ],
         )?;
         let symbol_id = tx.last_insert_rowid();
         ids.insert(&sym.qname, symbol_id);
+        if let Some(type_text) = &sym.type_text {
+            // Palavras de uso do tipo anotado: sem `symbol_id`, fora das estatísticas e do `brief`.
+            let owner = OwnedWords {
+                owner_kind: "symbol",
+                owner_id: symbol_id,
+                symbol_id: None,
+                source: "type",
+            };
+            insert_owned_words(tx, &owner, &use_words(type_text, config))?;
+        }
         if let Some(doc) = is_test
             .then(|| facts.docs.iter().find(|d| d.src_qname == sym.qname))
             .flatten()
@@ -351,6 +323,14 @@ fn insert_symbols(
             )?;
         }
     }
+    for region in &facts.regions {
+        if let Some(id) = ids.get(region.src_qname.as_str()) {
+            tx.execute(
+                "INSERT INTO read_region(symbol_id,start,end) VALUES (?1,?2,?3)",
+                params![id, int(region.start), int(region.end)],
+            )?;
+        }
+    }
     for r in &facts.receives {
         if let Some(&src) = ids.get(r.src_qname.as_str()) {
             let raw = NewRawRef {
@@ -363,7 +343,7 @@ fn insert_symbols(
                 pos: Some(r.pos),
                 receiver: None,
             };
-            insert_raw_ref(tx, &raw)?;
+            insert_raw_ref(tx, &raw, config)?;
         }
     }
     for r in &facts.refs {
@@ -378,7 +358,7 @@ fn insert_symbols(
                 pos: None,
                 receiver: r.receiver.as_deref(),
             };
-            insert_raw_ref(tx, &raw)?;
+            insert_raw_ref(tx, &raw, config)?;
         }
     }
     for i in &facts.imports {
@@ -408,7 +388,9 @@ struct NewRawRef<'a> {
     receiver: Option<&'a str>,
 }
 
-fn insert_raw_ref(tx: &Transaction, r: &NewRawRef) -> Result<(), CoreError> {
+/// Grava a referência e, com ela como dono, as palavras do texto e do receptor: a camada
+/// relacional não depende de a referência vir a ser resolvida.
+fn insert_raw_ref(tx: &Transaction, r: &NewRawRef, config: &Config) -> Result<(), CoreError> {
     tx.execute(
         "INSERT INTO raw_ref(file_id, src, kind, callee_text, line, attr, pos, receiver)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -423,7 +405,18 @@ fn insert_raw_ref(tx: &Transaction, r: &NewRawRef) -> Result<(), CoreError> {
             r.receiver
         ],
     )?;
-    Ok(())
+    let words: Vec<WordOcc> = [r.text, r.receiver]
+        .into_iter()
+        .flatten()
+        .flat_map(|part| use_words(part, config))
+        .collect();
+    let owner = OwnedWords {
+        owner_kind: "ref",
+        owner_id: tx.last_insert_rowid(),
+        symbol_id: None,
+        source: "ref",
+    };
+    insert_owned_words(tx, &owner, &words)
 }
 
 /// Indexa com a configuração padrão (sementes embutidas).
@@ -596,7 +589,6 @@ fn run_index(
     }
     rebuild_import_words(&tx, config)?;
     rebuild_doc_words(&tx, config)?;
-    rebuild_use_words(&tx, config)?;
     resolve_files(&tx, &to_resolve, &config.write_methods)?;
     crate::stats::recompute(&tx, config)?;
     let after = crate::events::snapshot(&tx)?;

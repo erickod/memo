@@ -125,6 +125,7 @@ pub struct Opened {
     pub store: SqliteStore,
     pub memo_dir: PathBuf,
     pub report: Option<IndexReport>,
+    pub changed: Vec<String>,
     pub _lock: DbLock,
 }
 
@@ -177,11 +178,29 @@ pub fn open_indexed(cli: &Cli, opts: &IndexOpts) -> Result<Opened, Failure> {
             }
         })
     };
+    let changed = if scope != "repo" && matches!(cli.command, crate::Cmd::Brief { .. }) {
+        let base = base_path(&env);
+        if base.exists() {
+            match SqliteStore::open_read_only(&base) {
+                Ok(base) => memo_core::structural::changed_symbols(&base, &store)?,
+                Err(error) => {
+                    eprintln!("aviso: contexto de mudanças indisponível: {error}");
+                    Vec::new()
+                }
+            }
+        } else {
+            eprintln!("aviso: contexto de mudanças indisponível: índice base ausente");
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
     Ok(Opened {
         config: env.config,
         store,
         memo_dir: env.memo_dir,
         report,
+        changed,
         _lock: held,
     })
 }

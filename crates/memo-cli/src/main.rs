@@ -6,14 +6,14 @@ mod workspace;
 
 use clap::{Parser, Subcommand};
 use memo_core::aliases::suggest as suggest_aliases;
-use memo_core::brief::{apply_delta, brief_weighted};
+use memo_core::brief::{apply_delta, brief_with_changes};
 use memo_core::delta::apply_impact_delta;
 use memo_core::error::CoreError;
 use memo_core::hide;
 use memo_core::notes::{NewNote, NoteDir, format_utc, is_generic_anchor, notes_for};
 use memo_core::query::{
-    callees, callers, coverage, impact, readers, symbol_info, tests_for, type_info, word_info,
-    writers,
+    callees, callers, composite_word, coverage, impact, readers, symbol_info, tests_for, type_info,
+    word_info, word_parts, writers,
 };
 use memo_core::store::SqliteStore;
 use std::path::PathBuf;
@@ -48,9 +48,15 @@ struct Cli {
     limit: Option<usize>,
     #[arg(long, global = true, default_value_t = 6000)]
     max_chars: usize,
-    /// Esconde os testes da saída (as estatísticas continuam contando o repositório inteiro).
-    #[arg(long, global = true)]
+    /// Esconde os testes da saída; é o padrão (TASK-7, D2), mantido por compatibilidade.
+    #[arg(long, global = true, conflicts_with = "tests")]
     no_tests: bool,
+    /// Mostra os testes na saída (por padrão ficam ocultos; as estatísticas contam tudo).
+    #[arg(long, global = true)]
+    tests: bool,
+    /// Lista todos os itens, sem agrupar por módulo as seções com mais de 10 itens.
+    #[arg(long, global = true)]
+    all: bool,
     /// Só o que é novo desde a última chamada, mesmo sem `--task`.
     #[arg(long, global = true)]
     since_last: bool,
@@ -196,9 +202,10 @@ impl From<CoreError> for Failure {
             CoreError::Config(_) => Failure::Usage(e.to_string()),
             CoreError::Validation { .. } => Failure::Validation(e.to_string()),
             CoreError::Note(_) | CoreError::Locked(_) => Failure::Index(e.to_string()),
-            CoreError::NotFound(_) | CoreError::Ambiguous { .. } => {
-                Failure::NotFound(e.to_string())
+            CoreError::Ambiguous { target, candidates } => {
+                Failure::NotFound(render::ambiguous_text(&target, &candidates))
             }
+            CoreError::NotFound(_) => Failure::NotFound(e.to_string()),
             CoreError::Store(_) | CoreError::Source(_) => Failure::Index(e.to_string()),
             CoreError::Io(_) => Failure::Internal(e.to_string()),
         }
@@ -314,6 +321,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         store,
         memo_dir,
         report,
+        changed,
         _lock,
     } = workspace::open_indexed(cli, &opts)?;
     let notes_dir = NoteDir::new(&memo_dir.join("notes"));
@@ -341,11 +349,11 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         Cmd::Note { cmd } => return run_note(cli, cmd, &store, &notes_dir, &cov),
         Cmd::Brief { request } => {
             let visible = notes_dir.visible(cli.task.as_deref())?;
-            let mut b = brief_weighted(&store, request, &visible, &config.bridges)?;
+            let mut b = brief_with_changes(&store, request, &visible, &config.bridges, &changed)?;
             if let Some(task) = &delta_task {
                 apply_delta(&store, task, &mut b, cli.full)?;
             }
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::brief(&mut b));
             }
             let text = render::brief_text(&b, "ok", cli.task.as_deref(), &cov, max, limit);
@@ -357,13 +365,13 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             Ok(mut info) => {
                 let visible = notes_dir.visible(cli.task.as_deref())?;
                 info.notes = notes_for(&visible, &[info.addr.qname.clone()], &[], &[]);
-                if cli.no_tests {
+                if !cli.tests {
                     cov.testes_ocultos = count(hide::symbol(&mut info));
                 }
                 (
                     "query symbol",
                     json_value(&info)?,
-                    render::symbol_text(&info, "ok", &cov, max, limit),
+                    render::symbol_text(&info, "ok", &cov, max, limit, cli.all),
                 )
             }
             Err(CoreError::Ambiguous { target, candidates }) => {
@@ -374,66 +382,82 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             }
             Err(e) => return Err(e.into()),
         },
+        Query::Word { word } if word_parts(word, &config).len() > 1 => {
+            let parts = word_parts(word, &config);
+            let mut info = composite_word(&store, word, &parts)?;
+            if !cli.tests {
+                let before = info.symbols.len();
+                info.symbols.retain(|s| !s.in_tests());
+                cov.testes_ocultos = count(before - info.symbols.len());
+            }
+            (
+                "query word",
+                json_value(&info)?,
+                render::composite_word_text(&info, "ok", &cov, max, limit, cli.all),
+            )
+        }
         Query::Word { word } => {
+            let parts = word_parts(word, &config);
+            let word = parts.first().unwrap_or(word);
             let mut info = word_info(&store, word, &config.bridges)?;
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::word(&mut info));
             }
             (
                 "query word",
                 json_value(&info)?,
-                render::word_text(&info, "ok", &cov, max, limit),
+                render::word_text(&info, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Writers { attr } => {
             let mut rel = writers(&store, attr)?;
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::relation(&mut rel));
             }
             (
                 "query writers",
                 json_value(&rel)?,
-                render::relation_text("writers", &rel, "ok", &cov, max, limit),
+                render::relation_text("writers", &rel, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Readers { attr } => {
             let mut rel = readers(&store, attr)?;
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::relation(&mut rel));
             }
             (
                 "query readers",
                 json_value(&rel)?,
-                render::relation_text("readers", &rel, "ok", &cov, max, limit),
+                render::relation_text("readers", &rel, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Callers { target, depth } => {
             let mut chain = callers(&store, target, *depth)?;
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::chain(&mut chain));
             }
             (
                 "query callers",
                 json_value(&chain)?,
-                render::chain_text("callers", &chain, "ok", &cov, max, limit),
+                render::chain_text("callers", &chain, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Callees { target, depth } => {
             let mut chain = callees(&store, target, *depth)?;
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::chain(&mut chain));
             }
             (
                 "query callees",
                 json_value(&chain)?,
-                render::chain_text("callees", &chain, "ok", &cov, max, limit),
+                render::chain_text("callees", &chain, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Impact { target } => {
             let mut info = impact(&store, target)?;
             let visible = notes_dir.visible(cli.task.as_deref())?;
             info.notes = notes_for(&visible, &[info.target.qname.clone()], &[], &[]);
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::impact(&mut info));
             }
             if let Some(task) = &delta_task {
@@ -442,7 +466,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             (
                 "query impact",
                 json_value(&info)?,
-                render::impact_text(&info, "ok", &cov, max, limit),
+                render::impact_text(&info, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Tests { target } => {
@@ -456,7 +480,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             (
                 "query tests",
                 json_value(&tests)?,
-                render::tests_text(&addr, &tests, "ok", &cov, max, limit),
+                render::tests_text(&addr, &tests, "ok", &cov, max, limit, cli.all),
             )
         }
         Query::Aliases => {
@@ -473,13 +497,13 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         }
         Query::Type { target } => {
             let mut info = type_info(&store, target)?;
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::type_info(&mut info));
             }
             (
                 "query type",
                 json_value(&info)?,
-                render::type_text(&info, "ok", &cov, max, limit),
+                render::type_text(&info, "ok", &cov, max, limit, cli.all),
             )
         }
     };

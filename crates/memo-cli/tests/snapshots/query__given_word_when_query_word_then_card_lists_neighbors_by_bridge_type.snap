@@ -1,6 +1,5 @@
 ---
 source: crates/memo-cli/tests/query.rs
-assertion_line: 697
 expression: stdout(&out)
 ---
 word limit  idx=ok
@@ -10,7 +9,6 @@ papéis: repository,usecase
 camadas: application,domain,infra
 vizinhas por ponte:
   símbolo : calculate(4.0) repository(4.0) usecase(3.0) amount(1.0) returns(1.0) sql(1.0) test(1.0)
-  teste   : calculate(2.4) amount(1.6) returns(1.6) repository(0.8) sql(0.8) usecase(0.8)
   import  : billing(4.2) usecase(3.6) calculate(2.4) usecases(2.4) repository(1.2) test(1.2) tests(1.2) unit(1.2)
   chamada : execute(0.5)
   arquivo : calculate(0.6) repository(0.6) save(0.6) usecase(0.6) amount(0.3) execute(0.3) last(0.3) repo(0.3)
@@ -19,8 +17,6 @@ representatividade (arquivos):
   repositório: 4/10 (0.40)
   contexto billing: 4/8 (0.50)
 símbolos:
-  mod test_calculate_limit_usecase   app/billing/application/tests/unit/test_calculate_limit_usecase.py:L1-L8 [nome, import]
-  T test_given_amount_when_calculate_then_returns_limit   app/billing/application/tests/unit/test_calculate_limit_usecase.py:L5-L7 [nome, chamada]
   mod calculate_limit_usecase   app/billing/application/usecases/calculate_limit_usecase.py:L1-L14 [nome, import]
   C CalculateLimitUseCase   app/billing/application/usecases/calculate_limit_usecase.py:L4-L13 [nome, teste]
   mod checkout_usecase   app/billing/application/usecases/checkout_usecase.py:L1-L10 [import]
@@ -29,4 +25,4 @@ símbolos:
   mod limit_repository   app/billing/infra/repositories/limit_repository.py:L1-L4 [nome]
   C SqlLimitRepository   app/billing/infra/repositories/limit_repository.py:L1-L3 [nome, teste]
   mod charge_usecase   app/collections/application/usecases/charge_usecase.py:L1-L7 [import]
-cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro
+cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro, 2 testes ocultos
