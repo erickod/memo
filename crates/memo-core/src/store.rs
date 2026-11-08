@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use std::fmt::Write;
 use std::path::Path;
 
-const SCHEMA_VERSION: &str = "4";
+const SCHEMA_VERSION: &str = "5";
 
 /// Fontes de palavra que formam o vocabulário (TASK-6, D16): as de uso (`ref`, `type`) ficam fora
 /// das âncoras de nota e dos eventos de palavra.
@@ -56,6 +56,7 @@ CREATE INDEX occurrence_symbol ON occurrence(symbol_id);
 CREATE INDEX symbol_file ON symbol(file_id);
 CREATE INDEX symbol_parent ON symbol(parent_id);
 CREATE INDEX raw_ref_file ON raw_ref(file_id);
+CREATE INDEX raw_ref_src ON raw_ref(src, line);
 CREATE INDEX import_file ON import(file_id);
 ";
 
