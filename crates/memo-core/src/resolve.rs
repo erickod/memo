@@ -515,6 +515,39 @@ fn imported_method(
     })
 }
 
+/// `?.metodo` (receptor que não é um nome): se, na mesma linha do mesmo símbolo, há criações de
+/// classes e exatamente uma delas tem o método, a chamada é a esse método da classe criada.
+fn created_method(
+    tx: &Transaction,
+    resolver: &mut Resolver,
+    file_id: i64,
+    raw: &RawRef,
+    method: &str,
+) -> Result<Option<i64>, CoreError> {
+    let mut stmt = tx.prepare(
+        "SELECT callee_text FROM raw_ref
+         WHERE src = ?1 AND line = ?2 AND kind = 'CHAMA' AND callee_text NOT LIKE '?.%'
+         ORDER BY rowid",
+    )?;
+    let texts: Vec<String> = stmt
+        .query_map(params![raw.src, raw.line], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut methods = std::collections::BTreeSet::new();
+    for text in texts {
+        if let Some(found) = find_named(resolver, file_id, &text)?
+            && found.kind == "CRIA"
+            && let Some(m) = resolver.method_in_class(found.dst, method, 3)?
+        {
+            methods.insert(m);
+        }
+    }
+    let mut found = methods.into_iter();
+    Ok(match (found.next(), found.next()) {
+        (Some(only), None) => Some(only),
+        _ => None,
+    })
+}
+
 fn resolve_call(
     tx: &Transaction,
     resolver: &mut Resolver,
@@ -559,6 +592,14 @@ fn resolve_call(
         false
     };
     if handled {
+        return mark(tx, raw, 1);
+    }
+
+    // Criação de classe na mesma expressão (TASK-6): `Classe(...).metodo()`.
+    if let Some(method) = text.strip_prefix("?.")
+        && let Some(target) = created_method(tx, resolver, file_id, raw, method)?
+    {
+        insert_edge(tx, &call_edge(raw, "CHAMA", Some(target), None, true))?;
         return mark(tx, raw, 1);
     }
 
