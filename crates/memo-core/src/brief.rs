@@ -3,7 +3,6 @@
 use crate::config::BridgeWeights;
 use crate::delta::filter_new;
 use crate::error::CoreError;
-use crate::index::is_test_file;
 use crate::notes::{Note, notes_for};
 use crate::query::{SymbolAddr, addr_by_id, short_name, word_info};
 use crate::store::SqliteStore;
@@ -83,11 +82,6 @@ pub struct Brief {
     pub notes: Vec<String>,
     /// Itens omitidos por já terem sido entregues nesta task (spec §8.4).
     pub unchanged: Option<usize>,
-}
-
-/// Teste ou símbolo de arquivo de teste.
-fn in_tests(addr: &SymbolAddr) -> bool {
-    addr.is_test || is_test_file(&addr.path)
 }
 
 fn strip_accent(c: char) -> char {
@@ -413,7 +407,7 @@ pub fn brief_weighted(
         .collect::<Result<_, _>>()?;
     ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.2.qname.cmp(&b.2.qname)));
     // Produção primeiro: os testes não disputam as vagas do código (D7), têm as suas.
-    let (tests, production): (Vec<_>, Vec<_>) = ranked.into_iter().partition(|r| in_tests(&r.2));
+    let (tests, production): (Vec<_>, Vec<_>) = ranked.into_iter().partition(|r| r.2.in_tests());
     let mut ranked: Vec<(i64, f64, SymbolAddr)> =
         production.into_iter().take(MAX_SYMBOLS).collect();
     ranked.extend(tests.into_iter().take(MAX_TEST_SYMBOLS));
@@ -421,7 +415,7 @@ pub fn brief_weighted(
     let mut outline = Vec::new();
     for (id, _, addr) in ranked
         .iter()
-        .filter(|r| !in_tests(&r.2))
+        .filter(|r| !r.2.in_tests())
         .take(OUTLINE_SYMBOLS)
     {
         let links = outline_for(store, *id)?;
@@ -453,7 +447,7 @@ pub fn brief_weighted(
             .into_iter()
             .map(str::to_string)
             .collect();
-        let in_tests = in_tests(&addr);
+        let in_tests = addr.in_tests();
         tagged.push(ScoredSymbol {
             addr,
             score,

@@ -61,6 +61,8 @@ pub struct EdgeView {
     pub attr: Option<String>,
     pub line: Option<i64>,
     pub approx: bool,
+    /// O outro extremo é um teste ou um símbolo de arquivo de teste.
+    pub other_is_test: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -90,6 +92,8 @@ pub struct Coverage {
     pub aproximadas: i64,
     pub nao_resolvidas: i64,
     pub arquivos_com_erro: i64,
+    /// Itens de teste escondidos pela flag `--no-tests` (preenchido pelo CLI).
+    pub testes_ocultos: i64,
     /// Arquivos de nota que não parseiam (preenchido por quem conhece o diretório de notas).
     pub notas_com_erro: i64,
 }
@@ -104,6 +108,13 @@ pub(crate) fn short_name(qname: &str, path: &str) -> String {
         .strip_prefix(&format!("{module}."))
         .unwrap_or_else(|| qname.rsplit('.').next().unwrap_or(qname))
         .to_string()
+}
+
+impl SymbolAddr {
+    /// Teste, ou símbolo de um arquivo de teste (como o módulo dele).
+    pub fn in_tests(&self) -> bool {
+        self.is_test || crate::index::is_test_file(&self.path)
+    }
 }
 
 fn addr_from_row(r: &rusqlite::Row) -> rusqlite::Result<SymbolAddr> {
@@ -183,7 +194,8 @@ fn direct_edges(store: &SqliteStore, qname: &str) -> Result<Vec<EdgeView>, CoreE
     let mut out = Vec::new();
     for (dir, near, far) in [("out", "src", "dst"), ("in", "dst", "src")] {
         let sql = format!(
-            "SELECT e.kind, e.dst_text, e.attr, e.line, e.approx, o.qname, COALESCE(of.path, '')
+            "SELECT e.kind, e.dst_text, e.attr, e.line, e.approx, o.qname, COALESCE(of.path, ''),
+                    COALESCE(o.is_test, 0)
              FROM edge e JOIN symbol me ON me.id = e.{near}
              LEFT JOIN symbol o ON o.id = e.{far} LEFT JOIN file of ON of.id = o.file_id
              WHERE me.qname = ?1
@@ -194,6 +206,8 @@ fn direct_edges(store: &SqliteStore, qname: &str) -> Result<Vec<EdgeView>, CoreE
             let other_q: Option<String> = r.get(5)?;
             let path: String = r.get(6)?;
             let dst_text: Option<String> = r.get(1)?;
+            let tested: i64 = r.get(7)?;
+            let other_in_test_file = !path.is_empty() && crate::index::is_test_file(&path);
             Ok(EdgeView {
                 dir: dir.to_string(),
                 kind: r.get(0)?,
@@ -204,6 +218,7 @@ fn direct_edges(store: &SqliteStore, qname: &str) -> Result<Vec<EdgeView>, CoreE
                 attr: r.get(2)?,
                 line: r.get(3)?,
                 approx: r.get::<_, i64>(4)? != 0,
+                other_is_test: tested != 0 || other_in_test_file,
             })
         })?;
         for row in rows {
@@ -270,6 +285,7 @@ pub fn coverage(store: &SqliteStore) -> Result<Coverage, CoreError> {
         nao_resolvidas: count("SELECT COUNT(*) FROM raw_ref WHERE resolved = 0")?,
         arquivos_com_erro: count("SELECT COUNT(*) FROM file WHERE parse_error IS NOT NULL")?,
         notas_com_erro: 0,
+        testes_ocultos: 0,
     })
 }
 

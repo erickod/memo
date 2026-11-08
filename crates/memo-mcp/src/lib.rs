@@ -51,7 +51,8 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "text": { "type": "string", "description": "O pedido em texto livre." },
-                    "task": { "type": "string", "description": "Id da task (deltas e notas da task)." }
+                    "task": { "type": "string", "description": "Id da task (deltas e notas da task)." },
+                    "no_tests": { "type": "boolean", "description": "Esconde os testes da saída." }
                 },
                 "required": ["text"]
             }
@@ -65,7 +66,8 @@ fn tools() -> Value {
                     "kind": { "type": "string", "enum": QUERY_KINDS },
                     "target": { "type": "string", "description": "Símbolo (qname ou sufixo único), atributo, tipo ou palavra." },
                     "depth": { "type": "integer", "minimum": 1, "maximum": 3, "description": "Só para callers e callees." },
-                    "task": { "type": "string" }
+                    "task": { "type": "string" },
+                    "no_tests": { "type": "boolean", "description": "Esconde os testes da saída (erro em kind tests)." }
                 },
                 "required": ["kind", "target"]
             }
@@ -120,6 +122,9 @@ impl<B: Backend> Server<B> {
         }
         if let Some(task) = optional(args, "task") {
             argv.extend(["--task".to_string(), task.to_string()]);
+        }
+        if args.get("no_tests").and_then(Value::as_bool) == Some(true) {
+            argv.push("--no-tests".to_string());
         }
         let push = |argv: &mut Vec<String>, items: &[&str]| {
             argv.extend(items.iter().map(|s| (*s).to_string()));

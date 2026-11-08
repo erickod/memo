@@ -13,8 +13,13 @@ fn coverage_line(c: &Coverage) -> String {
     } else {
         String::new()
     };
+    let hidden = if c.testes_ocultos > 0 {
+        format!(", {} testes ocultos", c.testes_ocultos)
+    } else {
+        String::new()
+    };
     format!(
-        "cobertura: {} resolvidas, {} aprox, {} não resolvidas, {} arquivos com erro{notes}",
+        "cobertura: {} resolvidas, {} aprox, {} não resolvidas, {} arquivos com erro{notes}{hidden}",
         c.resolvidas, c.aproximadas, c.nao_resolvidas, c.arquivos_com_erro
     )
 }

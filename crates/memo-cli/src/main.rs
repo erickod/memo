@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use memo_core::brief::{apply_delta, brief_weighted};
 use memo_core::delta::apply_impact_delta;
 use memo_core::error::CoreError;
+use memo_core::hide;
 use memo_core::notes::{NewNote, NoteDir, format_utc, notes_for};
 use memo_core::query::{
     callees, callers, coverage, impact, readers, symbol_info, tests_for, type_info, word_info,
@@ -46,6 +47,9 @@ struct Cli {
     limit: Option<usize>,
     #[arg(long, global = true, default_value_t = 6000)]
     max_chars: usize,
+    /// Esconde os testes da saída (as estatísticas continuam contando o repositório inteiro).
+    #[arg(long, global = true)]
+    no_tests: bool,
     /// Só o que é novo desde a última chamada, mesmo sem `--task`.
     #[arg(long, global = true)]
     since_last: bool,
@@ -209,6 +213,10 @@ fn now_stamp() -> String {
     format_utc(secs)
 }
 
+fn count(hidden: usize) -> i64 {
+    i64::try_from(hidden).unwrap_or(i64::MAX)
+}
+
 fn json_value<T: serde::Serialize>(value: &T) -> Result<serde_json::Value, Failure> {
     serde_json::to_value(value).map_err(|e| Failure::Internal(e.to_string()))
 }
@@ -322,6 +330,9 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             if let Some(task) = &delta_task {
                 apply_delta(&store, task, &mut b, cli.full)?;
             }
+            if cli.no_tests {
+                cov.testes_ocultos = count(hide::brief(&mut b));
+            }
             let text = render::brief_text(&b, "ok", cli.task.as_deref(), &cov, max, limit);
             return finish(cli, "brief", json_value(&b)?, &cov, text);
         }
@@ -331,6 +342,9 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             Ok(mut info) => {
                 let visible = notes_dir.visible(cli.task.as_deref())?;
                 info.notes = notes_for(&visible, &[info.addr.qname.clone()], &[], &[]);
+                if cli.no_tests {
+                    cov.testes_ocultos = count(hide::symbol(&mut info));
+                }
                 (
                     "query symbol",
                     json_value(&info)?,
@@ -346,7 +360,10 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             Err(e) => return Err(e.into()),
         },
         Query::Word { word } => {
-            let info = word_info(&store, word, &config.bridges)?;
+            let mut info = word_info(&store, word, &config.bridges)?;
+            if cli.no_tests {
+                cov.testes_ocultos = count(hide::word(&mut info));
+            }
             (
                 "query word",
                 json_value(&info)?,
@@ -354,7 +371,10 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             )
         }
         Query::Writers { attr } => {
-            let rel = writers(&store, attr)?;
+            let mut rel = writers(&store, attr)?;
+            if cli.no_tests {
+                cov.testes_ocultos = count(hide::relation(&mut rel));
+            }
             (
                 "query writers",
                 json_value(&rel)?,
@@ -362,7 +382,10 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             )
         }
         Query::Readers { attr } => {
-            let rel = readers(&store, attr)?;
+            let mut rel = readers(&store, attr)?;
+            if cli.no_tests {
+                cov.testes_ocultos = count(hide::relation(&mut rel));
+            }
             (
                 "query readers",
                 json_value(&rel)?,
@@ -370,7 +393,10 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             )
         }
         Query::Callers { target, depth } => {
-            let chain = callers(&store, target, *depth)?;
+            let mut chain = callers(&store, target, *depth)?;
+            if cli.no_tests {
+                cov.testes_ocultos = count(hide::chain(&mut chain));
+            }
             (
                 "query callers",
                 json_value(&chain)?,
@@ -378,7 +404,10 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             )
         }
         Query::Callees { target, depth } => {
-            let chain = callees(&store, target, *depth)?;
+            let mut chain = callees(&store, target, *depth)?;
+            if cli.no_tests {
+                cov.testes_ocultos = count(hide::chain(&mut chain));
+            }
             (
                 "query callees",
                 json_value(&chain)?,
@@ -389,6 +418,9 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             let mut info = impact(&store, target)?;
             let visible = notes_dir.visible(cli.task.as_deref())?;
             info.notes = notes_for(&visible, &[info.target.qname.clone()], &[], &[]);
+            if cli.no_tests {
+                cov.testes_ocultos = count(hide::impact(&mut info));
+            }
             if let Some(task) = &delta_task {
                 apply_impact_delta(&store, task, &mut info, cli.full)?;
             }
@@ -399,6 +431,11 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             )
         }
         Query::Tests { target } => {
+            if cli.no_tests {
+                return Err(Failure::Usage(
+                    "--no-tests contradicts `query tests`, which lists tests".to_string(),
+                ));
+            }
             let tests = tests_for(&store, target)?;
             let addr = symbol_info(&store, target)?.addr;
             (
@@ -408,7 +445,10 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             )
         }
         Query::Type { target } => {
-            let info = type_info(&store, target)?;
+            let mut info = type_info(&store, target)?;
+            if cli.no_tests {
+                cov.testes_ocultos = count(hide::type_info(&mut info));
+            }
             (
                 "query type",
                 json_value(&info)?,

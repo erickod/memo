@@ -7,6 +7,7 @@ pub mod delta;
 pub mod error;
 pub mod events;
 pub mod extract;
+pub mod hide;
 pub mod index;
 pub mod lock;
 pub mod notes;
