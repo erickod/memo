@@ -48,9 +48,12 @@ struct Cli {
     limit: Option<usize>,
     #[arg(long, global = true, default_value_t = 6000)]
     max_chars: usize,
-    /// Esconde os testes da saída (as estatísticas continuam contando o repositório inteiro).
-    #[arg(long, global = true)]
+    /// Esconde os testes da saída; é o padrão (TASK-7, D2), mantido por compatibilidade.
+    #[arg(long, global = true, conflicts_with = "tests")]
     no_tests: bool,
+    /// Mostra os testes na saída (por padrão ficam ocultos; as estatísticas contam tudo).
+    #[arg(long, global = true)]
+    tests: bool,
     /// Só o que é novo desde a última chamada, mesmo sem `--task`.
     #[arg(long, global = true)]
     since_last: bool,
@@ -345,7 +348,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             if let Some(task) = &delta_task {
                 apply_delta(&store, task, &mut b, cli.full)?;
             }
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::brief(&mut b));
             }
             let text = render::brief_text(&b, "ok", cli.task.as_deref(), &cov, max, limit);
@@ -357,7 +360,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             Ok(mut info) => {
                 let visible = notes_dir.visible(cli.task.as_deref())?;
                 info.notes = notes_for(&visible, &[info.addr.qname.clone()], &[], &[]);
-                if cli.no_tests {
+                if !cli.tests {
                     cov.testes_ocultos = count(hide::symbol(&mut info));
                 }
                 (
@@ -376,7 +379,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         },
         Query::Word { word } => {
             let mut info = word_info(&store, word, &config.bridges)?;
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::word(&mut info));
             }
             (
@@ -387,7 +390,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         }
         Query::Writers { attr } => {
             let mut rel = writers(&store, attr)?;
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::relation(&mut rel));
             }
             (
@@ -398,7 +401,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         }
         Query::Readers { attr } => {
             let mut rel = readers(&store, attr)?;
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::relation(&mut rel));
             }
             (
@@ -409,7 +412,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         }
         Query::Callers { target, depth } => {
             let mut chain = callers(&store, target, *depth)?;
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::chain(&mut chain));
             }
             (
@@ -420,7 +423,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         }
         Query::Callees { target, depth } => {
             let mut chain = callees(&store, target, *depth)?;
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::chain(&mut chain));
             }
             (
@@ -433,7 +436,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             let mut info = impact(&store, target)?;
             let visible = notes_dir.visible(cli.task.as_deref())?;
             info.notes = notes_for(&visible, &[info.target.qname.clone()], &[], &[]);
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::impact(&mut info));
             }
             if let Some(task) = &delta_task {
@@ -473,7 +476,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         }
         Query::Type { target } => {
             let mut info = type_info(&store, target)?;
-            if cli.no_tests {
+            if !cli.tests {
                 cov.testes_ocultos = count(hide::type_info(&mut info));
             }
             (
