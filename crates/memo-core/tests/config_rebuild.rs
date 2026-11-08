@@ -152,7 +152,7 @@ fn test_given_config_change_when_rebuilt_then_notes_and_note_events_are_untouche
     notes
         .add(
             &store,
-            note("word:wcb", "Wcb é uma palavra."),
+            note(&format!("word:{}", token(200)), "Palavra distinta."),
             "2026-11-08T10:01:00Z",
         )
         .unwrap();

@@ -180,8 +180,39 @@ impl Config {
     }
 
     /// Identidade das chaves que afetam o índice; muda quando o índice precisa ser refeito.
+    ///
+    /// Cobre só o que muda o conteúdo do índice: `skeleton`, `context_root`, `layers`, vocabulário
+    /// (`verbs`, `roles`), `write_methods` (arestas de escrita) e os pesos de `[bridges]`.
+    /// `min_specificity`, `min_coherence`, `stale_on`, `main_branch` e `entrypoint_decorators`
+    /// não entram: não alteram o que o índice grava. Listas entram ordenadas (são conjuntos).
     pub fn index_hash(&self) -> String {
-        String::new()
+        let sorted = |values: &[String]| {
+            let mut v = values.to_vec();
+            v.sort();
+            format!("{v:?}")
+        };
+        let w = &self.bridges;
+        let canonical = format!(
+            "skeleton={}\ncontext_root={:?}\nlayers={}\nverbs={}\nroles={}\nwrite_methods={}\n\
+             bridges={:?}",
+            sorted(&self.skeleton),
+            self.context_root,
+            sorted(&self.layers),
+            sorted(&self.vocabulary.verbs),
+            sorted(&self.vocabulary.roles),
+            sorted(&self.write_methods),
+            [
+                w.symbol,
+                w.test,
+                w.import,
+                w.import_external,
+                w.call,
+                w.file,
+                w.context,
+                w.approximate
+            ],
+        );
+        blake3::hash(canonical.as_bytes()).to_hex().to_string()
     }
 
     /// O `memo.toml` com as sementes, para o `init` gravar.

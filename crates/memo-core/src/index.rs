@@ -430,7 +430,16 @@ fn run_index(
     config: &Config,
 ) -> Result<(IndexReport, Delta), CoreError> {
     let listed = tree.list()?;
-    let stored = load_files(store)?;
+    let mut stored = load_files(store)?;
+    // A config que muda o conteúdo do índice refaz tudo (invariante do §5 da TASK-3): sem isso o
+    // `index` sairia antes de recalcular e o banco ficaria com valores da config antiga.
+    let config_hash = config.index_hash();
+    let stale_config = store.get_meta("config_hash")?.as_deref() != Some(config_hash.as_str());
+    let rebuilt = stale_config && !stored.is_empty();
+    if rebuilt {
+        store.invalidate_files()?;
+        stored = load_files(store)?;
+    }
 
     let mut touched: Vec<&SourceFile> = Vec::new();
     let mut pending: Vec<Pending> = Vec::new();
@@ -462,9 +471,11 @@ fn run_index(
         files_total: listed.len(),
         files_changed: pending.len(),
         files_removed: removed.len(),
+        rebuilt,
         ..IndexReport::default()
     };
     if pending.is_empty() && touched.is_empty() && removed.is_empty() {
+        store.set_meta("config_hash", &config_hash)?;
         report.files_with_error = store.files_with_error()?;
         return Ok((report, Delta::default()));
     }
@@ -547,6 +558,7 @@ fn run_index(
         diff.delta.batch = Some(batch);
     }
     tx.commit()?;
+    store.set_meta("config_hash", &config_hash)?;
 
     report.wrote = true;
     report.events = diff.summary;
