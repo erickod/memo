@@ -15,13 +15,13 @@ Estas são as TASKs do `memo`, em ordem. Cada arquivo é um registro completo e 
 | [TASK-3](TASK-3-coerencia-sem-ruido-e-config-no-indice_2026-11-08.md) | done | Esqueleto só pela lista `skeleton`; índice que reindexa quando a config muda (hash em `meta`); representatividade em arquivos na ficha `query word` | `e7ff342` a `7a21ca5`, `73e522f` |
 | [TASK-4](TASK-4-brief-sem-dominancia-de-hubs_2026-11-09.md) | done | `brief` com dois níveis (quem carrega a âncora antes; vizinhos depois, com cota 10/5) e amortecimento do salto pelo grau do vizinho | `a691499` a `d0871b0` |
 | [TASK-5](TASK-5-brief-centralidade-no-nivel-1_2026-11-08.md) | **draft** | Nada ainda. Rascunho: o nível 1 do `brief order` virou uma lista de módulos; falta medir três candidatos antes de definir | nenhum |
-| [TASK-6](TASK-6-camada-relacional-palavra-item_2026-11-08.md) | **draft** | Nada ainda. Rascunho: camada relacional palavra ↔ item completa por construção (texto das referências e tipos viram ocorrências, sem depender de resolução) e `impact` por palavra como primeira inferência; reestruturar o código pelos conceitos fica para depois | nenhum |
+| [TASK-6](TASK-6-camada-relacional-palavra-item_2026-11-08.md) | **review** | Camada relacional palavra ↔ item: cada uso (`raw_ref`) é dono das próprias palavras, gravadas por arquivo e independentes da resolução; `impact` com a seção `por palavra` por uso, com linha e evidência `forte`/`média`/`só nome`. Duas rodadas: PR #1 (mergeado sem revisão) e a branch `feat/task-6-completion`; falta a CODE_REVIEW | `12359d6` a `819c122` (PR #1); `d8d95f8` a `e916d5d` e docs seguintes |
 
 (Os nomes dos arquivos têm datas de criação; a TASK-4 saiu com a data 2026-11-09 e a TASK-5 com 2026-11-08 por causa do relógio da máquina na época. A numeração é a ordem real.)
 
 ## Próximo passo
 
-A **TASK-5**. A etapa 0 dela é só medir, sem alterar código: ver o §3 e o §9 dela, `docs/medicoes.md` e `scripts/measure/`. Depois vem a DEFINITION, que precisa de decisões do dono do projeto (Q1 a Q4 no §9 da TASK-5).
+Primeiro, a **CODE_REVIEW da TASK-6** (branch `feat/task-6-completion`; ver o §10 dela). Depois, a **TASK-5**. A etapa 0 dela é só medir, sem alterar código: ver o §3 e o §9 dela, `docs/medicoes.md` e `scripts/measure/`. Depois vem a DEFINITION, que precisa de decisões do dono do projeto (Q1 a Q4 no §9 da TASK-5).
 
 Pendências conhecidas que cabem numa TASK ou numa limpeza: ver "Dívida técnica declarada" em `docs/limitacoes.md` (três delas citam as TASKs 2, 3 e 4 como origem) e o `brief` em 0,66 s no gerador versionado, acima da meta de 500 ms da spec (causa não investigada).
 
@@ -32,7 +32,7 @@ Pendências conhecidas que cabem numa TASK ou numa limpeza: ver "Dívida técnic
 ```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test --no-fail-fast        # 304 testes na última execução
+cargo test --no-fail-fast        # 334 testes na última execução
 cargo build --release            # target/release/memo
 ```
 
