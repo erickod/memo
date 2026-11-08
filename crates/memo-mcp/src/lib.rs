@@ -19,6 +19,10 @@ pub trait Backend {
 }
 
 const DEFAULT_PROTOCOL: &str = "2024-11-05";
+/// Instruções do servidor (TASK-7, D4): o memo localiza, o agente lê.
+const INSTRUCTIONS: &str = "O memo localiza; a resposta está no código. Fluxo: brief ou query para localizar, \
+depois leia os trechos da seção `ler:` (caminho:Lini-Lfim) e só então consulte de novo o que faltar. \
+Notas aparecem resumidas: use note_show para o texto inteiro.";
 const QUERY_KINDS: &[&str] = &[
     "symbol", "callers", "callees", "impact", "writers", "readers", "type", "tests", "word",
 ];
@@ -231,6 +235,7 @@ impl<B: Backend> Server<B> {
                     json!({ "result": {
                         "protocolVersion": version,
                         "capabilities": { "tools": {} },
+                        "instructions": INSTRUCTIONS,
                         "serverInfo": { "name": "memo", "version": env!("CARGO_PKG_VERSION") }
                     }}),
                 )
