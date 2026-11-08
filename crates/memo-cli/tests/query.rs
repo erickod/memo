@@ -773,3 +773,80 @@ fn test_given_small_max_chars_when_brief_then_tests_cut_first_and_omitidos_per_s
         "{last}"
     );
 }
+
+/// GIVEN the fixture where a test reaches SqlLimitRepository.save two levels up
+/// WHEN  'memo --no-tests query callers SqlLimitRepository.save --depth 2' runs
+/// THEN  no test appears, production callers stay, and the coverage says how many tests were hidden
+#[test]
+fn test_given_no_tests_flag_when_query_callers_then_test_callers_hidden() {
+    let args = [
+        "query",
+        "callers",
+        "SqlLimitRepository.save",
+        "--depth",
+        "2",
+    ];
+    let full = stdout(&memo(&open_repo(), &args));
+    assert!(full.contains("test_given_amount"), "{full}");
+    let mut hidden_args = vec!["--no-tests"];
+    hidden_args.extend(args);
+    let out = stdout(&memo(&open_repo(), &hidden_args));
+    assert!(
+        !out.contains("test_given_amount") && out.contains("CalculateLimitUseCase.execute"),
+        "{out}"
+    );
+    assert!(out.contains("testes ocultos"), "{out}");
+}
+
+/// GIVEN the flag '--no-tests'
+/// WHEN  'memo --no-tests query tests CalculateLimitUseCase.execute' runs
+/// THEN  it exits 1 (usage error), because the command exists to list tests
+#[test]
+fn test_given_no_tests_flag_when_query_tests_then_usage_error_exit_1() {
+    let out = memo(
+        &open_repo(),
+        &[
+            "--no-tests",
+            "query",
+            "tests",
+            "CalculateLimitUseCase.execute",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1));
+}
+
+/// GIVEN the fixture and the word 'limit'
+/// WHEN  'memo --json query word limit' runs with and without '--no-tests'
+/// THEN  the statistics in data.stats are identical, and the symbols list loses its test items
+#[test]
+fn test_given_no_tests_flag_when_word_stats_read_then_same_as_without_flag() {
+    let run = |extra: &[&str]| -> serde_json::Value {
+        let mut args = vec!["--json"];
+        args.extend(extra);
+        args.extend(["query", "word", "limit"]);
+        serde_json::from_str(&stdout(&memo(&open_repo(), &args))).unwrap()
+    };
+    let (full, hidden) = (run(&[]), run(&["--no-tests"]));
+    assert_eq!(full["data"]["stats"], hidden["data"]["stats"]);
+    let count = |v: &serde_json::Value| v["data"]["symbols"].as_array().unwrap().len();
+    assert!(count(&hidden) < count(&full));
+    assert!(hidden["cobertura"]["testes_ocultos"].as_i64().unwrap() > 0);
+}
+
+/// GIVEN the fixture and the request 'calculate limit'
+/// WHEN  'memo --no-tests brief' runs
+/// THEN  there is no 'testes:' section and no 'T' item, and the coverage counts the hidden tests
+#[test]
+fn test_given_no_tests_flag_when_brief_then_section_absent_and_count_in_cobertura() {
+    let out = stdout(&memo(
+        &open_repo(),
+        &["--no-tests", "brief", "calculate limit"],
+    ));
+    assert!(
+        !out.lines().any(|l| l == "testes:" || l.starts_with("  T ")),
+        "{out}"
+    );
+    assert!(!out.contains("+1 testes"), "{out}");
+    let cov = out.lines().find(|l| l.starts_with("cobertura:")).unwrap();
+    assert!(cov.contains("testes ocultos"), "{cov}");
+}

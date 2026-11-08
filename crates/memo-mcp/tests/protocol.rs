@@ -369,3 +369,36 @@ fn test_given_dash_prefixed_query_target_when_mcp_called_then_target_stays_posit
     );
     assert_eq!(argv(&f), strs(&["query", "symbol", "--", "--json"]));
 }
+
+/// GIVEN brief and query calls with no_tests true, and a brief call with no_tests false
+/// WHEN  they are handled
+/// THEN  the argv carries the global flag '--no-tests' before the subcommand only for the true ones
+#[test]
+fn test_given_no_tests_argument_when_mcp_brief_called_then_flag_passed_to_cli() {
+    let f = fake("x", false);
+    let server = Server::new(&f, None);
+    call(
+        &server,
+        tool_call("brief", json!({"text":"a b","task":"t","no_tests":true})),
+    );
+    assert_eq!(
+        argv(&f),
+        strs(&["--task", "t", "--no-tests", "brief", "--", "a b"])
+    );
+    call(
+        &server,
+        tool_call(
+            "query",
+            json!({"kind":"callers","target":"A.run","no_tests":true}),
+        ),
+    );
+    assert_eq!(
+        argv(&f),
+        strs(&["--no-tests", "query", "callers", "--", "A.run"])
+    );
+    call(
+        &server,
+        tool_call("brief", json!({"text":"a b","no_tests":false})),
+    );
+    assert_eq!(argv(&f), strs(&["brief", "--", "a b"]));
+}
