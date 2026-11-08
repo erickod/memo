@@ -24,6 +24,8 @@ pub struct SymbolFact {
     pub is_protocol: bool,
     /// Tipo anotado (texto bruto) de um atributo, quando conhecido.
     pub type_text: Option<String>,
+    /// Membro de Enum: o valor literal, ou vazio quando o valor não é literal (TASK-7, D6).
+    pub value_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +167,7 @@ pub fn extract_python_file(
         body_hash: hash_of(&serialize(&ctx, root)),
         is_protocol: false,
         type_text: None,
+        value_text: None,
     });
     visit_block(&mut ctx, root, module, false);
     collect_imports(&mut ctx, root, module, is_package, false);
@@ -227,6 +230,7 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
     );
     let line = def.start_position().row + 1;
     let mut is_protocol = false;
+    let mut is_enum = false;
     if let Some(bases) = def.child_by_field_name("superclasses") {
         let mut cursor = bases.walk();
         for base in bases.named_children(&mut cursor) {
@@ -236,6 +240,7 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
             let text = ctx.text(base).split_whitespace().collect::<String>();
             let text = text.split('[').next().unwrap_or("").to_string();
             is_protocol |= text == "Protocol" || text.ends_with(".Protocol");
+            is_enum |= is_enum_base(&text);
             ctx.facts.refs.push(RefFact {
                 src_qname: qname.clone(),
                 kind: RefKind::Especializa,
@@ -258,10 +263,73 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
             body_hash: hash_of(&body_hash),
             is_protocol,
             type_text: None,
+            value_text: None,
         },
     );
     if let Some(b) = body {
         visit_block(ctx, b, &qname, true);
+        if is_enum {
+            enum_members(ctx, b, &qname);
+        }
+    }
+}
+
+/// Bases de Enum reconhecidas pelo nome declarado (TASK-7, D6): `Enum`, `IntEnum`, `StrEnum`,
+/// `Flag`, sozinhas ou como `enum.<nome>`. Herança indireta não é seguida.
+fn is_enum_base(text: &str) -> bool {
+    const BASES: [&str; 4] = ["Enum", "IntEnum", "StrEnum", "Flag"];
+    match text.split_once('.') {
+        None => BASES.contains(&text),
+        Some(("enum", name)) => BASES.contains(&name),
+        Some(_) => false,
+    }
+}
+
+/// Membros de um Enum: `NOME = valor` no corpo da classe, sem anotação. O valor literal (texto,
+/// número, `True`, `False`, `None`) é guardado; os demais ficam vazios (`auto()`, expressões).
+fn enum_members(ctx: &mut Ctx, body: Node, class_qname: &str) {
+    const LITERALS: [&str; 6] = ["string", "integer", "float", "true", "false", "none"];
+    let mut cursor = body.walk();
+    let statements: Vec<Node> = body.named_children(&mut cursor).collect();
+    for stmt in statements {
+        let Some(assign) = (stmt.kind() == "expression_statement")
+            .then(|| stmt.named_child(0))
+            .flatten()
+            .filter(|n| n.kind() == "assignment" && n.child_by_field_name("type").is_none())
+        else {
+            continue;
+        };
+        let Some(name) = assign
+            .child_by_field_name("left")
+            .filter(|n| n.kind() == "identifier")
+            .map(|n| ctx.text(n).to_string())
+            .filter(|n| !n.starts_with('_'))
+        else {
+            continue;
+        };
+        let value = assign
+            .child_by_field_name("right")
+            .filter(|v| LITERALS.contains(&v.kind()))
+            .map(|v| ctx.text(v).to_string())
+            .unwrap_or_default();
+        let qname = format!("{class_qname}.{name}");
+        if ctx.facts.symbols.iter().any(|s| s.qname == qname) {
+            continue;
+        }
+        add_symbol(
+            ctx,
+            SymbolFact {
+                qname,
+                kind: SymbolKind::Attribute,
+                line_start: assign.start_position().row + 1,
+                line_end: assign.end_position().row + 1,
+                sig_hash: hash_of(&value),
+                body_hash: hash_of(""),
+                is_protocol: false,
+                type_text: None,
+                value_text: Some(value),
+            },
+        );
     }
 }
 
@@ -334,6 +402,7 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
             body_hash: hash_of(&body_hash),
             is_protocol: false,
             type_text: None,
+            value_text: None,
         },
     );
     if let Some(b) = body {
@@ -450,6 +519,7 @@ fn push_attribute(
             body_hash: hash_of(""),
             is_protocol: false,
             type_text,
+            value_text: None,
         },
     );
 }
