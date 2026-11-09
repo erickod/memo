@@ -3,6 +3,16 @@ source: crates/memo-cli/tests/query.rs
 expression: stdout(&out)
 ---
 impact Alpha.run  idx=ok
+nome: run · 3 definições · 3/6 usos resolvidos
+pesos: vizinhança 1.00 · caminho 1.00 · conexão 0.50 · nome 0.25
+relevantes:
+  F strong_owner   m.py:L3-L4 d1 chamador [viz 1.00 · con 0.25] 1.25
+  F strong_sub   m.py:L6-L7 d1 chamador [viz 1.00 · con 0.25] 1.25
+  M Beta.run   a.py:L15-L16 nome [nome 0.25] 0.25
+  M Runner.run   a.py:L4-L5 nome [nome 0.25] 0.25
+  F medium_owner   m.py:L9-L11 nome [nome 0.25] 0.25
+  F medium_protocol   m.py:L13-L15 nome [nome 0.25] 0.25
+  F only_obj   m.py:L20-L21 nome [nome 0.25] 0.25
 chamadores:
   F strong_owner   m.py:L3-L4  d1 :L4
   F strong_sub   m.py:L6-L7  d1 :L7
@@ -16,6 +26,8 @@ por palavra:
   F only_beta   m.py:L17-L18 ~ :L18 só nome
   F only_obj   m.py:L20-L21 ~ :L21 só nome
 testes exatos:
+  nenhum
+testes via HTTP:
   nenhum
 testes ~:
   nenhum
