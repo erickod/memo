@@ -225,3 +225,13 @@ fn test_given_variable_in_decorator_when_resolved_then_module_reads_it() {
     let (_r, store) = store_of(&[("m.py", src)]);
     assert!(who(&store, "m.X", false).contains(&("m".to_string(), false)));
 }
+
+/// GIVEN `A, X = 1, 2`, `for X in ...` and `with ... as X` at module level
+/// WHEN  the file is indexed and resolved
+/// THEN  the module has no LE edge to `m.X`, since those names are being bound, not read
+#[test]
+fn test_given_unpacking_and_for_target_when_resolved_then_no_read_edge() {
+    let src = "X = 1\nA, X = 1, 2\nfor X in range(3):\n    pass\nwith open('f') as X:\n    pass\n";
+    let (_r, store) = store_of(&[("m.py", src)]);
+    assert!(who(&store, "m.X", false).iter().all(|(q, _)| q != "m"));
+}

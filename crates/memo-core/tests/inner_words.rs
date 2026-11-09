@@ -216,3 +216,23 @@ fn test_given_base_class_name_when_searched_then_subclass_is_found() {
     let (_r, store) = store_of("class Mixin:\n    pass\n\nclass Child(Mixin):\n    pass\n");
     assert!(found(&store, "mixin").contains(&"m.Child".to_string()));
 }
+
+/// GIVEN a function whose inner function calls `ledger_total`
+/// WHEN  searching the word `ledger`
+/// THEN  the outer function is found, since inner functions are not symbols
+#[test]
+fn test_given_nested_function_when_searched_by_word_then_enclosing_function_is_found() {
+    let src = "def f():\n    def g():\n        return ledger_total()\n    return g\n";
+    let (_r, store) = store_of(src);
+    assert!(found(&store, "ledger").contains(&"m.f".to_string()));
+}
+
+/// GIVEN a class defined inside a function, with a method that uses `quota_limit`
+/// WHEN  searching the word `quota`
+/// THEN  the enclosing function is found
+#[test]
+fn test_given_class_inside_function_when_searched_by_word_then_enclosing_function_is_found() {
+    let src = "def f():\n    class K:\n        def m(self):\n            return quota_limit\n    return K\n";
+    let (_r, store) = store_of(src);
+    assert!(found(&store, "quota").contains(&"m.f".to_string()));
+}
