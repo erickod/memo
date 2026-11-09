@@ -40,6 +40,21 @@ pub(super) fn collect_var_names(ctx: &mut Ctx, root: Node) {
     ctx.var_names.extend(names);
 }
 
+/// Nomes simples que um alvo liga (parâmetro, atribuição, `for`), sem entrar em `obj.attr` nem
+/// em `v[i]`.
+fn bound_identifiers(ctx: &Ctx, node: Node, out: &mut HashSet<String>) {
+    if node.kind() == "identifier" {
+        out.insert(ctx.text(node).to_string());
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() != "attribute" && child.kind() != "subscript" {
+            bound_identifiers(ctx, child, out);
+        }
+    }
+}
+
 /// Nomes de uma função: os próprios (parâmetros, atribuídos sem `global`, `nonlocal`) ocultam a
 /// variável de módulo; os declarados `global` a escrevem.
 struct FunctionNames {
@@ -73,26 +88,16 @@ fn function_names(ctx: &Ctx, def: Node, body: Node) -> FunctionNames {
                 | "as_pattern" => {
                     for field in ["left", "name", "alias"] {
                         if let Some(t) = child.child_by_field_name(field) {
-                            identifiers(ctx, t, &mut names.locals);
+                            bound_identifiers(ctx, t, &mut names.locals);
                         }
                     }
                 }
-                "parameters" | "lambda_parameters" => identifiers(ctx, child, &mut names.locals),
+                "parameters" | "lambda_parameters" => {
+                    bound_identifiers(ctx, child, &mut names.locals)
+                }
                 _ => {}
             }
             walk(ctx, child, names);
-        }
-    }
-    fn identifiers(ctx: &Ctx, node: Node, out: &mut HashSet<String>) {
-        if node.kind() == "identifier" {
-            out.insert(ctx.text(node).to_string());
-            return;
-        }
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            if child.kind() != "attribute" && child.kind() != "subscript" {
-                identifiers(ctx, child, out);
-            }
         }
     }
     let mut names = FunctionNames {
@@ -100,7 +105,7 @@ fn function_names(ctx: &Ctx, def: Node, body: Node) -> FunctionNames {
         globals: HashSet::new(),
     };
     if let Some(params) = def.child_by_field_name("parameters") {
-        identifiers(ctx, params, &mut names.locals);
+        bound_identifiers(ctx, params, &mut names.locals);
     }
     walk(ctx, body, &mut names);
     for g in &names.globals {
@@ -197,6 +202,36 @@ fn visit(ctx: &mut Ctx, node: Node, w: &Walk) {
                     bind_target(ctx, child, w);
                 } else {
                     visit(ctx, child, w);
+                }
+            }
+        }
+        // Compreensão tem escopo próprio: o alvo do `for` oculta o nome dentro dela, e só o
+        // iterável é lido fora desse escopo.
+        "list_comprehension"
+        | "set_comprehension"
+        | "dictionary_comprehension"
+        | "generator_expression" => {
+            let mut shadow = w.locals.clone();
+            let mut cursor = node.walk();
+            for clause in node.named_children(&mut cursor) {
+                if clause.kind() == "for_in_clause"
+                    && let Some(left) = clause.child_by_field_name("left")
+                {
+                    bound_identifiers(ctx, left, &mut shadow);
+                }
+            }
+            let inner = Walk {
+                locals: &shadow,
+                ..*w
+            };
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() == "for_in_clause" {
+                    if let Some(right) = child.child_by_field_name("right") {
+                        visit(ctx, right, w);
+                    }
+                } else {
+                    visit(ctx, child, &inner);
                 }
             }
         }
