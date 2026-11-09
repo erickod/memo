@@ -130,7 +130,7 @@ A contenção (pacote, módulo, classe, método) usa `parent_id` e `file_id`, n�
 | `ESPECIALIZA` | classe → classe | herança explícita, ou implementação estrutural de um Protocol (todos os métodos públicos existem na classe, com a mesma aridade) | exata na herança, `~` na estrutural |
 | `IMPORTA` | módulo → módulo ou símbolo | `import` e `from ... import`; `attr = type_checking` quando sob `TYPE_CHECKING` | exata |
 | `ESCREVE` | função ou método → atributo ou externo | `self.x = ...`, `self.x[k] = ...`, `+=`, método mutador em `self.x`, escrita em global, chamada de método de escrita em receptor tipado | exata para atributo, `~` para externo por nome |
-| `LE` | função ou método → atributo | leitura de `self.x` | exata |
+| `LE` | função, método ou módulo → atributo | leitura de `self.x`, de `X.attr`, ou de um nome simples atribuído no módulo ou importado | exata |
 | `LEVANTA` | função ou método → classe de exceção | `raise X(...)` ou `raise X` | exata quando resolve |
 
 ### Contexto e camada
@@ -143,7 +143,7 @@ A extração roda por arquivo, atrás da trait `LanguageExtractor` (o MVP implem
 
 ### 5.1 Símbolos
 
-Extrair módulo, classes, funções, métodos e atributos (`self.x = ...` em qualquer método, e atributos anotados no corpo da classe). Registrar `line_start` e `line_end`, decoradores, `is_test` (arquivo em `tests/` ou nome `test_*`), `is_entrypoint` (decorador que casa com `entrypoint_decorators` da config) e `is_protocol` (classe que herda de `Protocol`). Funções locais e lambdas não viram símbolos.
+Extrair módulo, classes, funções, métodos e atributos (`self.x = ...` em qualquer método, e variáveis atribuídas no corpo da classe, com ou sem anotação). Variáveis atribuídas no nível do módulo também são símbolos `attribute`; locais de função não. Registrar `line_start` e `line_end`, decoradores, `is_test` (arquivo em `tests/` ou nome `test_*`), `is_entrypoint` (decorador que casa com `entrypoint_decorators` da config) e `is_protocol` (classe que herda de `Protocol`). Funções locais e lambdas não viram símbolos.
 
 ### 5.2 Palavras e slots
 
@@ -157,7 +157,7 @@ Extrair módulo, classes, funções, métodos e atributos (`self.x = ...` em qua
    - **Imports** (`source = import`, dono o import): o nome importado e o caminho do módulo. A raiz do pacote (último segmento de `context_root`) e as camadas saem, o segmento seguinte à raiz é o contexto (slot `context`). Alvo que não começa pela raiz (externo) usa todos os segmentos e pesa menos nas pontes.
    - **Docstring de teste** (`source = test_doc`, dono o símbolo de teste): `GIVEN`, `WHEN` e `THEN` são marcadores de `segment`, não palavras; só conta a palavra que já existe como palavra de nome, caminho ou import (vocabulário fechado).
    - **Texto de uso** (`source = ref`, dono o uso: `owner_kind = ref`, `owner_id = raw_ref.id`; e `source = type`, dono o símbolo): as palavras do texto e do receptor de cada referência extraída (chamada, tipo recebido ou devolvido) e do tipo anotado do atributo. São gravadas junto com o arquivo, independem de a referência ter sido resolvida e não levam `symbol_id`, então estatísticas, pontes e `brief` não as veem; só o `query impact` as usa.
-   Docstrings e comentários de produção ficam para uma segunda fase.
+   - **Corpo do escopo** (`source = body`, dono o símbolo, sem `symbol_id`): identificadores, comentários `#` e docstring do módulo, da classe, da função ou do método, uma vez por palavra. Definições aninhadas que são símbolos e imports ficam de fora; `self`, `cls`, `skeleton` e literais de string também. Só `query word` os lista, depois dos símbolos com a palavra no nome, no teste ou no import, com a etiqueta `corpo`.
 
 O vocabulário vem de `memo.toml` (seção 6) com sementes embutidas: `roles` (`service`, `usecase`, `repository`, `handler`, `mapper`, `schema`, `dto`, `input`, `output`, `protocol`, `exception`, `client`, `event`, `command`, `route`), `verbs` (`get`, `set`, `create`, `calculate`, `validate`, `update`, `delete`, `find`, `list`, `handle`, `execute`, `build`, `parse`, `publish`, `consume`, `save`, `load`, `send`) e `skeleton` (`get`, `data`, `utils`, `helper`, `base`, `manager`, `common`, `process`, `service`).
 

@@ -19,8 +19,8 @@ Ideias para depois, com o que as sustenta e o que ainda precisa ser decidido. Na
 
 ## 3. Mais fontes de palavras
 
-- Docstrings e comentários de produção (a spec já prevê o valor `doc`).
-- **Falta decidir:** como evitar que prosa livre vire ruído, já que hoje só entram palavras que existem em algum identificador.
+- Feito na TASK-10: identificadores, comentários e docstring de cada escopo viram palavras `body`, só em `query word`.
+- **Falta:** medir se as palavras do corpo ajudam o `brief` sem virar ruído, e decidir sobre literais de string (mensagens, chaves, SQL, rotas).
 
 ## 4. Menos chamadas sem resolução
 
