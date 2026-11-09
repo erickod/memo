@@ -30,6 +30,8 @@ O que o `memo` não faz, faz mal ou não foi verificado. Cada item diz de onde v
 - `ler:` completa blocos curtos que cruzam a janela até 40 linhas; não segue o valor até decisões posteriores nem faz análise de fluxo de dados. Símbolos grandes continuam sujeitos ao orçamento.
 - Quando outro arquivo ganha um homônimo de uma função já chamada, quem a chamava não é resolvido de novo até o próprio arquivo mudar: a chamada segue apontando para a definição antiga. (achado na TASK-6, não corrigido)
 
+- **Palavras do corpo (TASK-10):** cada módulo, classe, função e método guarda, uma vez por palavra (`source = 'body'`), os identificadores, os comentários `#` e a docstring do próprio escopo, sem os escopos aninhados; `self`, `cls` e a lista `skeleton` ficam de fora, e literais de string também. Só `query word` lista esses símbolos (nas pontes, sem etiqueta); `brief`, estatísticas das palavras e representatividade não usam essa fonte. Em `query word` isso aumenta bem a lista de símbolos por palavra, e o efeito no ranking do `brief` não foi medido.
+
 ## `impact` por palavra
 
 - **O "mesmo uso" ainda é a linha do símbolo.** Chamadas diretas `Classe(...).metodo()` agora preservam o receptor e podem ser exatas; o fallback lexical continua usando coincidências na mesma linha, portanto `x = Alpha(); y.run()` numa linha só também pode virar evidência `forte` aproximada. (TASK-8; decisão D14 da TASK-6)
