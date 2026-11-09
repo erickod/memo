@@ -38,6 +38,10 @@ pub enum RefKind {
     /// Leitura `X.attr` por um nome que não é `self` (TASK-7, D5); resolvida como `LE`.
     LeAttr,
     EscreveAttr,
+    /// Leitura de nome simples que pode ser variável de módulo, própria ou importada (TASK-10).
+    LeVar,
+    /// Atribuição a nome simples no módulo ou sob `global` numa função (TASK-10).
+    EscreveVar,
     Inicializa,
     SqlUpdate,
     SqlInsert,
@@ -58,6 +62,8 @@ impl RefKind {
             RefKind::Le => "LE",
             RefKind::LeAttr => "LE_ATTR",
             RefKind::EscreveAttr => "ESCREVE_ATTR",
+            RefKind::LeVar => "LE_VAR",
+            RefKind::EscreveVar => "ESCREVE_VAR",
             RefKind::Inicializa => "INICIALIZA",
             RefKind::SqlUpdate => "SQL_UPDATE",
             RefKind::SqlInsert => "SQL_INSERT",
@@ -153,6 +159,8 @@ const MUTATORS: &[&str] = &[
 struct Ctx<'a> {
     src: &'a [u8],
     facts: FileFacts,
+    /// Nomes que podem ser variável de módulo: atribuídos no nível do módulo ou importados.
+    var_names: std::collections::HashSet<String>,
 }
 
 impl Ctx<'_> {
@@ -190,6 +198,7 @@ pub fn extract_python_file(
     let mut ctx = Ctx {
         src: source.as_bytes(),
         facts: FileFacts::default(),
+        var_names: std::collections::HashSet::new(),
     };
     ctx.facts.symbols.push(SymbolFact {
         qname: module.to_string(),
@@ -203,7 +212,9 @@ pub fn extract_python_file(
         value_text: None,
     });
     collect_imports(&mut ctx, root, module, is_package, false);
+    collect_var_names(&mut ctx, root);
     visit_block(&mut ctx, root, module, false);
+    module_var_effects(&mut ctx, root, module);
     Ok(ctx.facts)
 }
 
@@ -589,6 +600,7 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
         let mut locals = param_types.clone();
         collect_locals(ctx, b, &mut locals);
         scan_effects(ctx, b, &qname, in_class, &locals);
+        function_var_effects(ctx, def, b, &qname);
     }
 }
 
@@ -1291,4 +1303,179 @@ fn docstring_text(ctx: &Ctx, body: Node) -> Option<String> {
         .map(|n| ctx.text(n))
         .collect();
     Some(content.join(" "))
+}
+
+fn assigned_name(ctx: &Ctx, stmt: Node) -> Option<String> {
+    if !matches!(stmt.kind(), "assignment" | "augmented_assignment") {
+        return None;
+    }
+    let left = stmt.child_by_field_name("left")?;
+    (left.kind() == "identifier").then(|| ctx.text(left).to_string())
+}
+
+/// Nomes candidatos a variável de módulo: atribuídos em instruções do módulo (fora de
+/// funções e classes) ou importados (TASK-10, D2).
+fn collect_var_names(ctx: &mut Ctx, root: Node) {
+    let mut names: Vec<String> = ctx
+        .facts
+        .imports
+        .iter()
+        .map(|i| i.local_name.clone())
+        .collect();
+    fn walk(ctx: &Ctx, node: Node, names: &mut Vec<String>) {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "function_definition" | "class_definition" | "decorated_definition" | "lambda" => {}
+                "expression_statement" => {
+                    if let Some(name) = child.named_child(0).and_then(|a| assigned_name(ctx, a)) {
+                        names.push(name);
+                    }
+                }
+                _ => walk(ctx, child, names),
+            }
+        }
+    }
+    walk(ctx, root, &mut names);
+    ctx.var_names.extend(names);
+}
+
+/// Nomes que a função ou o método vê como próprios: parâmetros (também de funções aninhadas)
+/// e nomes atribuídos sem `global`. Esses ocultam a variável de módulo (C6).
+fn local_scope(
+    ctx: &Ctx,
+    def: Node,
+    body: Node,
+) -> (
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+) {
+    use std::collections::HashSet;
+    fn walk(ctx: &Ctx, node: Node, locals: &mut HashSet<String>, globals: &mut HashSet<String>) {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "global_statement" | "nonlocal_statement" => {
+                    let mut c = child.walk();
+                    for id in child.named_children(&mut c) {
+                        globals.insert(ctx.text(id).to_string());
+                    }
+                }
+                "assignment"
+                | "augmented_assignment"
+                | "for_statement"
+                | "with_item"
+                | "named_expression"
+                | "as_pattern" => {
+                    for field in ["left", "name", "alias"] {
+                        if let Some(t) = child.child_by_field_name(field) {
+                            collect_identifiers(ctx, t, locals);
+                        }
+                    }
+                }
+                "parameters" | "lambda_parameters" => collect_identifiers(ctx, child, locals),
+                _ => {}
+            }
+            walk(ctx, child, locals, globals);
+        }
+    }
+    fn collect_identifiers(ctx: &Ctx, node: Node, out: &mut HashSet<String>) {
+        if node.kind() == "identifier" {
+            out.insert(ctx.text(node).to_string());
+            return;
+        }
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() != "attribute" && child.kind() != "subscript" {
+                collect_identifiers(ctx, child, out);
+            }
+        }
+    }
+    let mut locals = HashSet::new();
+    let mut globals = HashSet::new();
+    if let Some(params) = def.child_by_field_name("parameters") {
+        collect_identifiers(ctx, params, &mut locals);
+    }
+    walk(ctx, body, &mut locals, &mut globals);
+    for g in &globals {
+        locals.remove(g);
+    }
+    (locals, globals)
+}
+
+fn function_var_effects(ctx: &mut Ctx, def: Node, body: Node, src: &str) {
+    let (locals, globals) = local_scope(ctx, def, body);
+    var_effects(ctx, body, src, &locals, &globals, true);
+}
+
+/// Instruções do módulo (fora de funções e classes): escritas e leituras de nomes simples.
+fn module_var_effects(ctx: &mut Ctx, root: Node, module: &str) {
+    let none = std::collections::HashSet::new();
+    var_effects(ctx, root, module, &none, &none, false);
+}
+
+/// `ESCREVE_VAR`/`LE_VAR` de nomes candidatos a variável de módulo. `in_function` decide se a
+/// escrita exige `global` (função) ou vale sempre (módulo).
+fn var_effects(
+    ctx: &mut Ctx,
+    node: Node,
+    src: &str,
+    locals: &std::collections::HashSet<String>,
+    globals: &std::collections::HashSet<String>,
+    in_function: bool,
+) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "class_definition" => continue,
+            "function_definition" | "decorated_definition" | "lambda" if !in_function => continue,
+            "global_statement" | "nonlocal_statement" => continue,
+            "identifier" => {
+                let parent = node.kind();
+                let name = ctx.text(child).to_string();
+                let is_member =
+                    parent == "attribute" && node.child_by_field_name("attribute") == Some(child);
+                let is_label =
+                    parent == "keyword_argument" && node.child_by_field_name("name") == Some(child);
+                if !is_member
+                    && !is_label
+                    && ctx.var_names.contains(&name)
+                    && !locals.contains(&name)
+                {
+                    push_ref(ctx, src, RefKind::LeVar, name, child);
+                }
+                continue;
+            }
+            "assignment" | "augmented_assignment" => {
+                let left = child.child_by_field_name("left");
+                if let Some(l) = left.filter(|l| l.kind() == "identifier") {
+                    let name = ctx.text(l).to_string();
+                    let writes = ctx.var_names.contains(&name)
+                        && if in_function {
+                            globals.contains(&name)
+                        } else {
+                            true
+                        };
+                    if writes {
+                        push_ref(ctx, src, RefKind::EscreveVar, name, l);
+                    }
+                } else if let Some(l) = left {
+                    var_effects(ctx, l, src, locals, globals, in_function);
+                }
+                if let Some(right) = child.child_by_field_name("right") {
+                    if right.kind() == "identifier" {
+                        let name = ctx.text(right).to_string();
+                        if ctx.var_names.contains(&name) && !locals.contains(&name) {
+                            push_ref(ctx, src, RefKind::LeVar, name, right);
+                        }
+                    } else {
+                        var_effects(ctx, right, src, locals, globals, in_function);
+                    }
+                }
+                continue;
+            }
+            _ => {}
+        }
+        var_effects(ctx, child, src, locals, globals, in_function);
+    }
 }

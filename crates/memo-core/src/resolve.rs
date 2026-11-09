@@ -699,6 +699,49 @@ fn resolve_attr_write(
     mark(tx, raw, 1)
 }
 
+/// Nome simples que é variável do próprio módulo ou importada de outro: aresta `LE`/`ESCREVE`
+/// exata ao símbolo `Attribute`. Qualquer outro nome (função, classe, externo) não gera aresta
+/// nem conta como não resolvido (TASK-10).
+fn resolve_variable(
+    tx: &Transaction,
+    resolver: &mut Resolver,
+    file_id: i64,
+    raw: &RawRef,
+) -> Result<(), CoreError> {
+    let Some(text) = raw.text.as_deref() else {
+        return mark(tx, raw, 2);
+    };
+    let ctx = resolver.file_ctx(file_id)?;
+    let mut candidates = vec![format!("{}.{text}", ctx.module)];
+    for (local, target) in &ctx.imports {
+        if text == local {
+            candidates.push(target.clone());
+        }
+    }
+    for qname in candidates {
+        if let Some((dst, kind)) = resolver.symbol(&qname)?
+            && kind == "attribute"
+        {
+            let write = raw.kind == "ESCREVE_VAR";
+            insert_edge(
+                tx,
+                &NewEdge {
+                    kind: if write { "ESCREVE" } else { "LE" },
+                    src: raw.src,
+                    dst: Some(dst),
+                    dst_text: None,
+                    line: raw.line,
+                    attr: write.then_some("atribuicao"),
+                    pos: None,
+                    approx: false,
+                },
+            )?;
+            return mark(tx, raw, 1);
+        }
+    }
+    mark(tx, raw, 2)
+}
+
 fn resolve_ref(
     tx: &Transaction,
     resolver: &mut Resolver,
@@ -713,6 +756,7 @@ fn resolve_ref(
         // Resolvidas numa passada global (`resolve_requests`): a rota pode estar em outro arquivo.
         "REQUISITA" => {}
         "LE_ATTR" => resolve_attr_read(tx, resolver, file_id, raw)?,
+        "LE_VAR" | "ESCREVE_VAR" => resolve_variable(tx, resolver, file_id, raw)?,
         "ESCREVE" | "LE" => {
             let class_id: Option<i64> = tx.query_row(
                 "SELECT parent_id FROM symbol WHERE id = ?1",
