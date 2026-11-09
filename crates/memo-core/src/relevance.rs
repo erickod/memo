@@ -1,8 +1,8 @@
 //! Relevância em torno de um alvo explícito: quatro estratégias com peso visível.
 //!
-//! - `vizinhanca`: chamadas exatas (`CHAMA`/`CRIA` sem `~`) até 2 saltos na mesma direção
-//!   (chamador do chamador, chamado do chamado); o segundo vale metade. Irmãos que só se ligam
-//!   por um hub em comum (todos chamam `get_session`) ficam de fora.
+//! - `vizinhanca`: chamadas exatas (`CHAMA`/`CRIA` sem `~`) até 3 saltos na mesma direção
+//!   (chamador do chamador, chamado do chamado); o salto `d` vale `peso / d`. Irmãos que só se
+//!   ligam por um hub em comum (todos chamam `get_session`) ficam de fora.
 //! - `caminho`: o símbolo está num caminho de chamadas exatas de um entrypoint até o alvo.
 //! - `conexao`: fração das ligações exatas do candidato que vão para a região do alvo (0 a 1);
 //!   um hub chamado por todo o repositório fica perto de 0.
@@ -27,6 +27,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 const MIN_GENERIC_DEFINITIONS: i64 = 4;
 /// Piso do limiar de usos para o critério de precisão, pelo mesmo motivo.
 const MIN_GENERIC_USES: i64 = 10;
+/// Saltos da vizinhança. Medido no `bope`: 3 empata com 2 em fluxos curtos e acha mais do
+/// fluxo nos longos (alcance de 65% para 87%); 4 ou mais só trouxe ruído.
+const NEIGHBOR_DEPTH: usize = 3;
 /// Profundidade da busca reversa até um entrypoint.
 const PATH_DEPTH: usize = 6;
 
@@ -225,7 +228,7 @@ pub fn relevant(
     // Vizinhança: até 2 saltos por chamada exata, nos dois sentidos.
     let mut frontier = vec![(target, "")];
     let mut seen = HashSet::from([target]);
-    for level in 1..=2usize {
+    for level in 1..=NEIGHBOR_DEPTH {
         let mut next = Vec::new();
         for (node, dir) in &frontier {
             for (map, step) in [(&graph.reverse, "chamador"), (&graph.forward, "chamado")] {
@@ -457,4 +460,150 @@ pub fn resolve_targets(store: &SqliteStore, target: &str) -> Result<Vec<String>,
         }
         Err(e) => Err(e),
     }
+}
+
+/// Âncora escolhida pela interseção das palavras de um pedido em texto.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntersectionAnchor {
+    pub id: i64,
+    /// Palavras do pedido (fora do `skeleton`) que o nome cobre, e quantas há.
+    pub covered: usize,
+    pub total: usize,
+}
+
+/// Até 3 funções ou métodos cujo nome cobre o máximo de palavras do pedido fora do `skeleton`
+/// (pelo menos 2). Um método conta também as palavras da classe dona (`OrderTaxRepository.run`
+/// cobre `order` e `tax`), salvo métodos especiais (`__init__`). Só ficam as candidatas
+/// empatadas com a primeira em cobertura total e em cobertura pelo próprio nome, para um
+/// método auxiliar que só herda as palavras não disputar com a função que as tem no nome.
+/// Desempate: mais palavras do `skeleton` do pedido no nome (`process` favorece `process_x`
+/// sobre `has_x`), depois menos palavras sobrando no nome.
+/// Medido no `bope`: âncora certa em 13 de 16 pedidos antes destes dois ajustes.
+pub fn intersection_anchors(
+    store: &SqliteStore,
+    tokens: &[String],
+) -> Result<Vec<IntersectionAnchor>, CoreError> {
+    const MIN_PREFIX: usize = 5;
+    const MAX_ANCHORS: usize = 3;
+    let words: Vec<(i64, String, bool)> = store
+        .conn
+        .prepare(
+            "SELECT w.id, w.text, COALESCE(ws.esqueleto, 0) FROM word w
+             LEFT JOIN word_stats ws ON ws.word_id = w.id
+             WHERE EXISTS (SELECT 1 FROM occurrence o WHERE o.word_id = w.id
+                           AND o.source = 'name' AND o.symbol_id IS NOT NULL)",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? != 0)))?
+        .collect::<Result<_, _>>()?;
+    // Cada token vira o conjunto de palavras que ele casa (igual, senão prefixo de 5 ou mais).
+    let mut usable: Vec<BTreeSet<i64>> = Vec::new();
+    let mut skeleton: Vec<BTreeSet<i64>> = Vec::new();
+    for token in tokens {
+        let exact: Vec<&(i64, String, bool)> = words.iter().filter(|w| &w.1 == token).collect();
+        let hits: Vec<&(i64, String, bool)> = if exact.is_empty() {
+            words
+                .iter()
+                .filter(|w| {
+                    w.1.len().min(token.len()) >= MIN_PREFIX
+                        && (w.1.starts_with(token.as_str()) || token.starts_with(w.1.as_str()))
+                })
+                .collect()
+        } else {
+            exact
+        };
+        let generic: BTreeSet<i64> = hits.iter().filter(|w| w.2).map(|w| w.0).collect();
+        let specific: BTreeSet<i64> = hits.iter().filter(|w| !w.2).map(|w| w.0).collect();
+        if !specific.is_empty() {
+            usable.push(specific);
+        } else if !generic.is_empty() {
+            skeleton.push(generic);
+        }
+    }
+    if usable.len() < 2 {
+        return Ok(Vec::new());
+    }
+    // Palavras de nome de cada símbolo candidato, próprias e herdadas da classe dona.
+    let mut own: HashMap<i64, BTreeSet<i64>> = HashMap::new();
+    let mut inherited: HashMap<i64, BTreeSet<i64>> = HashMap::new();
+    let mut by_word = store.conn.prepare(
+        "SELECT symbol_id FROM occurrence WHERE word_id = ?1 AND source = 'name'
+         AND symbol_id IS NOT NULL",
+    )?;
+    let mut methods_of = store.conn.prepare(
+        "SELECT m.id FROM symbol m JOIN occurrence o ON o.symbol_id = m.parent_id
+         WHERE o.word_id = ?1 AND o.source = 'name' AND m.kind = 'method'
+           AND substr(m.name, 1, 2) != '__'",
+    )?;
+    for word in usable.iter().chain(&skeleton).flatten() {
+        for id in by_word.query_map([word], |r| r.get::<_, i64>(0))? {
+            own.entry(id?).or_default().insert(*word);
+        }
+        for id in methods_of.query_map([word], |r| r.get::<_, i64>(0))? {
+            inherited.entry(id?).or_default().insert(*word);
+        }
+    }
+    let graph_tests = |id: i64| -> Result<bool, CoreError> {
+        let (kind, is_test, path): (String, i64, String) = store.conn.query_row(
+            "SELECT s.kind, s.is_test, COALESCE(f.path, '') FROM symbol s
+             LEFT JOIN file f ON f.id = s.file_id WHERE s.id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        Ok(!matches!(kind.as_str(), "function" | "method")
+            || is_test != 0
+            || crate::index::is_test_file(&path))
+    };
+    let mut name_len = store
+        .conn
+        .prepare("SELECT COUNT(*) FROM occurrence WHERE symbol_id = ?1 AND source = 'name'")?;
+    let ids: BTreeSet<i64> = own.keys().chain(inherited.keys()).copied().collect();
+    let mut scored: Vec<(usize, usize, usize, i64, String, i64)> = Vec::new();
+    for id in ids {
+        if graph_tests(id)? {
+            continue;
+        }
+        let empty = BTreeSet::new();
+        let mine = own.get(&id).unwrap_or(&empty);
+        let all: BTreeSet<i64> = mine
+            .union(inherited.get(&id).unwrap_or(&empty))
+            .copied()
+            .collect();
+        let covered = usable.iter().filter(|g| !g.is_disjoint(&all)).count();
+        if covered < 2 {
+            continue;
+        }
+        let tie = skeleton.iter().filter(|g| !g.is_disjoint(&all)).count();
+        let own_covered = usable.iter().filter(|g| !g.is_disjoint(mine)).count();
+        let own_hits = usable
+            .iter()
+            .chain(&skeleton)
+            .filter(|g| !g.is_disjoint(mine))
+            .count() as i64;
+        let extra = name_len.query_row([id], |r| r.get::<_, i64>(0))? - own_hits;
+        let qname: String =
+            store
+                .conn
+                .query_row("SELECT qname FROM symbol WHERE id = ?1", [id], |r| r.get(0))?;
+        scored.push((covered, own_covered, tie, extra, qname, id));
+    }
+    scored.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| a.3.cmp(&b.3))
+            .then_with(|| a.4.cmp(&b.4))
+    });
+    let Some(&(best, best_own, ..)) = scored.first() else {
+        return Ok(Vec::new());
+    };
+    Ok(scored
+        .into_iter()
+        .filter(|s| s.0 == best && s.1 == best_own)
+        .take(MAX_ANCHORS)
+        .map(|(covered, _, _, _, _, id)| IntersectionAnchor {
+            id,
+            covered,
+            total: usable.len(),
+        })
+        .collect())
 }

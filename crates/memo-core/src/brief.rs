@@ -409,14 +409,35 @@ pub fn brief_full(
     changed: &[String],
 ) -> Result<Brief, CoreError> {
     let structural = crate::structural::resolve(store, request)?;
+    let tokens = expand_aliases(tokenize(&structural.remaining), notes);
+    // Sem símbolo explícito, a interseção das palavras escolhe até 3 âncoras (estratégia 5).
+    let has_symbol = structural.symbols.values().any(|k| *k == "simbolo");
+    let anchors_found = if has_symbol {
+        Vec::new()
+    } else {
+        crate::relevance::intersection_anchors(store, &tokens)?
+    };
+    let anchored: BTreeMap<i64, String> = anchors_found
+        .iter()
+        .map(|a| (a.id, format!("ancora {}/{}", a.covered, a.total)))
+        .collect();
+    let anchor_rank: BTreeMap<i64, usize> = anchors_found
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (a.id, i))
+        .collect();
     let mut relevant: BTreeMap<i64, crate::relevance::Relevant> = BTreeMap::new();
-    for (&id, kind) in &structural.symbols {
-        if *kind != "simbolo" {
-            continue;
-        }
+    let roots: Vec<i64> = structural
+        .symbols
+        .iter()
+        .filter(|(_, k)| **k == "simbolo")
+        .map(|(id, _)| *id)
+        .chain(anchored.keys().copied())
+        .collect();
+    for id in roots {
         for item in crate::relevance::relevant(store, id, strategy_weights)? {
             let rid = crate::query::target_id_of(store, &item.addr.qname)?;
-            if structural.symbols.contains_key(&rid) {
+            if structural.symbols.contains_key(&rid) || anchored.contains_key(&rid) {
                 continue;
             }
             match relevant.get(&rid) {
@@ -428,7 +449,6 @@ pub fn brief_full(
         }
     }
     let changed_ids = crate::structural::changed_ids(store, changed)?;
-    let tokens = expand_aliases(tokenize(&structural.remaining), notes);
     let matched = match_words(store, &tokens)?;
     let mut ignored: Vec<String> = Vec::new();
     let mut usable: Vec<&Candidate> = Vec::new();
@@ -460,7 +480,12 @@ pub fn brief_full(
 
     let mut scores: BTreeMap<i64, f64> = BTreeMap::new();
     let mut named = BTreeSet::new();
-    for id in structural.symbols.keys().chain(&changed_ids) {
+    for id in structural
+        .symbols
+        .keys()
+        .chain(&changed_ids)
+        .chain(anchored.keys())
+    {
         scores.insert(*id, 1.0);
     }
     for (id, item) in &relevant {
@@ -531,12 +556,14 @@ pub fn brief_full(
         }
     }
     let (mut first_production, mut first_tests) = rank_tier(store, first)?;
+    // Âncoras na ordem da interseção; o resto, na ordem da pontuação (ordenação estável).
     let priority = |id: i64| match structural.symbols.get(&id) {
-        Some(&"simbolo") => 0,
-        _ if relevant.contains_key(&id) => 1,
-        Some(_) => 2,
-        None if changed_ids.contains(&id) => 3,
-        None => 4,
+        Some(&"simbolo") => (0, 0),
+        _ if anchored.contains_key(&id) => (1, anchor_rank[&id]),
+        _ if relevant.contains_key(&id) => (2, 0),
+        Some(_) => (3, 0),
+        None if changed_ids.contains(&id) => (4, 0),
+        None => (5, 0),
     };
     for tier in [&mut first_production, &mut first_tests] {
         // Estável: dentro de cada grupo, a pontuação já ordenou (relevantes pela soma dos pesos).
@@ -589,6 +616,9 @@ pub fn brief_full(
             .collect();
         if let Some(tag) = structural.symbols.get(&id) {
             tags.insert(0, (*tag).to_string());
+        }
+        if let Some(tag) = anchored.get(&id) {
+            tags.insert(0, tag.clone());
         }
         if changed_ids.contains(&id) {
             tags.insert(0, "alterado".to_string());
@@ -653,6 +683,8 @@ fn brief_read_spots(
         carried.dedup();
         let motivo = if s.tags.iter().any(|t| t == "simbolo") {
             "simbolo explicito".to_string()
+        } else if s.tags.iter().any(|t| t.starts_with("ancora ")) {
+            "ancora do pedido".to_string()
         } else if s.tags.iter().any(|t| t.starts_with("relevante: ")) {
             "relevante ao simbolo".to_string()
         } else if s.tags.iter().any(|t| t == "arquivo") {

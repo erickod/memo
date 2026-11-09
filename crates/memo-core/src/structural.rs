@@ -12,6 +12,13 @@ pub(crate) struct Targets {
     pub remaining: String,
 }
 
+/// Só um token com forma de identificador (`a.b`, `snake_case`, `CamelCase`) vira identidade;
+/// uma palavra solta (`lock`, `summary`) continua sendo palavra, mesmo que algum símbolo do
+/// repositório tenha exatamente esse nome.
+fn is_identifier_shaped(token: &str) -> bool {
+    token.contains(['.', '_']) || token.chars().any(char::is_uppercase)
+}
+
 pub(crate) fn resolve(store: &SqliteStore, request: &str) -> Result<Targets, CoreError> {
     let mut targets = Targets::default();
     for raw in request.split_whitespace() {
@@ -46,7 +53,7 @@ pub(crate) fn resolve(store: &SqliteStore, request: &str) -> Result<Targets, Cor
                 }
                 continue;
             }
-        } else if !token.is_empty() {
+        } else if is_identifier_shaped(token) {
             match resolve_qname(store, token) {
                 Ok(qname) => {
                     // Bare words that merely name a module remain conceptual requests.
