@@ -712,17 +712,20 @@ fn resolve_variable(
         return mark(tx, raw, 2);
     };
     let ctx = resolver.file_ctx(file_id)?;
+    let write = raw.kind == "ESCREVE_VAR";
     let mut candidates = vec![format!("{}.{text}", ctx.module)];
-    for (local, target) in &ctx.imports {
-        if text == local {
-            candidates.push(target.clone());
+    // `global X` religa o nome do próprio módulo, nunca a variável de onde `X` foi importado.
+    if !write {
+        for (local, target) in &ctx.imports {
+            if text == local {
+                candidates.push(target.clone());
+            }
         }
     }
     for qname in candidates {
         if let Some((dst, kind)) = resolver.symbol(&qname)?
             && kind == "attribute"
         {
-            let write = raw.kind == "ESCREVE_VAR";
             insert_edge(
                 tx,
                 &NewEdge {
