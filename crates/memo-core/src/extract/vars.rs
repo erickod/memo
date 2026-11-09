@@ -196,104 +196,112 @@ fn visit(ctx: &mut Ctx, node: Node, w: &Walk) {
         // Alvos de `for` e de `with ... as` ligam o nome (D3 não os conta como escrita).
         "for_statement" => {
             let left = node.child_by_field_name("left");
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                if Some(child) == left {
-                    bind_target(ctx, child, w);
-                } else {
-                    visit(ctx, child, w);
-                }
-            }
+            visit_binding(ctx, node, w, |c| Some(c) == left);
         }
-        // Compreensão tem escopo próprio: o alvo do `for` oculta o nome dentro dela, e só o
-        // iterável é lido fora desse escopo.
+        "as_pattern" => visit_binding(ctx, node, w, |c| c.kind() == "as_pattern_target"),
         "list_comprehension"
         | "set_comprehension"
         | "dictionary_comprehension"
-        | "generator_expression" => {
-            let mut shadow = w.locals.clone();
-            let mut cursor = node.walk();
-            for clause in node.named_children(&mut cursor) {
-                if clause.kind() == "for_in_clause"
-                    && let Some(left) = clause.child_by_field_name("left")
-                {
-                    bound_identifiers(ctx, left, &mut shadow);
-                }
-            }
-            let inner = Walk {
-                locals: &shadow,
-                ..*w
-            };
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                if child.kind() == "for_in_clause" {
-                    if let Some(right) = child.child_by_field_name("right") {
-                        visit(ctx, right, w);
-                    }
-                } else {
-                    visit(ctx, child, &inner);
-                }
-            }
-        }
-        "as_pattern" => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                if child.kind() == "as_pattern_target" {
-                    bind_target(ctx, child, w);
-                } else {
-                    visit(ctx, child, w);
-                }
-            }
-        }
-        "assignment" | "augmented_assignment" => {
-            if let Some(left) = node.child_by_field_name("left") {
-                if left.kind() == "identifier" {
-                    let name = ctx.text(left).to_string();
-                    let writes = w.writes
-                        && ctx.var_names.contains(&name)
-                        && (!w.in_function || w.globals.contains(&name));
-                    if writes {
-                        push_ref(ctx, w.src, RefKind::EscreveVar, name, left);
-                    }
-                } else {
-                    bind_target(ctx, left, w);
-                }
-            }
-            if let Some(right) = node.child_by_field_name("right") {
-                visit(ctx, right, w);
-            }
-        }
-        // Fora de função, a classe é um escopo próprio: o corpo lê com a classe como origem e
-        // as atribuições dele definem atributos, não escrevem variáveis de módulo.
-        "class_definition" if !w.in_function => {
-            let name = node
-                .child_by_field_name("name")
-                .map(|n| ctx.text(n).to_string())
-                .unwrap_or_default();
-            if let Some(bases) = node.child_by_field_name("superclasses") {
-                visit_children(ctx, bases, w);
-            }
-            if let Some(body) = node.child_by_field_name("body") {
-                let qname = format!("{}.{name}", w.src);
-                let inner = Walk {
-                    src: &qname,
-                    writes: false,
-                    ..*w
-                };
-                visit_children(ctx, body, &inner);
-            }
-        }
-        // Fora de função só o que roda na definição: valores padrão. O corpo tem sua varredura.
-        "function_definition" if !w.in_function => {
-            if let Some(params) = node.child_by_field_name("parameters") {
-                let mut cursor = params.walk();
-                for p in params.named_children(&mut cursor) {
-                    if let Some(value) = p.child_by_field_name("value") {
-                        visit(ctx, value, w);
-                    }
-                }
-            }
-        }
+        | "generator_expression" => visit_comprehension(ctx, node, w),
+        "assignment" | "augmented_assignment" => visit_assignment(ctx, node, w),
+        "class_definition" if !w.in_function => visit_class(ctx, node, w),
+        "function_definition" if !w.in_function => visit_defaults(ctx, node, w),
         _ => visit_children(ctx, node, w),
+    }
+}
+
+/// Visita os filhos de `node`; o que `is_target` aponta liga nomes e não é lido.
+fn visit_binding(ctx: &mut Ctx, node: Node, w: &Walk, is_target: impl Fn(Node) -> bool) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if is_target(child) {
+            bind_target(ctx, child, w);
+        } else {
+            visit(ctx, child, w);
+        }
+    }
+}
+
+/// Compreensão tem escopo próprio: os alvos dos `for` ocultam o nome dentro dela. Só o iterável
+/// da primeira cláusula é lido fora desse escopo; os seguintes veem os alvos anteriores.
+fn visit_comprehension(ctx: &mut Ctx, node: Node, w: &Walk) {
+    let mut shadow = w.locals.clone();
+    let mut cursor = node.walk();
+    for clause in node.named_children(&mut cursor) {
+        if clause.kind() == "for_in_clause"
+            && let Some(left) = clause.child_by_field_name("left")
+        {
+            bound_identifiers(ctx, left, &mut shadow);
+        }
+    }
+    let inner = Walk {
+        locals: &shadow,
+        ..*w
+    };
+    let mut first_clause = true;
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() != "for_in_clause" {
+            visit(ctx, child, &inner);
+            continue;
+        }
+        if let Some(right) = child.child_by_field_name("right") {
+            let scope = if first_clause { w } else { &inner };
+            visit(ctx, right, scope);
+        }
+        first_clause = false;
+    }
+}
+
+fn visit_assignment(ctx: &mut Ctx, node: Node, w: &Walk) {
+    if let Some(left) = node.child_by_field_name("left") {
+        if left.kind() == "identifier" {
+            let name = ctx.text(left).to_string();
+            let writes = w.writes
+                && ctx.var_names.contains(&name)
+                && (!w.in_function || w.globals.contains(&name));
+            if writes {
+                push_ref(ctx, w.src, RefKind::EscreveVar, name, left);
+            }
+        } else {
+            bind_target(ctx, left, w);
+        }
+    }
+    if let Some(right) = node.child_by_field_name("right") {
+        visit(ctx, right, w);
+    }
+}
+
+/// Fora de função, a classe é um escopo próprio: o corpo lê com a classe como origem e as
+/// atribuições dele definem atributos, não escrevem variáveis de módulo.
+fn visit_class(ctx: &mut Ctx, node: Node, w: &Walk) {
+    let name = node
+        .child_by_field_name("name")
+        .map(|n| ctx.text(n).to_string())
+        .unwrap_or_default();
+    if let Some(bases) = node.child_by_field_name("superclasses") {
+        visit_children(ctx, bases, w);
+    }
+    if let Some(body) = node.child_by_field_name("body") {
+        let qname = format!("{}.{name}", w.src);
+        let inner = Walk {
+            src: &qname,
+            writes: false,
+            ..*w
+        };
+        visit_children(ctx, body, &inner);
+    }
+}
+
+/// Fora de função só roda na definição o valor padrão dos parâmetros; o corpo tem a própria
+/// varredura.
+fn visit_defaults(ctx: &mut Ctx, node: Node, w: &Walk) {
+    if let Some(params) = node.child_by_field_name("parameters") {
+        let mut cursor = params.walk();
+        for p in params.named_children(&mut cursor) {
+            if let Some(value) = p.child_by_field_name("value") {
+                visit(ctx, value, w);
+            }
+        }
     }
 }
