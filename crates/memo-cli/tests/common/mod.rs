@@ -3,10 +3,26 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// Roda `git` e repete até 2 vezes se o processo morrer por sinal: o ambiente já mandou SIGKILL
+/// a um `git add -A` sem motivo no repositório (TASK-10, §10). Código de saída diferente de 0 não
+/// é repetido.
+fn run_git(mut build: impl FnMut() -> Command) -> Output {
+    use std::os::unix::process::ExitStatusExt;
+    let mut out = build().output().unwrap();
+    for attempt in 1..=2 {
+        let Some(signal) = out.status.signal() else {
+            break;
+        };
+        eprintln!("git morto pelo sinal {signal}; repetindo ({attempt}/2)");
+        out = build().output().unwrap();
+    }
+    out
+}
 
 /// Cópia temporária e isolada da fixture, inicializada como repositório git.
 pub struct Repo {
@@ -43,12 +59,12 @@ impl Repo {
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures"),
             &root,
         );
-        let status = Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(&root)
-            .status()
-            .unwrap();
-        assert!(status.success());
+        let out = run_git(|| {
+            let mut c = Command::new("git");
+            c.args(["init", "-q"]).current_dir(&root);
+            c
+        });
+        assert!(out.status.success(), "git init ({})", out.status);
         Self { root }
     }
 
@@ -58,12 +74,12 @@ impl Repo {
         let root = std::env::temp_dir().join(format!("memo-test-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        let status = Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(&root)
-            .status()
-            .unwrap();
-        assert!(status.success());
+        let out = run_git(|| {
+            let mut c = Command::new("git");
+            c.args(["init", "-q"]).current_dir(&root);
+            c
+        });
+        assert!(out.status.success(), "git init ({})", out.status);
         Self { root }
     }
 
@@ -74,8 +90,9 @@ impl Repo {
     /// Commita tudo numa branch `main`, com identidade fixa.
     pub fn commit_all(&self) {
         let git = |args: &[&str]| {
-            let out = Command::new("git")
-                .args([
+            let out = run_git(|| {
+                let mut c = Command::new("git");
+                c.args([
                     "-c",
                     "user.name=t",
                     "-c",
@@ -86,9 +103,9 @@ impl Repo {
                 .args(args)
                 .env("GIT_AUTHOR_DATE", "2026-11-07T14:05:00Z")
                 .env("GIT_COMMITTER_DATE", "2026-11-07T14:05:00Z")
-                .current_dir(&self.root)
-                .output()
-                .unwrap();
+                .current_dir(&self.root);
+                c
+            });
             assert!(
                 out.status.success(),
                 "git {args:?} ({}): {}",
@@ -97,11 +114,13 @@ impl Repo {
             );
         };
         git(&["add", "-A"]);
-        let staged = Command::new("git")
-            .args(["diff", "--cached", "--quiet"])
-            .current_dir(&self.root)
-            .status()
-            .unwrap();
+        let staged = run_git(|| {
+            let mut c = Command::new("git");
+            c.args(["diff", "--cached", "--quiet"])
+                .current_dir(&self.root);
+            c
+        })
+        .status;
         if !staged.success() {
             git(&["commit", "-q", "-m", "init"]);
         }
