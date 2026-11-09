@@ -375,6 +375,10 @@ fn related(store: &SqliteStore, qname: &str, edge_kind: &str) -> Result<Vec<RelI
     Ok(items)
 }
 
+fn short_tail(qname: &str) -> String {
+    qname.rsplit('.').next().unwrap_or(qname).to_string()
+}
+
 /// Confidence precedes structural proximity; names and lines make ties reproducible.
 fn proximity(target: &SymbolAddr, other: &SymbolAddr) -> usize {
     if target.path == other.path {
@@ -694,6 +698,9 @@ pub struct TestsInfo {
     pub exact: Vec<RelItem>,
     /// Testes por chamada aproximada ou sobreposição de palavras.
     pub approx: Vec<RelItem>,
+    /// Testes que requisitam por HTTP um entrypoint que chega ao alvo por chamadas exatas;
+    /// `attr` traz a rota requisitada e o entrypoint.
+    pub via_http: Vec<RelItem>,
 }
 
 /// Um uso do nível por palavra do `impact`: o símbolo que o contém, a linha e o nível.
@@ -713,7 +720,7 @@ pub enum Origem {
     Tipo,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Impact {
     pub target: SymbolAddr,
     pub callers: Vec<ChainItem>,
@@ -726,6 +733,52 @@ pub struct Impact {
     pub notes: Vec<crate::notes::Note>,
     /// Itens omitidos por já terem sido entregues nesta task (spec §8.4).
     pub unchanged: Option<usize>,
+    /// Símbolos relevantes com o peso de cada estratégia (vizinhança, caminho, conexão, nome).
+    pub relevantes: Vec<crate::relevance::Relevant>,
+    /// Quanto o nome do alvo o distingue; nome genérico tira os `só nome` do texto.
+    pub nome: crate::relevance::NameStats,
+    /// Pesos usados nas estratégias.
+    pub pesos: StrategyWeightsView,
+    /// Testes escondidos pela flag padrão (a seção de testes inteira), por tipo de ligação.
+    pub testes_ocultos: HiddenTests,
+}
+
+/// Contagem dos testes escondidos do `impact`, para não parecer que não há teste.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct HiddenTests {
+    pub exatos: usize,
+    pub via_http: usize,
+    pub aproximados: usize,
+}
+
+impl HiddenTests {
+    pub fn total(&self) -> usize {
+        self.exatos + self.via_http + self.aproximados
+    }
+}
+
+/// Pesos das estratégias, como saem no JSON.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StrategyWeightsView {
+    pub vizinhanca: f64,
+    pub caminho: f64,
+    pub conexao: f64,
+    pub nome: f64,
+}
+
+impl From<&crate::config::StrategyWeights> for StrategyWeightsView {
+    fn from(w: &crate::config::StrategyWeights) -> Self {
+        Self {
+            vizinhanca: w.neighborhood,
+            caminho: w.path,
+            conexao: w.connectivity,
+            nome: w.name,
+        }
+    }
+}
+
+pub(crate) fn target_id_of(store: &SqliteStore, qname: &str) -> Result<i64, CoreError> {
+    target_id(store, qname)
 }
 
 fn target_id(store: &SqliteStore, qname: &str) -> Result<i64, CoreError> {
@@ -910,6 +963,7 @@ pub fn tests_for(store: &SqliteStore, target: &str) -> Result<TestsInfo, CoreErr
             });
         }
     }
+    info.via_http = http_tests(store, id)?;
     let target = addr_by_id(store, id)?;
     rank_relations(&mut info.exact, &target);
     // Calls inferred from a receiver remain stronger than a lexical overlap with no line.
@@ -922,6 +976,66 @@ pub fn tests_for(store: &SqliteStore, target: &str) -> Result<TestsInfo, CoreErr
             .then_with(|| a.line.cmp(&b.line))
     });
     Ok(info)
+}
+
+/// Testes que requisitam por HTTP o alvo ou um entrypoint que o chama por cadeia exata (até
+/// 6 saltos). Uma rota casada em mais de um endpoint fica `~`.
+fn http_tests(store: &SqliteStore, id: i64) -> Result<Vec<RelItem>, CoreError> {
+    let mut ancestors: BTreeMap<i64, usize> = BTreeMap::from([(id, 0)]);
+    let mut frontier = vec![id];
+    let mut stmt = store.conn.prepare(
+        "SELECT DISTINCT e.src FROM edge e JOIN symbol s ON s.id = e.src
+         WHERE e.dst = ?1 AND e.kind IN ('CHAMA', 'CRIA') AND e.approx = 0 AND s.is_test = 0",
+    )?;
+    for level in 1..=6 {
+        let mut next = Vec::new();
+        for node in frontier {
+            for src in stmt.query_map([node], |r| r.get::<_, i64>(0))? {
+                let src = src?;
+                if let std::collections::btree_map::Entry::Vacant(v) = ancestors.entry(src) {
+                    v.insert(level);
+                    next.push(src);
+                }
+            }
+        }
+        frontier = next;
+    }
+    let sql = format!(
+        "SELECT {ADDR_COLUMNS}, e.line, e.approx, e.attr, d.qname, COALESCE(df.path, '')
+         FROM edge e JOIN symbol s ON s.id = e.src LEFT JOIN file f ON f.id = s.file_id
+         JOIN symbol d ON d.id = e.dst LEFT JOIN file df ON df.id = d.file_id
+         WHERE e.kind = 'REQUISITA' AND e.dst = ?1 ORDER BY s.qname, e.line"
+    );
+    let mut stmt = store.conn.prepare(&sql)?;
+    let mut out: Vec<RelItem> = Vec::new();
+    for &entry in ancestors.keys() {
+        let rows = stmt.query_map([entry], |r| {
+            let mut item = RelItem {
+                addr: addr_from_row(r)?,
+                line: r.get(6)?,
+                approx: r.get::<_, i64>(7)? != 0,
+                attr: None,
+            };
+            let path: Option<String> = r.get(8)?;
+            let entry_short = short_name(&r.get::<_, String>(9)?, &r.get::<_, String>(10)?);
+            item.attr = Some(format!("{} -> {entry_short}", path.unwrap_or_default()));
+            Ok(item)
+        })?;
+        for row in rows {
+            let item = row?;
+            if item.addr.in_tests() {
+                out.push(item);
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        a.approx
+            .cmp(&b.approx)
+            .then_with(|| a.addr.qname.cmp(&b.addr.qname))
+            .then_with(|| a.line.cmp(&b.line))
+    });
+    out.dedup_by(|a, b| a.addr.qname == b.addr.qname && a.line == b.line);
+    Ok(out)
 }
 
 /// Contrapartida de Protocol: o método do Protocol que a classe implementa, ou as implementações
@@ -1323,6 +1437,15 @@ fn by_word(
 
 /// O que muda se o símbolo mudar: chamadores, consumidores do tipo, Protocol, testes.
 pub fn impact(store: &SqliteStore, target: &str) -> Result<Impact, CoreError> {
+    impact_with(store, target, &crate::config::StrategyWeights::default())
+}
+
+/// Como `impact`, com os pesos de estratégia do repositório (`[strategies]`).
+pub fn impact_with(
+    store: &SqliteStore,
+    target: &str,
+    weights: &crate::config::StrategyWeights,
+) -> Result<Impact, CoreError> {
     let qname = resolve_qname(store, target)?;
     let id = target_id(store, &qname)?;
     let addr = addr_of(store, &qname)?;
@@ -1352,6 +1475,10 @@ pub fn impact(store: &SqliteStore, target: &str) -> Result<Impact, CoreError> {
         tests: tests_for(store, &qname)?,
         notes: Vec::new(),
         unchanged: None,
+        relevantes: crate::relevance::relevant(store, id, weights)?,
+        nome: crate::relevance::name_stats(store, &short_tail(&qname))?,
+        pesos: weights.into(),
+        testes_ocultos: HiddenTests::default(),
         target: addr,
     })
 }

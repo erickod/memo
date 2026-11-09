@@ -710,6 +710,8 @@ fn resolve_ref(
         "ESCREVE_ATTR" | "INICIALIZA" | "SQL_UPDATE" | "SQL_INSERT" => {
             resolve_attr_write(tx, resolver, file_id, raw)?;
         }
+        // Resolvidas numa passada global (`resolve_requests`): a rota pode estar em outro arquivo.
+        "REQUISITA" => {}
         "LE_ATTR" => resolve_attr_read(tx, resolver, file_id, raw)?,
         "ESCREVE" | "LE" => {
             let class_id: Option<i64> = tx.query_row(
@@ -767,4 +769,67 @@ fn resolve_ref(
         }
     }
     Ok(())
+}
+
+/// Refaz todas as arestas `REQUISITA`: cada requisição HTTP literal liga ao endpoint cuja rota
+/// casa (método e caminho, `{}` casa um segmento). Uma só rota → exata; várias → `~` em cada.
+/// Global porque uma rota nova num arquivo muda o destino de requisições em outros arquivos.
+pub fn resolve_requests(tx: &Transaction) -> Result<(), CoreError> {
+    tx.execute("DELETE FROM edge WHERE kind = 'REQUISITA'", [])?;
+    let routes: Vec<(i64, String, String)> = tx
+        .prepare("SELECT id, route FROM symbol WHERE route IS NOT NULL ORDER BY id")?
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .filter_map(|row| {
+            row.map(|(id, route)| {
+                route
+                    .split_once(' ')
+                    .map(|(m, p)| (id, m.to_string(), p.to_string()))
+            })
+            .transpose()
+        })
+        .collect::<Result<_, _>>()?;
+    let requests: Vec<(i64, i64, String, Option<String>, i64)> = tx
+        .prepare(
+            "SELECT rowid, src, callee_text, receiver, line FROM raw_ref
+             WHERE kind = 'REQUISITA' ORDER BY rowid",
+        )?
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    for (rowid, src, path, method, line) in requests {
+        let matches: Vec<i64> = routes
+            .iter()
+            .filter(|(_, m, p)| method.as_deref() == Some(m.as_str()) && path_matches(p, &path))
+            .map(|(id, _, _)| *id)
+            .collect();
+        for &dst in &matches {
+            let edge = NewEdge {
+                kind: "REQUISITA",
+                src,
+                dst: Some(dst),
+                dst_text: None,
+                line,
+                attr: Some(&path),
+                pos: None,
+                approx: matches.len() > 1,
+            };
+            insert_edge(tx, &edge)?;
+        }
+        let state = if matches.is_empty() { 2 } else { 1 };
+        tx.execute(
+            "UPDATE raw_ref SET resolved = ?1 WHERE rowid = ?2",
+            params![state, rowid],
+        )?;
+    }
+    Ok(())
+}
+
+/// Rota e requisição normalizadas casam segmento a segmento; `{}` em qualquer lado casa tudo.
+fn path_matches(route: &str, request: &str) -> bool {
+    let (a, b): (Vec<&str>, Vec<&str>) = (route.split('/').collect(), request.split('/').collect());
+    a.len() == b.len()
+        && a.iter()
+            .zip(&b)
+            .all(|(x, y)| x == y || *x == "{}" || *y == "{}")
 }

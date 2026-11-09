@@ -3,6 +3,10 @@ source: crates/memo-cli/tests/query.rs
 expression: stdout(&out)
 ---
 impact SqlLimitRepository.save  idx=ok
+nome: save · 2 definições · 1/1 usos resolvidos
+pesos: vizinhança 1.00 · caminho 1.00 · conexão 0.50 · nome 0.25
+relevantes:
+  M LimitRepository.save   app/billing/domain/protocols/limit_repository.py:L5-L5 nome [nome 0.25] 0.25
 chamadores:
   M CalculateLimitUseCase.execute   app/billing/application/usecases/calculate_limit_usecase.py:L8-L13  d1 ~ :L12
   M CheckoutUseCase.execute   app/billing/application/usecases/checkout_usecase.py:L8-L9  d2 ~ :L9
@@ -12,9 +16,6 @@ protocolo:
   M LimitRepository.save   app/billing/domain/protocols/limit_repository.py:L5-L5 ~
 por palavra:
   nenhum
-testes exatos:
-  nenhum
-testes ~:
-  nenhum
+testes ocultos: 0 exatos · 0 via HTTP · 1 ~ (--tests mostra)
 notas: nenhuma
 cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro, 2 testes ocultos

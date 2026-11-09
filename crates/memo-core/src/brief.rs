@@ -1,6 +1,6 @@
 //! `brief`: âncoras, símbolos, contorno, padrão, escritores e notas para um pedido (spec §8.5).
 
-use crate::config::BridgeWeights;
+use crate::config::{BridgeWeights, StrategyWeights};
 use crate::delta::filter_new;
 use crate::error::CoreError;
 use crate::notes::{Note, notes_for};
@@ -388,7 +388,45 @@ pub fn brief_with_changes(
     weights: &BridgeWeights,
     changed: &[String],
 ) -> Result<Brief, CoreError> {
+    brief_full(
+        store,
+        request,
+        notes,
+        weights,
+        &StrategyWeights::default(),
+        changed,
+    )
+}
+
+/// Como `brief_with_changes`; os relevantes de cada símbolo explícito entram logo depois dele,
+/// com o peso de cada estratégia na etiqueta (`relevante: vizinhanca 1.00 · conexao 0.50`).
+pub fn brief_full(
+    store: &SqliteStore,
+    request: &str,
+    notes: &[Note],
+    weights: &BridgeWeights,
+    strategy_weights: &StrategyWeights,
+    changed: &[String],
+) -> Result<Brief, CoreError> {
     let structural = crate::structural::resolve(store, request)?;
+    let mut relevant: BTreeMap<i64, crate::relevance::Relevant> = BTreeMap::new();
+    for (&id, kind) in &structural.symbols {
+        if *kind != "simbolo" {
+            continue;
+        }
+        for item in crate::relevance::relevant(store, id, strategy_weights)? {
+            let rid = crate::query::target_id_of(store, &item.addr.qname)?;
+            if structural.symbols.contains_key(&rid) {
+                continue;
+            }
+            match relevant.get(&rid) {
+                Some(kept) if kept.score >= item.score => {}
+                _ => {
+                    relevant.insert(rid, item);
+                }
+            }
+        }
+    }
     let changed_ids = crate::structural::changed_ids(store, changed)?;
     let tokens = expand_aliases(tokenize(&structural.remaining), notes);
     let matched = match_words(store, &tokens)?;
@@ -424,6 +462,10 @@ pub fn brief_with_changes(
     let mut named = BTreeSet::new();
     for id in structural.symbols.keys().chain(&changed_ids) {
         scores.insert(*id, 1.0);
+    }
+    for (id, item) in &relevant {
+        let entry = scores.entry(*id).or_insert(0.0);
+        *entry = entry.max(item.score);
     }
     for c in &usable {
         let mut stmt = store.conn.prepare(
@@ -491,11 +533,13 @@ pub fn brief_with_changes(
     let (mut first_production, mut first_tests) = rank_tier(store, first)?;
     let priority = |id: i64| match structural.symbols.get(&id) {
         Some(&"simbolo") => 0,
-        Some(_) => 1,
-        None if changed_ids.contains(&id) => 2,
-        None => 3,
+        _ if relevant.contains_key(&id) => 1,
+        Some(_) => 2,
+        None if changed_ids.contains(&id) => 3,
+        None => 4,
     };
     for tier in [&mut first_production, &mut first_tests] {
+        // Estável: dentro de cada grupo, a pontuação já ordenou (relevantes pela soma dos pesos).
         tier.sort_by_key(|r| (priority(r.0), !named.contains(&r.0), r.2.kind == "module"));
     }
     let (second_production, second_tests) = rank_tier(store, second)?;
@@ -549,6 +593,14 @@ pub fn brief_with_changes(
         if changed_ids.contains(&id) {
             tags.insert(0, "alterado".to_string());
         }
+        if let Some(item) = relevant.get(&id) {
+            let weights: Vec<String> = item
+                .strategies
+                .iter()
+                .map(|w| format!("{} {:.2}", w.strategy, w.weight))
+                .collect();
+            tags.insert(0, format!("relevante: {}", weights.join(" · ")));
+        }
         let in_tests = addr.in_tests();
         tagged.push(ScoredSymbol {
             addr,
@@ -601,6 +653,8 @@ fn brief_read_spots(
         carried.dedup();
         let motivo = if s.tags.iter().any(|t| t == "simbolo") {
             "simbolo explicito".to_string()
+        } else if s.tags.iter().any(|t| t.starts_with("relevante: ")) {
+            "relevante ao simbolo".to_string()
         } else if s.tags.iter().any(|t| t == "arquivo") {
             "arquivo explicito".to_string()
         } else if s.tags.iter().any(|t| t == "alterado") {

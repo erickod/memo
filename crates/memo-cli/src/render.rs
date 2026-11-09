@@ -433,7 +433,43 @@ fn tests_sections(tests: &TestsInfo, items: &mut Vec<String>, all: bool) {
         grouped(rel_items(&tests.exact), all),
         items,
     );
+    section(
+        "testes via HTTP",
+        grouped(rel_items(&tests.via_http), all),
+        items,
+    );
     section("testes ~", grouped(rel_items(&tests.approx), all), items);
+}
+
+fn strategy_label(name: &str) -> &str {
+    match name {
+        "vizinhanca" => "viz",
+        "caminho" => "cam",
+        "conexao" => "con",
+        other => other,
+    }
+}
+
+/// `  F nome   caminho:Lx-Ly d1 chamador entrada GET /x [viz 1.00 · cam 1.00] 2.00`.
+fn relevant_item(r: &memo_core::relevance::Relevant) -> String {
+    let depth = r.depth.map(|d| format!(" d{d}")).unwrap_or_default();
+    let entry = match (&r.route, r.entrypoint) {
+        (Some(route), _) => format!(" entrada {route}"),
+        (None, true) => " entrada".to_string(),
+        _ => String::new(),
+    };
+    let weights: Vec<String> = r
+        .strategies
+        .iter()
+        .map(|w| format!("{} {:.2}", strategy_label(w.strategy), w.weight))
+        .collect();
+    format!(
+        "{}{depth} {}{entry} [{}] {:.2}",
+        item(&r.addr),
+        r.direction,
+        weights.join(" · "),
+        r.score
+    )
 }
 
 pub fn tests_text(
@@ -459,8 +495,25 @@ pub fn impact_text(
     limit: Option<usize>,
     all: bool,
 ) -> String {
-    let head = vec![format!("impact {}  idx={idx}", info.target.short)];
+    let mut head = vec![format!("impact {}  idx={idx}", info.target.short)];
+    let n = &info.nome;
+    let generic = if n.generic { " · genérico" } else { "" };
+    head.push(format!(
+        "nome: {} · {} definições · {}/{} usos resolvidos{generic}",
+        n.name, n.definitions, n.resolved, n.uses
+    ));
+    let w = &info.pesos;
+    head.push(format!(
+        "pesos: vizinhança {:.2} · caminho {:.2} · conexão {:.2} · nome {:.2}",
+        w.vizinhanca, w.caminho, w.conexao, w.nome
+    ));
     let mut items = Vec::new();
+    let relevant = info
+        .relevantes
+        .iter()
+        .map(|r| (relevant_item(r), module_of_addr(&r.addr)))
+        .collect();
+    section("relevantes", grouped(relevant, all), &mut items);
     section(
         "chamadores",
         grouped(chain_items(&info.callers), all),
@@ -476,13 +529,32 @@ pub fn impact_text(
         grouped(rel_items(&info.protocol), all),
         &mut items,
     );
-    let by_word = info
+    // Nome genérico: os usos `só nome` não distinguem o alvo; ficam como contagem, salvo `--all`.
+    let hide_name_only = n.generic && !all;
+    let by_word: Vec<(String, String)> = info
         .by_word
         .iter()
+        .filter(|b| !(hide_name_only && b.nivel == Evidence::SoNome))
         .map(|b| (by_word_item(b), module_of_addr(&b.item.addr)))
         .collect();
-    section("por palavra", grouped(by_word, all), &mut items);
-    tests_sections(&info.tests, &mut items, all);
+    let omitted = info.by_word.len() - by_word.len();
+    let mut by_word = grouped(by_word, all);
+    if omitted > 0 {
+        by_word.push(format!(
+            "  +{omitted} só nome omitidos: nome genérico ({}, {} definições); --all lista",
+            n.name, n.definitions
+        ));
+    }
+    section("por palavra", by_word, &mut items);
+    let hidden = &info.testes_ocultos;
+    if hidden.total() > 0 {
+        items.push(format!(
+            "testes ocultos: {} exatos · {} via HTTP · {} ~ (--tests mostra)",
+            hidden.exatos, hidden.via_http, hidden.aproximados
+        ));
+    } else {
+        tests_sections(&info.tests, &mut items, all);
+    }
     let mut tail = notes_lines(&info.notes);
     tail.extend(unchanged_line(info.unchanged));
     tail.push(coverage_line(cov));

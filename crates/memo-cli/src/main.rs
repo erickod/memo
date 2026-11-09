@@ -6,15 +6,16 @@ mod workspace;
 
 use clap::{Parser, Subcommand};
 use memo_core::aliases::suggest as suggest_aliases;
-use memo_core::brief::{apply_delta, brief_with_changes};
+use memo_core::brief::{apply_delta, brief_full};
 use memo_core::delta::apply_impact_delta;
 use memo_core::error::CoreError;
 use memo_core::hide;
 use memo_core::notes::{NewNote, NoteDir, format_utc, is_generic_anchor, notes_for};
 use memo_core::query::{
-    callees, callers, composite_word, coverage, impact, readers, symbol_info, tests_for, type_info,
-    word_info, word_parts, writers,
+    callees, callers, composite_word, coverage, impact_with, readers, symbol_info, tests_for,
+    type_info, word_info, word_parts, writers,
 };
+use memo_core::relevance::resolve_targets;
 use memo_core::store::SqliteStore;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -239,6 +240,33 @@ fn count(hidden: usize) -> i64 {
     i64::try_from(hidden).unwrap_or(i64::MAX)
 }
 
+/// Roda `one` para o alvo; um nome ambíguo cujas candidatas se ligam por chamada exata vira um
+/// grupo, e cada membro sai em sequência, de quem chama para quem é chamado.
+fn per_target(
+    store: &SqliteStore,
+    target: &str,
+    mut one: impl FnMut(&str) -> Result<(serde_json::Value, String), Failure>,
+) -> Result<(serde_json::Value, String), Failure> {
+    let targets = resolve_targets(store, target)?;
+    if let [only] = targets.as_slice() {
+        return one(only);
+    }
+    let mut text = format!(
+        "grupo: {} (ligadas por chamada exata)\n",
+        targets.join(" -> ")
+    );
+    let mut results = Vec::new();
+    for qname in &targets {
+        let (data, part) = one(qname)?;
+        results.push(data);
+        text.push_str(&part);
+    }
+    Ok((
+        serde_json::json!({ "grupo": targets, "resultados": results }),
+        text,
+    ))
+}
+
 fn json_value<T: serde::Serialize>(value: &T) -> Result<serde_json::Value, Failure> {
     serde_json::to_value(value).map_err(|e| Failure::Internal(e.to_string()))
 }
@@ -349,7 +377,14 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         Cmd::Note { cmd } => return run_note(cli, cmd, &store, &notes_dir, &cov),
         Cmd::Brief { request } => {
             let visible = notes_dir.visible(cli.task.as_deref())?;
-            let mut b = brief_with_changes(&store, request, &visible, &config.bridges, &changed)?;
+            let mut b = brief_full(
+                &store,
+                request,
+                &visible,
+                &config.bridges,
+                &config.strategies,
+                &changed,
+            )?;
             if let Some(task) = &delta_task {
                 apply_delta(&store, task, &mut b, cli.full)?;
             }
@@ -361,27 +396,21 @@ fn run(cli: &Cli) -> Result<String, Failure> {
         }
     };
     let (cmd, data, text) = match kind {
-        Query::Symbol { target } => match symbol_info(&store, target) {
-            Ok(mut info) => {
+        Query::Symbol { target } => {
+            let (data, text) = per_target(&store, target, |qname| {
+                let mut info = symbol_info(&store, qname)?;
                 let visible = notes_dir.visible(cli.task.as_deref())?;
                 info.notes = notes_for(&visible, &[info.addr.qname.clone()], &[], &[]);
                 if !cli.tests {
-                    cov.testes_ocultos = count(hide::symbol(&mut info));
+                    cov.testes_ocultos += count(hide::symbol(&mut info));
                 }
-                (
-                    "query symbol",
+                Ok((
                     json_value(&info)?,
                     render::symbol_text(&info, "ok", &cov, max, limit, cli.all),
-                )
-            }
-            Err(CoreError::Ambiguous { target, candidates }) => {
-                return Err(Failure::NotFound(render::ambiguous_text(
-                    &target,
-                    &candidates,
-                )));
-            }
-            Err(e) => return Err(e.into()),
-        },
+                ))
+            })?;
+            ("query symbol", data, text)
+        }
         Query::Word { word } if word_parts(word, &config).len() > 1 => {
             let parts = word_parts(word, &config);
             let mut info = composite_word(&store, word, &parts)?;
@@ -432,42 +461,48 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             )
         }
         Query::Callers { target, depth } => {
-            let mut chain = callers(&store, target, *depth)?;
-            if !cli.tests {
-                cov.testes_ocultos = count(hide::chain(&mut chain));
-            }
-            (
-                "query callers",
-                json_value(&chain)?,
-                render::chain_text("callers", &chain, "ok", &cov, max, limit, cli.all),
-            )
+            let (data, text) = per_target(&store, target, |qname| {
+                let mut chain = callers(&store, qname, *depth)?;
+                if !cli.tests {
+                    cov.testes_ocultos += count(hide::chain(&mut chain));
+                }
+                Ok((
+                    json_value(&chain)?,
+                    render::chain_text("callers", &chain, "ok", &cov, max, limit, cli.all),
+                ))
+            })?;
+            ("query callers", data, text)
         }
         Query::Callees { target, depth } => {
-            let mut chain = callees(&store, target, *depth)?;
-            if !cli.tests {
-                cov.testes_ocultos = count(hide::chain(&mut chain));
-            }
-            (
-                "query callees",
-                json_value(&chain)?,
-                render::chain_text("callees", &chain, "ok", &cov, max, limit, cli.all),
-            )
+            let (data, text) = per_target(&store, target, |qname| {
+                let mut chain = callees(&store, qname, *depth)?;
+                if !cli.tests {
+                    cov.testes_ocultos += count(hide::chain(&mut chain));
+                }
+                Ok((
+                    json_value(&chain)?,
+                    render::chain_text("callees", &chain, "ok", &cov, max, limit, cli.all),
+                ))
+            })?;
+            ("query callees", data, text)
         }
         Query::Impact { target } => {
-            let mut info = impact(&store, target)?;
-            let visible = notes_dir.visible(cli.task.as_deref())?;
-            info.notes = notes_for(&visible, &[info.target.qname.clone()], &[], &[]);
-            if !cli.tests {
-                cov.testes_ocultos = count(hide::impact(&mut info));
-            }
-            if let Some(task) = &delta_task {
-                apply_impact_delta(&store, task, &mut info, cli.full)?;
-            }
-            (
-                "query impact",
-                json_value(&info)?,
-                render::impact_text(&info, "ok", &cov, max, limit, cli.all),
-            )
+            let (data, text) = per_target(&store, target, |qname| {
+                let mut info = impact_with(&store, qname, &config.strategies)?;
+                let visible = notes_dir.visible(cli.task.as_deref())?;
+                info.notes = notes_for(&visible, &[info.target.qname.clone()], &[], &[]);
+                if !cli.tests {
+                    cov.testes_ocultos += count(hide::impact(&mut info));
+                }
+                if let Some(task) = &delta_task {
+                    apply_impact_delta(&store, task, &mut info, cli.full)?;
+                }
+                Ok((
+                    json_value(&info)?,
+                    render::impact_text(&info, "ok", &cov, max, limit, cli.all),
+                ))
+            })?;
+            ("query impact", data, text)
         }
         Query::Tests { target } => {
             if cli.no_tests {
@@ -475,13 +510,15 @@ fn run(cli: &Cli) -> Result<String, Failure> {
                     "--no-tests contradicts `query tests`, which lists tests".to_string(),
                 ));
             }
-            let tests = tests_for(&store, target)?;
-            let addr = symbol_info(&store, target)?.addr;
-            (
-                "query tests",
-                json_value(&tests)?,
-                render::tests_text(&addr, &tests, "ok", &cov, max, limit, cli.all),
-            )
+            let (data, text) = per_target(&store, target, |qname| {
+                let tests = tests_for(&store, qname)?;
+                let addr = symbol_info(&store, qname)?.addr;
+                Ok((
+                    json_value(&tests)?,
+                    render::tests_text(&addr, &tests, "ok", &cov, max, limit, cli.all),
+                ))
+            })?;
+            ("query tests", data, text)
         }
         Query::Aliases => {
             let glossary = notes_dir.visible(cli.task.as_deref())?;

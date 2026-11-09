@@ -111,6 +111,21 @@ A prioridade é símbolo explícito → arquivo explícito → mudanças da feat
 
 Os trechos `ler:` seguem a prioridade dos símbolos, evitam sobreposição e usam janelas de 20 linhas em símbolos grandes. Quando uma janela corta uma instrução ou bloco curto, ela pode crescer até 40 linhas para completá-lo, sempre dentro do símbolo. Isso não é uma análise de fluxo de dados. Para investigar estados, `readers Enum.VALOR` complementa `readers Classe.atributo`.
 
+**Relevância em torno de um alvo explícito (`impact` e `brief`).** A seção `relevantes:` reúne quatro estratégias e mostra o peso de cada uma por item, além da soma usada na ordem (`[viz 1.00 · cam 1.00 · con 0.25] 2.25`):
+
+| Estratégia | O que conta | Peso padrão |
+| --- | --- | --- |
+| `vizinhanca` | chamada exata até 2 saltos na mesma direção (chamador do chamador, chamado do chamado); o 2º salto vale metade | 1,0 |
+| `caminho` | está num caminho de chamadas exatas de um entrypoint até o alvo | 1,0 |
+| `conexao` | fração das ligações exatas do candidato que tocam a região do alvo (um hub fica perto de 0); só pontua, não acrescenta candidatos | 0,5 |
+| `nome` | uso com o nome exato do alvo sem chamada resolvida, e homônimos; só quando o nome não é genérico | 0,25 |
+
+Um nome é **genérico** quando tem pelo menos tantas definições quanto o P99 do repositório (piso 4), ou muitos usos (P99, piso 10) com menos da metade resolvida para ele. A linha `nome:` mostra definições e usos resolvidos; com nome genérico, os itens `só nome` de `por palavra` viram uma contagem (`--all` lista). Os pesos vêm de `[strategies]` no `memo.toml` e só ordenam a resposta.
+
+**Entrypoints e testes por HTTP.** Uma função com decorador `x.get/post/put/patch/delete/head/options("/caminho")` e caminho literal vira entrypoint com rota (`GET /items/{}`); decoradores listados em `entrypoint_decorators` (ex.: `shared_task`) também marcam entrypoint, sem rota. Chamadas `cliente.get("/caminho")` com caminho literal (f-string incluída) ligam o chamador ao endpoint cuja rota casa por método e caminho (`{}` casa um segmento; rota casada por mais de um endpoint fica `~`). `query tests` e `impact` mostram `testes via HTTP:` para testes que chegam ao alvo por um endpoint e cadeia de chamadas exatas. No `impact`, os testes ocultos por padrão aparecem como contagem por tipo (`testes ocultos: 0 exatos · 9 via HTTP · 194 ~`).
+
+**Homônimos ligados viram grupo.** Um nome ambíguo cujas candidatas (fora de testes) se chamam diretamente por chamada exata, como resource → service, deixa de ser erro: `symbol`, `callers`, `callees`, `impact`, `tests` e `brief` respondem para o grupo, de quem chama para quem é chamado (`grupo: api.x -> svc.x`). Sem essa ligação, continua ambíguo (exit 2).
+
 `memo query aliases` sugere pares que provavelmente são o mesmo conceito (`cancel`/`canceled`, ou palavras com vizinhança parecida), cada um com o `memo note add --tipo glossario ... --alias ...` pronto. Só lê; quem decide é você.
 
 ### Códigos de saída
@@ -190,10 +205,11 @@ O protocolo foi escrito sem teste contra clientes reais (Claude Code, Codex). Co
 | `min_coherence` | aceito por compatibilidade, sem efeito: não decide mais o `esqueleto` (padrão 0,30) |
 | `context_root`, `layers` | `app/<contexto>/<camada>`: o segmento após a raiz é o contexto, e a camada é um dos `layers`. `context_root` aceita um prefixo de caminho, como `backend/easy_lease` |
 | `[bridges]` | pesos das pontes entre palavras: `symbol`, `test`, `import`, `import_external`, `call`, `file`, `context` e `approximate` (padrões 1,0 · 0,8 · 0,6 · 0,3 · 0,5 · 0,3 · 0,1 · 0,5) |
+| `[strategies]` | pesos da relevância em torno de um alvo: `neighborhood`, `path`, `connectivity`, `name` (padrões 1,0 · 1,0 · 0,5 · 0,25); só ordenam, não reindexam |
 
-Mudar uma chave que molda o índice (`skeleton`, `context_root`, `layers`, `verbs`, `roles`, `write_methods` e `[bridges]`) reindexa tudo no próximo comando; as demais não alteram o que o índice grava. `memo index --full` força a reextração.
+Mudar uma chave que molda o índice (`skeleton`, `context_root`, `layers`, `verbs`, `roles`, `write_methods`, `entrypoint_decorators` e `[bridges]`) reindexa tudo no próximo comando; as demais não alteram o que o índice grava. `memo index --full` força a reextração.
 
-**Atualização de versão:** o banco do `memo` é derivado. Quando o esquema muda (`schema_version`), o primeiro comando depois da atualização descarta o banco e reindexa tudo. As notas (`.md`) não são tocadas. Do mesmo modo, mudar no `memo.toml` o `skeleton`, `context_root`, `layers`, `verbs`, `roles`, `write_methods` ou os pesos de `[bridges]` faz o próximo comando reindexar tudo (as notas não mudam); `min_specificity` e `min_coherence` não têm mais efeito.
+**Atualização de versão:** o banco do `memo` é derivado. Quando o esquema muda (`schema_version`), o primeiro comando depois da atualização descarta o banco e reindexa tudo. As notas (`.md`) não são tocadas. Do mesmo modo, mudar no `memo.toml` o `skeleton`, `context_root`, `layers`, `verbs`, `roles`, `write_methods`, `entrypoint_decorators` ou os pesos de `[bridges]` faz o próximo comando reindexar tudo (as notas não mudam); `min_specificity` e `min_coherence` não têm mais efeito.
 
 Variáveis de ambiente: `MEMO_TASK` (equivale a `--task`) e `MEMO_LOCK_TIMEOUT_MS` (espera pelo lock do banco, padrão 30000).
 

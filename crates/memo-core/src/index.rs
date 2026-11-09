@@ -4,7 +4,7 @@ use crate::config::Config;
 use crate::error::CoreError;
 use crate::events::{Delta, EventSummary};
 use crate::extract::{FileFacts, SymbolKind, extract_python_file};
-use crate::resolve::resolve_files;
+use crate::resolve::{resolve_files, resolve_requests};
 use crate::source::{SourceFile, SourceTree};
 use crate::sources::{doc_words, import_words, path_words, use_words};
 use crate::store::SqliteStore;
@@ -323,6 +323,21 @@ fn insert_symbols(
             )?;
         }
     }
+    for entry in &facts.entries {
+        if let Some(&id) = ids.get(entry.src_qname.as_str()) {
+            let declared = entry.decorators.iter().any(|d| {
+                config
+                    .entrypoint_decorators
+                    .iter()
+                    .any(|e| d == e || d.ends_with(&format!(".{e}")))
+            });
+            let is_entrypoint = entry.route.is_some() || declared;
+            tx.execute(
+                "UPDATE symbol SET route = ?1, is_entrypoint = ?2 WHERE id = ?3",
+                params![entry.route, is_entrypoint, id],
+            )?;
+        }
+    }
     for region in &facts.regions {
         if let Some(id) = ids.get(region.src_qname.as_str()) {
             tx.execute(
@@ -590,6 +605,7 @@ fn run_index(
     rebuild_import_words(&tx, config)?;
     rebuild_doc_words(&tx, config)?;
     resolve_files(&tx, &to_resolve, &config.write_methods)?;
+    resolve_requests(&tx)?;
     crate::stats::recompute(&tx, config)?;
     let after = crate::events::snapshot(&tx)?;
     let mut diff = crate::events::diff(&before, &after);

@@ -49,9 +49,15 @@ pub fn symbol(s: &mut SymbolInfo) -> usize {
 
 /// Esconde os chamadores e consumidores que são teste e a seção de testes inteira.
 pub fn impact(i: &mut Impact) -> usize {
-    let tests = i.tests.exact.len() + i.tests.approx.len();
+    i.testes_ocultos = crate::query::HiddenTests {
+        exatos: i.tests.exact.len(),
+        via_http: i.tests.via_http.len(),
+        aproximados: i.tests.approx.len(),
+    };
+    let tests = i.testes_ocultos.total();
     i.tests.exact.clear();
     i.tests.approx.clear();
+    i.tests.via_http.clear();
     tests
         + drop_where(&mut i.callers, |c| {
             c.addr.as_ref().is_some_and(|a| a.in_tests())
