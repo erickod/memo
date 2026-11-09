@@ -21,29 +21,37 @@ pub(super) fn scope_parts<'t>(def: Node<'t>, outer: Node<'t>) -> Vec<Node<'t>> {
     parts
 }
 
-/// Nomes e comentários das partes dadas, sem entrar em definições aninhadas (escopos próprios)
-/// nem em imports (já têm fonte própria), e a docstring do corpo. Literais de string ficam fora.
-pub(super) fn record_scope(ctx: &mut Ctx, qname: &str, parts: &[Node], body: Node) {
-    fn walk(ctx: &Ctx, node: Node, out: &mut Vec<String>) {
+/// Nomes e comentários das partes dadas, sem entrar em imports (já têm fonte própria), e a
+/// docstring do corpo. Literais de string ficam fora. `nested_are_symbols`: no módulo e no corpo
+/// de classe as definições aninhadas são símbolos com escopo próprio e ficam de fora; numa função
+/// elas não são símbolos, então as palavras delas pertencem à função.
+pub(super) fn record_scope(
+    ctx: &mut Ctx,
+    qname: &str,
+    parts: &[Node],
+    body: Node,
+    nested_are_symbols: bool,
+) {
+    fn walk(ctx: &Ctx, node: Node, out: &mut Vec<String>, nested_are_symbols: bool) {
         match node.kind() {
-            "function_definition"
-            | "class_definition"
-            | "decorated_definition"
-            | "import_statement"
-            | "import_from_statement"
-            | "future_import_statement" => return,
+            "function_definition" | "class_definition" | "decorated_definition"
+                if nested_are_symbols =>
+            {
+                return;
+            }
+            "import_statement" | "import_from_statement" | "future_import_statement" => return,
             "identifier" => out.push(ctx.text(node).to_string()),
             "comment" => out.push(ctx.text(node).trim_start_matches('#').to_string()),
             _ => {}
         }
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            walk(ctx, child, out);
+            walk(ctx, child, out, nested_are_symbols);
         }
     }
     let mut out = Vec::new();
     for part in parts {
-        walk(ctx, *part, &mut out);
+        walk(ctx, *part, &mut out, nested_are_symbols);
     }
     if let Some(doc) = docstring_text(ctx, body) {
         out.push(doc);

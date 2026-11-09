@@ -230,7 +230,7 @@ pub fn extract_python_file(
     });
     collect_imports(&mut ctx, root, module, is_package, false);
     collect_var_names(&mut ctx, root);
-    record_scope(&mut ctx, module, &[root], root);
+    record_scope(&mut ctx, module, &[root], root, true);
     visit_block(&mut ctx, root, module, false);
     module_var_effects(&mut ctx, root, module);
     Ok(ctx.facts)
@@ -449,7 +449,7 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
     );
     if let Some(b) = body {
         let parts = scope::scope_parts(def, outer);
-        record_scope(ctx, &qname, &parts, b);
+        record_scope(ctx, &qname, &parts, b, true);
         if is_enum {
             // Antes do corpo: a primeira definição do `qname` vence e só o membro leva o valor.
             enum_members(ctx, b, &qname);
@@ -617,7 +617,7 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
             self_attributes(ctx, b, prefix, &param_types);
         }
         let parts = scope::scope_parts(def, outer);
-        record_scope(ctx, &qname, &parts, b);
+        record_scope(ctx, &qname, &parts, b, false);
         collect_regions(ctx, b, &qname);
         let mut locals = param_types.clone();
         collect_locals(ctx, b, &mut locals);

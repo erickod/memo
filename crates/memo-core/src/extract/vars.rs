@@ -168,10 +168,48 @@ fn read(ctx: &mut Ctx, node: Node, w: &Walk) {
     }
 }
 
+/// Alvo que liga nomes (desempacotamento, `for`, `with ... as`): o nome ligado não é leitura;
+/// o que está dentro de `obj.attr` ou `v[i]` continua sendo lido.
+fn bind_target(ctx: &mut Ctx, node: Node, w: &Walk) {
+    match node.kind() {
+        "identifier" => {}
+        "pattern_list" | "tuple_pattern" | "list_pattern" | "list_splat_pattern"
+        | "as_pattern_target" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                bind_target(ctx, child, w);
+            }
+        }
+        _ => visit(ctx, node, w),
+    }
+}
+
 fn visit(ctx: &mut Ctx, node: Node, w: &Walk) {
     match node.kind() {
         "identifier" => read(ctx, node, w),
         "global_statement" | "nonlocal_statement" => {}
+        // Alvos de `for` e de `with ... as` ligam o nome (D3 não os conta como escrita).
+        "for_statement" => {
+            let left = node.child_by_field_name("left");
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if Some(child) == left {
+                    bind_target(ctx, child, w);
+                } else {
+                    visit(ctx, child, w);
+                }
+            }
+        }
+        "as_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() == "as_pattern_target" {
+                    bind_target(ctx, child, w);
+                } else {
+                    visit(ctx, child, w);
+                }
+            }
+        }
         "assignment" | "augmented_assignment" => {
             if let Some(left) = node.child_by_field_name("left") {
                 if left.kind() == "identifier" {
@@ -183,7 +221,7 @@ fn visit(ctx: &mut Ctx, node: Node, w: &Walk) {
                         push_ref(ctx, w.src, RefKind::EscreveVar, name, left);
                     }
                 } else {
-                    visit_children(ctx, left, w);
+                    bind_target(ctx, left, w);
                 }
             }
             if let Some(right) = node.child_by_field_name("right") {
