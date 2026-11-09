@@ -177,3 +177,51 @@ fn test_given_self_attribute_write_when_indexed_then_existing_edges_are_unchange
             && r.text == "a")
     );
 }
+
+/// GIVEN `from m import X` and `def f(): global X; X = 2` in another module
+/// WHEN  the files are indexed and resolved
+/// THEN  `svc.f` has no ESCREVE edge to `m.X`, since `global` rebinds the importing module's name
+#[test]
+fn test_given_global_of_imported_name_when_resolved_then_no_write_to_origin() {
+    let src = "from m import X\n\ndef f():\n    global X\n    X = 2\n";
+    let (_r, store) = store_of(&[("m.py", "X = 1\n"), ("svc.py", src)]);
+    assert!(who(&store, "m.X", true).iter().all(|(q, _)| q != "svc.f"));
+}
+
+/// GIVEN `X = 1` and a function whose inner function declares `nonlocal X`
+/// WHEN  the file is indexed and resolved
+/// THEN  the outer function has no ESCREVE edge to the module variable
+#[test]
+fn test_given_nonlocal_name_when_resolved_then_no_module_write() {
+    let src = "X = 1\n\ndef outer():\n    X = 0\n\n    def inner():\n        nonlocal X\n        X = 2\n    return inner\n";
+    let (_r, store) = store_of(&[("m.py", src)]);
+    assert!(who(&store, "m.X", true).iter().all(|(q, _)| q != "m.outer"));
+}
+
+/// GIVEN `class A: y = X` reading the module variable in the class body
+/// WHEN  the file is indexed and resolved
+/// THEN  `m.A` has a LE edge to `m.X`
+#[test]
+fn test_given_variable_read_in_class_body_when_resolved_then_class_reads_it() {
+    let (_r, store) = store_of(&[("m.py", "X = 1\n\nclass A:\n    y = X\n")]);
+    assert!(who(&store, "m.X", false).contains(&("m.A".to_string(), false)));
+}
+
+/// GIVEN `def f(a=X)` using the module variable as a default value
+/// WHEN  the file is indexed and resolved
+/// THEN  the module has a LE edge to `m.X`, since defaults are evaluated at definition time
+#[test]
+fn test_given_variable_as_default_argument_when_resolved_then_module_reads_it() {
+    let (_r, store) = store_of(&[("m.py", "X = 1\n\ndef f(a=X):\n    return a\n")]);
+    assert!(who(&store, "m.X", false).contains(&("m".to_string(), false)));
+}
+
+/// GIVEN `@deco(X)` decorating a function
+/// WHEN  the file is indexed and resolved
+/// THEN  the module has a LE edge to `m.X`
+#[test]
+fn test_given_variable_in_decorator_when_resolved_then_module_reads_it() {
+    let src = "def deco(v):\n    return lambda f: f\n\nX = 1\n\n@deco(X)\ndef f():\n    return 1\n";
+    let (_r, store) = store_of(&[("m.py", src)]);
+    assert!(who(&store, "m.X", false).contains(&("m".to_string(), false)));
+}
