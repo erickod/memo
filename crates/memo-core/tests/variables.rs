@@ -235,3 +235,41 @@ fn test_given_unpacking_and_for_target_when_resolved_then_no_read_edge() {
     let (_r, store) = store_of(&[("m.py", src)]);
     assert!(who(&store, "m.X", false).iter().all(|(q, _)| q != "m"));
 }
+
+/// GIVEN `[X for X in range(3)]` at module level, with `X` also a module variable
+/// WHEN  the file is indexed and resolved
+/// THEN  the module has no LE edge to `m.X`, since the comprehension variable has its own scope
+#[test]
+fn test_given_comprehension_variable_when_resolved_then_no_read_edge() {
+    let (_r, store) = store_of(&[("m.py", "X = 1\nY = [X for X in range(3)]\n")]);
+    assert!(who(&store, "m.X", false).iter().all(|(q, _)| q != "m"));
+}
+
+/// GIVEN a dict comprehension `{X: 1 for X in range(2)}` inside a function
+/// WHEN  the file is indexed and resolved
+/// THEN  the function has no LE edge to `m.X`
+#[test]
+fn test_given_comprehension_variable_in_function_when_resolved_then_no_read_edge() {
+    let src = "X = 1\n\ndef f():\n    return {X: 1 for X in range(2)}\n";
+    let (_r, store) = store_of(&[("m.py", src)]);
+    assert!(who(&store, "m.X", false).iter().all(|(q, _)| q != "m.f"));
+}
+
+/// GIVEN `[v for v in range(X)]`, where the iterable reads the module variable
+/// WHEN  the file is indexed and resolved
+/// THEN  the module has a LE edge to `m.X`, since the iterable is evaluated outside the scope
+#[test]
+fn test_given_module_variable_in_comprehension_iterable_when_resolved_then_it_is_read() {
+    let (_r, store) = store_of(&[("m.py", "X = 1\nY = [v for v in range(X)]\n")]);
+    assert!(who(&store, "m.X", false).contains(&("m".to_string(), false)));
+}
+
+/// GIVEN `except ValueError as X` at module level
+/// WHEN  the file is indexed and resolved
+/// THEN  the module has no LE edge to `m.X`, since `X` is being bound
+#[test]
+fn test_given_except_as_name_when_resolved_then_no_read_edge() {
+    let src = "X = 1\ntry:\n    pass\nexcept ValueError as X:\n    pass\n";
+    let (_r, store) = store_of(&[("m.py", src)]);
+    assert!(who(&store, "m.X", false).iter().all(|(q, _)| q != "m"));
+}

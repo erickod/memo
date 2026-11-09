@@ -11,7 +11,7 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 /// Roda `git` e repete até 2 vezes se o processo morrer por sinal: o ambiente já mandou SIGKILL
 /// a um `git add -A` sem motivo no repositório (TASK-10, §10). Código de saída diferente de 0 não
 /// é repetido.
-fn run_git(mut build: impl FnMut() -> Command) -> Output {
+pub fn run_git(mut build: impl FnMut() -> Command) -> Output {
     use std::os::unix::process::ExitStatusExt;
     let mut out = build().output().unwrap();
     for attempt in 1..=2 {
