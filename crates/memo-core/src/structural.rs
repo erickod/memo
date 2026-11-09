@@ -60,12 +60,24 @@ pub(crate) fn resolve(store: &SqliteStore, request: &str) -> Result<Targets, Cor
                         continue;
                     }
                 }
-                Err(error @ CoreError::Ambiguous { .. })
+                Err(CoreError::Ambiguous { target, candidates })
                     if token.contains('.')
                         || token.contains('_')
                         || token.chars().next().is_some_and(char::is_uppercase) =>
                 {
-                    return Err(error);
+                    // Homônimas ligadas por chamada exata (resource → service) viram um grupo.
+                    let Some(group) = crate::relevance::exact_group(store, &candidates)? else {
+                        return Err(CoreError::Ambiguous { target, candidates });
+                    };
+                    for qname in group {
+                        let id: i64 = store.conn.query_row(
+                            "SELECT id FROM symbol WHERE qname = ?1",
+                            [&qname],
+                            |r| r.get(0),
+                        )?;
+                        targets.symbols.insert(id, "simbolo");
+                    }
+                    continue;
                 }
                 Err(CoreError::Ambiguous { .. } | CoreError::NotFound(_)) => {}
                 Err(error) => return Err(error),
