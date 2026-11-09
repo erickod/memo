@@ -529,6 +529,18 @@ pub fn impact_text(
         grouped(rel_items(&info.protocol), all),
         &mut items,
     );
+    if info.target.kind == "attribute" {
+        section(
+            "escritores",
+            grouped(rel_items(&info.escritores), all),
+            &mut items,
+        );
+        section(
+            "leitores",
+            grouped(rel_items(&info.leitores), all),
+            &mut items,
+        );
+    }
     // Nome genérico: os usos `só nome` não distinguem o alvo; ficam como contagem, salvo `--all`.
     let hide_name_only = n.generic && !all;
     let by_word: Vec<(String, String)> = info

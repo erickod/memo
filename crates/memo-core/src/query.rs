@@ -726,6 +726,11 @@ pub struct Impact {
     pub callers: Vec<ChainItem>,
     pub consumers: Vec<RelItem>,
     pub protocol: Vec<RelItem>,
+    /// Quem escreve e quem lê a variável ou o atributo alvo (TASK-10, C5).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub escritores: Vec<RelItem>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub leitores: Vec<RelItem>,
     /// Usos e tipos de produção que contêm as palavras do nome do alvo e que nenhuma aresta cobre,
     /// cada um com a linha e o nível de evidência como rótulo; nada é escondido (TASK-6, D17).
     pub by_word: Vec<ByWordItem>,
@@ -1454,6 +1459,14 @@ pub fn impact_with(
         consumers.extend(related(store, &qname, "RECEBE")?);
         consumers.extend(related(store, &qname, "RETORNA")?);
     }
+    let (escritores, leitores) = if addr.kind == "attribute" {
+        (
+            related(store, &qname, "ESCREVE")?,
+            related(store, &qname, "LE")?,
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
     let callers = walk_calls(store, id, 2, true)?;
     let protocol = protocol_counterparts(store, id)?;
     let covered: HashSet<String> = callers
@@ -1472,6 +1485,8 @@ pub fn impact_with(
         callers,
         consumers,
         protocol,
+        escritores,
+        leitores,
         tests: tests_for(store, &qname)?,
         notes: Vec::new(),
         unchanged: None,

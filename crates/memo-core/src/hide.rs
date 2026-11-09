@@ -64,6 +64,8 @@ pub fn impact(i: &mut Impact) -> usize {
         })
         + drop_where(&mut i.consumers, |c| c.addr.in_tests())
         + drop_where(&mut i.protocol, |c| c.addr.in_tests())
+        + drop_where(&mut i.escritores, |c| c.addr.in_tests())
+        + drop_where(&mut i.leitores, |c| c.addr.in_tests())
         + drop_where(&mut i.by_word, |c| c.item.addr.in_tests())
 }
 
