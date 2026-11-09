@@ -227,11 +227,7 @@ fn visit_block(ctx: &mut Ctx, block: Node, prefix: &str, in_class: bool) {
         match def.map(|d| (d.kind(), d)) {
             Some(("class_definition", d)) => visit_class(ctx, d, child, prefix),
             Some(("function_definition", d)) => visit_function(ctx, d, child, prefix, in_class),
-            _ => {
-                if in_class {
-                    class_body_attribute(ctx, child, prefix);
-                }
-            }
+            _ => body_variable(ctx, child, prefix),
         }
     }
 }
@@ -423,10 +419,11 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
         },
     );
     if let Some(b) = body {
-        visit_block(ctx, b, &qname, true);
         if is_enum {
+            // Antes do corpo: a primeira definição do `qname` vence e só o membro leva o valor.
             enum_members(ctx, b, &qname);
         }
+        visit_block(ctx, b, &qname, true);
     }
 }
 
@@ -704,17 +701,15 @@ fn push_attribute(
     );
 }
 
-/// Atributo anotado no corpo da classe (`x: int = 0`).
-fn class_body_attribute(ctx: &mut Ctx, stmt: Node, class_qname: &str) {
+/// Variável atribuída no corpo da classe ou no nível do módulo (`x = 0`, `x: int = 0`); locais
+/// de função não entram (TASK-10, D2).
+fn body_variable(ctx: &mut Ctx, stmt: Node, owner_qname: &str) {
     if stmt.kind() != "expression_statement" {
         return;
     }
     let Some(assign) = stmt.named_child(0).filter(|n| n.kind() == "assignment") else {
         return;
     };
-    if assign.child_by_field_name("type").is_none() {
-        return;
-    }
     if let Some(left) = assign
         .child_by_field_name("left")
         .filter(|n| n.kind() == "identifier")
@@ -723,7 +718,7 @@ fn class_body_attribute(ctx: &mut Ctx, stmt: Node, class_qname: &str) {
         let type_text = assign
             .child_by_field_name("type")
             .map(|t| unwrap_type(ctx.text(t)));
-        push_attribute(ctx, class_qname, &name, assign, type_text);
+        push_attribute(ctx, owner_qname, &name, assign, type_text);
     }
 }
 
