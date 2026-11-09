@@ -74,7 +74,7 @@ impl Repo {
     /// Commita tudo numa branch `main`, com identidade fixa.
     pub fn commit_all(&self) {
         let git = |args: &[&str]| {
-            let status = Command::new("git")
+            let out = Command::new("git")
                 .args([
                     "-c",
                     "user.name=t",
@@ -87,9 +87,14 @@ impl Repo {
                 .env("GIT_AUTHOR_DATE", "2026-11-07T14:05:00Z")
                 .env("GIT_COMMITTER_DATE", "2026-11-07T14:05:00Z")
                 .current_dir(&self.root)
-                .status()
+                .output()
                 .unwrap();
-            assert!(status.success(), "git {args:?}");
+            assert!(
+                out.status.success(),
+                "git {args:?} ({}): {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr)
+            );
         };
         git(&["add", "-A"]);
         let staged = Command::new("git")
