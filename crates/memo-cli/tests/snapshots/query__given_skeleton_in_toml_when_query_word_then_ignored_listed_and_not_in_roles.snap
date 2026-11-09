@@ -20,13 +20,13 @@ ignoradas: usecase
 símbolos:
   mod calculate_limit_usecase   app/billing/application/usecases/calculate_limit_usecase.py:L1-L14 [nome, import]
   C CalculateLimitUseCase   app/billing/application/usecases/calculate_limit_usecase.py:L4-L13 [nome, teste]
-  M CalculateLimitUseCase.__init__   app/billing/application/usecases/calculate_limit_usecase.py:L5-L6 [tipo]
-  M CalculateLimitUseCase.execute   app/billing/application/usecases/calculate_limit_usecase.py:L8-L13 [vizinho]
   mod checkout_usecase   app/billing/application/usecases/checkout_usecase.py:L1-L10 [import]
-  M CheckoutUseCase.__init__   app/billing/application/usecases/checkout_usecase.py:L5-L6 [tipo]
   mod limit_repository   app/billing/domain/protocols/limit_repository.py:L1-L6 [nome]
   C LimitRepository   app/billing/domain/protocols/limit_repository.py:L4-L5 [nome]
-  M LimitRepository.save   app/billing/domain/protocols/limit_repository.py:L5-L5 [vizinho]
   mod limit_repository   app/billing/infra/repositories/limit_repository.py:L1-L4 [nome]
-  +4 em: app.billing.infra.repositories.limit_repository ×2 · app.collections.application.usecases.charge_usecase ×2
+  C SqlLimitRepository   app/billing/infra/repositories/limit_repository.py:L1-L3 [nome, teste]
+  mod charge_usecase   app/collections/application/usecases/charge_usecase.py:L1-L7 [import]
+  M CalculateLimitUseCase.__init__   app/billing/application/usecases/calculate_limit_usecase.py:L5-L6 [tipo, corpo]
+  M CalculateLimitUseCase.execute   app/billing/application/usecases/calculate_limit_usecase.py:L8-L13 [corpo]
+  +4 em: app.billing.application.usecases.checkout_usecase ×1 · app.billing.domain.protocols.limit_repository ×1 · app.billing.infra.repositories.limit_repository ×1 · app.collections.application.usecases.charge_usecase ×1
 cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro, 2 testes ocultos

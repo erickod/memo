@@ -454,7 +454,7 @@ fn tagged_symbols(
 ) -> Result<Vec<TaggedSymbol>, CoreError> {
     let mut ids: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
     let extra = [
-        "SELECT owner_id FROM occurrence WHERE word_id = ?1 AND owner_kind = 'symbol' AND source IN ('test_doc', 'body')",
+        "SELECT owner_id FROM occurrence WHERE word_id = ?1 AND owner_kind = 'symbol' AND source = 'test_doc'",
         "SELECT e.dst FROM edge e JOIN symbol t ON t.id = e.src
          JOIN occurrence o ON o.owner_kind = 'symbol' AND o.owner_id = t.id AND o.source IN ('name', 'test_doc')
          WHERE o.word_id = ?1 AND t.is_test = 1 AND e.kind IN ('CHAMA', 'CRIA') AND e.approx = 0 AND e.dst IS NOT NULL",
@@ -469,6 +469,15 @@ fn tagged_symbols(
             .collect::<Result<_, _>>()?;
         ids.extend(found);
     }
+    // Quem só usa a palavra no corpo vem depois de quem a tem no nome, no teste ou no import.
+    let body_ids: Vec<i64> = store
+        .conn
+        .prepare(
+            "SELECT owner_id FROM occurrence
+             WHERE word_id = ?1 AND owner_kind = 'symbol' AND source = 'body'",
+        )?
+        .query_map([word_id], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
     let mut seen: std::collections::HashSet<String> =
         by_name.iter().map(|a| a.qname.clone()).collect();
     let mut all: Vec<SymbolAddr> = by_name;
@@ -478,7 +487,20 @@ fn tagged_symbols(
             all.push(addr);
         }
     }
-    all.sort_by(|a, b| a.qname.cmp(&b.qname));
+    let mut body_only: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for id in body_ids {
+        let addr = addr_by_id(store, id)?;
+        if seen.insert(addr.qname.clone()) {
+            body_only.insert(addr.qname.clone());
+            all.push(addr);
+        }
+    }
+    all.sort_by(|a, b| {
+        body_only
+            .contains(&a.qname)
+            .cmp(&body_only.contains(&b.qname))
+            .then_with(|| a.qname.cmp(&b.qname))
+    });
     all.into_iter()
         .map(|addr| {
             let id: i64 = store.conn.query_row(
@@ -486,10 +508,13 @@ fn tagged_symbols(
                 [&addr.qname],
                 |r| r.get(0),
             )?;
-            let tags = crate::tags::bridge_tags(&store.conn, id, &[word_id])?
+            let mut tags: Vec<String> = crate::tags::bridge_tags(&store.conn, id, &[word_id])?
                 .into_iter()
                 .map(str::to_string)
                 .collect();
+            if body_only.contains(&addr.qname) {
+                tags.push("corpo".to_string());
+            }
             Ok(TaggedSymbol { addr, tags })
         })
         .collect()
