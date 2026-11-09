@@ -123,3 +123,13 @@ fn test_given_self_in_every_body_when_searched_by_word_then_it_is_not_linked() {
     assert!(found(&store, "self").is_empty());
     assert!(found(&store, "value").contains(&"m.A.run".to_string()));
 }
+
+/// GIVEN a property redefined by its setter, so the same qualified name has two bodies
+/// WHEN  the file is indexed
+/// THEN  indexing succeeds and a word from the second body finds the symbol
+#[test]
+fn test_given_redefined_property_when_indexed_then_both_bodies_are_linked() {
+    let src = "class A:\n    @property\n    def v(self):\n        return self._alpha\n\n    @v.setter\n    def v(self, x):\n        self._omega = x\n";
+    let (_r, store) = store_of(src);
+    assert!(found(&store, "omega").contains(&"m.A.v".to_string()));
+}
