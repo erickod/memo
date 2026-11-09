@@ -3,6 +3,12 @@
 use std::collections::HashMap;
 use tree_sitter::{Node, Parser};
 
+mod scope;
+mod vars;
+
+use scope::record_scope;
+use vars::{collect_var_names, function_var_effects, module_var_effects};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
     Module,
@@ -169,6 +175,8 @@ struct Ctx<'a> {
     facts: FileFacts,
     /// Nomes que podem ser variável de módulo: atribuídos no nível do módulo ou importados.
     var_names: std::collections::HashSet<String>,
+    /// Posição em `facts.scopes` de cada `qname`, para somar as redefinições.
+    scope_index: HashMap<String, usize>,
 }
 
 impl Ctx<'_> {
@@ -207,6 +215,7 @@ pub fn extract_python_file(
         src: source.as_bytes(),
         facts: FileFacts::default(),
         var_names: std::collections::HashSet::new(),
+        scope_index: HashMap::new(),
     };
     ctx.facts.symbols.push(SymbolFact {
         qname: module.to_string(),
@@ -439,12 +448,7 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
         },
     );
     if let Some(b) = body {
-        let mut cursor = def.walk();
-        let parts: Vec<Node> = def
-            .named_children(&mut cursor)
-            .filter(|c| c.kind() == "comment")
-            .chain([b])
-            .collect();
+        let parts = scope::scope_parts(def, outer);
         record_scope(ctx, &qname, &parts, b);
         if is_enum {
             // Antes do corpo: a primeira definição do `qname` vence e só o membro leva o valor.
@@ -612,12 +616,7 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
         if in_class {
             self_attributes(ctx, b, prefix, &param_types);
         }
-        let name = def.child_by_field_name("name");
-        let mut cursor = def.walk();
-        let parts: Vec<Node> = def
-            .named_children(&mut cursor)
-            .filter(|c| Some(*c) != name)
-            .collect();
+        let parts = scope::scope_parts(def, outer);
         record_scope(ctx, &qname, &parts, b);
         collect_regions(ctx, b, &qname);
         let mut locals = param_types.clone();
@@ -1326,220 +1325,4 @@ fn docstring_text(ctx: &Ctx, body: Node) -> Option<String> {
         .map(|n| ctx.text(n))
         .collect();
     Some(content.join(" "))
-}
-
-fn assigned_name(ctx: &Ctx, stmt: Node) -> Option<String> {
-    if !matches!(stmt.kind(), "assignment" | "augmented_assignment") {
-        return None;
-    }
-    let left = stmt.child_by_field_name("left")?;
-    (left.kind() == "identifier").then(|| ctx.text(left).to_string())
-}
-
-/// Nomes candidatos a variável de módulo: atribuídos em instruções do módulo (fora de
-/// funções e classes) ou importados (TASK-10, D2).
-fn collect_var_names(ctx: &mut Ctx, root: Node) {
-    let mut names: Vec<String> = ctx
-        .facts
-        .imports
-        .iter()
-        .map(|i| i.local_name.clone())
-        .collect();
-    fn walk(ctx: &Ctx, node: Node, names: &mut Vec<String>) {
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            match child.kind() {
-                "function_definition" | "class_definition" | "decorated_definition" | "lambda" => {}
-                "expression_statement" => {
-                    if let Some(name) = child.named_child(0).and_then(|a| assigned_name(ctx, a)) {
-                        names.push(name);
-                    }
-                }
-                _ => walk(ctx, child, names),
-            }
-        }
-    }
-    walk(ctx, root, &mut names);
-    ctx.var_names.extend(names);
-}
-
-/// Nomes que a função ou o método vê como próprios: parâmetros (também de funções aninhadas)
-/// e nomes atribuídos sem `global`. Esses ocultam a variável de módulo (C6).
-fn local_scope(
-    ctx: &Ctx,
-    def: Node,
-    body: Node,
-) -> (
-    std::collections::HashSet<String>,
-    std::collections::HashSet<String>,
-) {
-    use std::collections::HashSet;
-    fn walk(ctx: &Ctx, node: Node, locals: &mut HashSet<String>, globals: &mut HashSet<String>) {
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            match child.kind() {
-                "global_statement" | "nonlocal_statement" => {
-                    let mut c = child.walk();
-                    for id in child.named_children(&mut c) {
-                        globals.insert(ctx.text(id).to_string());
-                    }
-                }
-                "assignment"
-                | "augmented_assignment"
-                | "for_statement"
-                | "with_item"
-                | "named_expression"
-                | "as_pattern" => {
-                    for field in ["left", "name", "alias"] {
-                        if let Some(t) = child.child_by_field_name(field) {
-                            collect_identifiers(ctx, t, locals);
-                        }
-                    }
-                }
-                "parameters" | "lambda_parameters" => collect_identifiers(ctx, child, locals),
-                _ => {}
-            }
-            walk(ctx, child, locals, globals);
-        }
-    }
-    fn collect_identifiers(ctx: &Ctx, node: Node, out: &mut HashSet<String>) {
-        if node.kind() == "identifier" {
-            out.insert(ctx.text(node).to_string());
-            return;
-        }
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            if child.kind() != "attribute" && child.kind() != "subscript" {
-                collect_identifiers(ctx, child, out);
-            }
-        }
-    }
-    let mut locals = HashSet::new();
-    let mut globals = HashSet::new();
-    if let Some(params) = def.child_by_field_name("parameters") {
-        collect_identifiers(ctx, params, &mut locals);
-    }
-    walk(ctx, body, &mut locals, &mut globals);
-    for g in &globals {
-        locals.remove(g);
-    }
-    (locals, globals)
-}
-
-fn function_var_effects(ctx: &mut Ctx, def: Node, body: Node, src: &str) {
-    let (locals, globals) = local_scope(ctx, def, body);
-    var_effects(ctx, body, src, &locals, &globals, true);
-}
-
-/// Instruções do módulo (fora de funções e classes): escritas e leituras de nomes simples.
-fn module_var_effects(ctx: &mut Ctx, root: Node, module: &str) {
-    let none = std::collections::HashSet::new();
-    var_effects(ctx, root, module, &none, &none, false);
-}
-
-/// `ESCREVE_VAR`/`LE_VAR` de nomes candidatos a variável de módulo. `in_function` decide se a
-/// escrita exige `global` (função) ou vale sempre (módulo).
-fn var_effects(
-    ctx: &mut Ctx,
-    node: Node,
-    src: &str,
-    locals: &std::collections::HashSet<String>,
-    globals: &std::collections::HashSet<String>,
-    in_function: bool,
-) {
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        match child.kind() {
-            "class_definition" => continue,
-            "function_definition" | "decorated_definition" | "lambda" if !in_function => continue,
-            "global_statement" | "nonlocal_statement" => continue,
-            "identifier" => {
-                let parent = node.kind();
-                let name = ctx.text(child).to_string();
-                let is_member =
-                    parent == "attribute" && node.child_by_field_name("attribute") == Some(child);
-                let is_label =
-                    parent == "keyword_argument" && node.child_by_field_name("name") == Some(child);
-                if !is_member
-                    && !is_label
-                    && ctx.var_names.contains(&name)
-                    && !locals.contains(&name)
-                {
-                    push_ref(ctx, src, RefKind::LeVar, name, child);
-                }
-                continue;
-            }
-            "assignment" | "augmented_assignment" => {
-                let left = child.child_by_field_name("left");
-                if let Some(l) = left.filter(|l| l.kind() == "identifier") {
-                    let name = ctx.text(l).to_string();
-                    let writes = ctx.var_names.contains(&name)
-                        && if in_function {
-                            globals.contains(&name)
-                        } else {
-                            true
-                        };
-                    if writes {
-                        push_ref(ctx, src, RefKind::EscreveVar, name, l);
-                    }
-                } else if let Some(l) = left {
-                    var_effects(ctx, l, src, locals, globals, in_function);
-                }
-                if let Some(right) = child.child_by_field_name("right") {
-                    if right.kind() == "identifier" {
-                        let name = ctx.text(right).to_string();
-                        if ctx.var_names.contains(&name) && !locals.contains(&name) {
-                            push_ref(ctx, src, RefKind::LeVar, name, right);
-                        }
-                    } else {
-                        var_effects(ctx, right, src, locals, globals, in_function);
-                    }
-                }
-                continue;
-            }
-            _ => {}
-        }
-        var_effects(ctx, child, src, locals, globals, in_function);
-    }
-}
-
-/// Texto do escopo: nomes e comentários das partes dadas (sem entrar em funções e classes
-/// aninhadas, que são escopos próprios) e a docstring do corpo. Literais de string ficam fora.
-fn record_scope(ctx: &mut Ctx, qname: &str, parts: &[Node], body: Node) {
-    fn walk(ctx: &Ctx, node: Node, out: &mut Vec<String>) {
-        match node.kind() {
-            "function_definition" | "class_definition" | "decorated_definition" | "lambda" => {
-                return;
-            }
-            "identifier" => out.push(ctx.text(node).to_string()),
-            "comment" => out.push(ctx.text(node).trim_start_matches('#').to_string()),
-            _ => {}
-        }
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            walk(ctx, child, out);
-        }
-    }
-    let mut out = Vec::new();
-    for part in parts {
-        walk(ctx, *part, &mut out);
-    }
-    if let Some(doc) = docstring_text(ctx, body) {
-        out.push(doc);
-    }
-    if out.is_empty() {
-        return;
-    }
-    let text = out.join(" ");
-    // Uma redefinição (`@x.setter`) soma ao mesmo `qname`, que tem um só símbolo.
-    match ctx.facts.scopes.iter_mut().find(|s| s.src_qname == qname) {
-        Some(existing) => {
-            existing.text.push(' ');
-            existing.text.push_str(&text);
-        }
-        None => ctx.facts.scopes.push(ScopeText {
-            src_qname: qname.to_string(),
-            text,
-        }),
-    }
 }
