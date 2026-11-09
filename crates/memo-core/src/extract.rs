@@ -42,6 +42,9 @@ pub enum RefKind {
     SqlUpdate,
     SqlInsert,
     ChamaConstruida,
+    /// Requisição HTTP por caminho literal (`client.get("/x")`): texto = caminho normalizado,
+    /// receptor = método em maiúsculas.
+    Requisita,
     Chama,
 }
 
@@ -59,6 +62,7 @@ impl RefKind {
             RefKind::SqlUpdate => "SQL_UPDATE",
             RefKind::SqlInsert => "SQL_INSERT",
             RefKind::ChamaConstruida => "CHAMA_CONSTRUIDA",
+            RefKind::Requisita => "REQUISITA",
             RefKind::Chama => "CHAMA",
         }
     }
@@ -105,6 +109,17 @@ pub struct FileFacts {
     /// Docstring (texto) de cada função ou método que a tem.
     pub docs: Vec<DocFact>,
     pub regions: Vec<RegionFact>,
+    /// Funções decoradas: rota HTTP literal e nomes dos decoradores (entrypoints).
+    pub entries: Vec<EntryFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntryFact {
+    pub src_qname: String,
+    /// `GET /caminho/{}` quando um decorador `x.get("/caminho/{id}")` declara a rota.
+    pub route: Option<String>,
+    /// Nome de cada decorador, sem `@` nem argumentos (`router.get`, `shared_task`).
+    pub decorators: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,6 +250,129 @@ fn decorators_text(ctx: &Ctx, outer: Node) -> String {
         .map(|n| ctx.text(n).split_whitespace().collect::<String>())
         .collect::<Vec<_>>()
         .join(",")
+}
+
+const HTTP_METHODS: &[&str] = &["get", "post", "put", "patch", "delete", "head", "options"];
+
+/// Caminho HTTP com parâmetros trocados por `{}` e sem query string; `None` se não começa em `/`.
+pub fn normalize_path(raw: &str) -> Option<String> {
+    let path = raw.split(['?', '#']).next().unwrap_or("");
+    if !path.starts_with('/') {
+        return None;
+    }
+    let mut out = String::new();
+    let mut depth = 0;
+    for c in path.chars() {
+        match c {
+            '{' => {
+                if depth == 0 {
+                    out.push_str("{}");
+                }
+                depth += 1;
+            }
+            '}' if depth > 0 => depth -= 1,
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    let trimmed = out.trim_end_matches('/');
+    Some(if trimmed.is_empty() {
+        "/".to_string()
+    } else {
+        trimmed.to_string()
+    })
+}
+
+/// Texto de uma string literal (ou f-string), com cada interpolação como `{}`.
+fn literal_text(ctx: &Ctx, node: Node) -> Option<String> {
+    if node.kind() != "string" {
+        return None;
+    }
+    let mut out = String::new();
+    let mut cursor = node.walk();
+    for part in node.named_children(&mut cursor) {
+        match part.kind() {
+            "string_content" | "escape_sequence" => out.push_str(ctx.text(part)),
+            "interpolation" => out.push_str("{}"),
+            _ => {}
+        }
+    }
+    Some(out)
+}
+
+/// `@x.get("/rota")` vira `GET /rota`; os nomes de todos os decoradores vão junto.
+fn entry_fact(ctx: &Ctx, outer: Node, qname: &str) -> Option<EntryFact> {
+    let mut cursor = outer.walk();
+    let mut route = None;
+    let mut decorators = Vec::new();
+    for deco in outer
+        .named_children(&mut cursor)
+        .filter(|n| n.kind() == "decorator")
+    {
+        let Some(expr) = deco.named_child(0) else {
+            continue;
+        };
+        let (func, args) = if expr.kind() == "call" {
+            (
+                expr.child_by_field_name("function"),
+                expr.child_by_field_name("arguments"),
+            )
+        } else {
+            (Some(expr), None)
+        };
+        let Some(name) = func.and_then(|f| dotted_name(ctx, f)) else {
+            continue;
+        };
+        let method = name.rsplit('.').next().unwrap_or("");
+        if route.is_none()
+            && name.contains('.')
+            && HTTP_METHODS.contains(&method)
+            && let Some(path) = args
+                .and_then(|a| a.named_child(0))
+                .and_then(|a| literal_text(ctx, a))
+                .and_then(|t| normalize_path(&t))
+        {
+            route = Some(format!("{} {path}", method.to_uppercase()));
+        }
+        decorators.push(name);
+    }
+    (!decorators.is_empty()).then(|| EntryFact {
+        src_qname: qname.to_string(),
+        route,
+        decorators,
+    })
+}
+
+/// `cliente.get("/rota", ...)` com caminho literal: requisição ao endpoint da rota.
+fn http_request(ctx: &mut Ctx, call: Node, src: &str) {
+    let Some(func) = call
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "attribute")
+    else {
+        return;
+    };
+    let method = func
+        .child_by_field_name("attribute")
+        .map(|m| ctx.text(m).to_string())
+        .unwrap_or_default();
+    if !HTTP_METHODS.contains(&method.as_str()) {
+        return;
+    }
+    let Some(path) = call
+        .child_by_field_name("arguments")
+        .and_then(|a| a.named_child(0))
+        .and_then(|a| literal_text(ctx, a))
+        .and_then(|t| normalize_path(&t))
+    else {
+        return;
+    };
+    ctx.facts.refs.push(RefFact {
+        src_qname: src.to_string(),
+        kind: RefKind::Requisita,
+        text: path,
+        receiver: Some(method.to_uppercase()),
+        line: call.start_position().row + 1,
+    });
 }
 
 fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
@@ -443,6 +581,9 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
             value_text: None,
         },
     );
+    if let Some(entry) = entry_fact(ctx, outer, &qname) {
+        ctx.facts.entries.push(entry);
+    }
     if let Some(b) = body {
         if in_class {
             self_attributes(ctx, b, prefix, &param_types);
@@ -799,6 +940,7 @@ fn scan_effects(
                 });
             }
             keyword_writes(ctx, node, src, locals);
+            http_request(ctx, node, src);
             match func {
                 Some(f) if f.kind() == "attribute" => {
                     let obj = f.child_by_field_name("object");
