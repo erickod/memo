@@ -323,6 +323,17 @@ fn insert_symbols(
             )?;
         }
     }
+    for scope in &facts.scopes {
+        if let Some(&id) = ids.get(scope.src_qname.as_str()) {
+            let owner = OwnedWords {
+                owner_kind: "symbol",
+                owner_id: id,
+                symbol_id: None,
+                source: "body",
+            };
+            insert_owned_words(tx, &owner, &scope_words(&scope.text, config))?;
+        }
+    }
     for entry in &facts.entries {
         if let Some(&id) = ids.get(entry.src_qname.as_str()) {
             let declared = entry.decorators.iter().any(|d| {
@@ -680,4 +691,17 @@ fn affected_files(
         .collect();
     ids.sort_unstable();
     Ok(ids)
+}
+
+/// Palavras de um escopo, uma vez por palavra: `self`, `cls` e as do `skeleton` não ligam o
+/// símbolo a nada (TASK-10, C12).
+fn scope_words(text: &str, config: &Config) -> Vec<WordOcc> {
+    let mut seen: HashSet<String> = HashSet::new();
+    use_words(text, config)
+        .into_iter()
+        .filter(|w| {
+            !matches!(w.text.as_str(), "self" | "cls") && !config.skeleton.contains(&w.text)
+        })
+        .filter(|w| seen.insert(w.text.clone()))
+        .collect()
 }

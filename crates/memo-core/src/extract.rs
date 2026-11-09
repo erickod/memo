@@ -3,6 +3,12 @@
 use std::collections::HashMap;
 use tree_sitter::{Node, Parser};
 
+mod scope;
+mod vars;
+
+use scope::record_scope;
+use vars::{collect_var_names, function_var_effects, module_var_effects};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
     Module,
@@ -38,6 +44,10 @@ pub enum RefKind {
     /// Leitura `X.attr` por um nome que não é `self` (TASK-7, D5); resolvida como `LE`.
     LeAttr,
     EscreveAttr,
+    /// Leitura de nome simples que pode ser variável de módulo, própria ou importada (TASK-10).
+    LeVar,
+    /// Atribuição a nome simples no módulo ou sob `global` numa função (TASK-10).
+    EscreveVar,
     Inicializa,
     SqlUpdate,
     SqlInsert,
@@ -58,6 +68,8 @@ impl RefKind {
             RefKind::Le => "LE",
             RefKind::LeAttr => "LE_ATTR",
             RefKind::EscreveAttr => "ESCREVE_ATTR",
+            RefKind::LeVar => "LE_VAR",
+            RefKind::EscreveVar => "ESCREVE_VAR",
             RefKind::Inicializa => "INICIALIZA",
             RefKind::SqlUpdate => "SQL_UPDATE",
             RefKind::SqlInsert => "SQL_INSERT",
@@ -111,6 +123,14 @@ pub struct FileFacts {
     pub regions: Vec<RegionFact>,
     /// Funções decoradas: rota HTTP literal e nomes dos decoradores (entrypoints).
     pub entries: Vec<EntryFact>,
+    /// Texto de cada escopo (identificadores, comentários e docstring), sem os escopos aninhados.
+    pub scopes: Vec<ScopeText>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeText {
+    pub src_qname: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,6 +173,10 @@ const MUTATORS: &[&str] = &[
 struct Ctx<'a> {
     src: &'a [u8],
     facts: FileFacts,
+    /// Nomes que podem ser variável de módulo: atribuídos no nível do módulo ou importados.
+    var_names: std::collections::HashSet<String>,
+    /// Posição em `facts.scopes` de cada `qname`, para somar as redefinições.
+    scope_index: HashMap<String, usize>,
 }
 
 impl Ctx<'_> {
@@ -190,6 +214,8 @@ pub fn extract_python_file(
     let mut ctx = Ctx {
         src: source.as_bytes(),
         facts: FileFacts::default(),
+        var_names: std::collections::HashSet::new(),
+        scope_index: HashMap::new(),
     };
     ctx.facts.symbols.push(SymbolFact {
         qname: module.to_string(),
@@ -203,7 +229,10 @@ pub fn extract_python_file(
         value_text: None,
     });
     collect_imports(&mut ctx, root, module, is_package, false);
+    collect_var_names(&mut ctx, root);
+    record_scope(&mut ctx, module, &[root], root, true);
     visit_block(&mut ctx, root, module, false);
+    module_var_effects(&mut ctx, root, module);
     Ok(ctx.facts)
 }
 
@@ -227,11 +256,7 @@ fn visit_block(ctx: &mut Ctx, block: Node, prefix: &str, in_class: bool) {
         match def.map(|d| (d.kind(), d)) {
             Some(("class_definition", d)) => visit_class(ctx, d, child, prefix),
             Some(("function_definition", d)) => visit_function(ctx, d, child, prefix, in_class),
-            _ => {
-                if in_class {
-                    class_body_attribute(ctx, child, prefix);
-                }
-            }
+            _ => body_variable(ctx, child, prefix),
         }
     }
 }
@@ -423,10 +448,13 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
         },
     );
     if let Some(b) = body {
-        visit_block(ctx, b, &qname, true);
+        let parts = scope::scope_parts(def, outer);
+        record_scope(ctx, &qname, &parts, b, true);
         if is_enum {
+            // Antes do corpo: a primeira definição do `qname` vence e só o membro leva o valor.
             enum_members(ctx, b, &qname);
         }
+        visit_block(ctx, b, &qname, true);
     }
 }
 
@@ -588,10 +616,13 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
         if in_class {
             self_attributes(ctx, b, prefix, &param_types);
         }
+        let parts = scope::scope_parts(def, outer);
+        record_scope(ctx, &qname, &parts, b, false);
         collect_regions(ctx, b, &qname);
         let mut locals = param_types.clone();
         collect_locals(ctx, b, &mut locals);
         scan_effects(ctx, b, &qname, in_class, &locals);
+        function_var_effects(ctx, def, b, &qname);
     }
 }
 
@@ -704,17 +735,15 @@ fn push_attribute(
     );
 }
 
-/// Atributo anotado no corpo da classe (`x: int = 0`).
-fn class_body_attribute(ctx: &mut Ctx, stmt: Node, class_qname: &str) {
+/// Variável atribuída no corpo da classe ou no nível do módulo (`x = 0`, `x: int = 0`); locais
+/// de função não entram (TASK-10, D2).
+fn body_variable(ctx: &mut Ctx, stmt: Node, owner_qname: &str) {
     if stmt.kind() != "expression_statement" {
         return;
     }
     let Some(assign) = stmt.named_child(0).filter(|n| n.kind() == "assignment") else {
         return;
     };
-    if assign.child_by_field_name("type").is_none() {
-        return;
-    }
     if let Some(left) = assign
         .child_by_field_name("left")
         .filter(|n| n.kind() == "identifier")
@@ -723,7 +752,7 @@ fn class_body_attribute(ctx: &mut Ctx, stmt: Node, class_qname: &str) {
         let type_text = assign
             .child_by_field_name("type")
             .map(|t| unwrap_type(ctx.text(t)));
-        push_attribute(ctx, class_qname, &name, assign, type_text);
+        push_attribute(ctx, owner_qname, &name, assign, type_text);
     }
 }
 

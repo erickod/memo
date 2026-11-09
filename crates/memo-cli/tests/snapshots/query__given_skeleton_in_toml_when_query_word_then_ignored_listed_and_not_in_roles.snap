@@ -26,4 +26,7 @@ símbolos:
   mod limit_repository   app/billing/infra/repositories/limit_repository.py:L1-L4 [nome]
   C SqlLimitRepository   app/billing/infra/repositories/limit_repository.py:L1-L3 [nome, teste]
   mod charge_usecase   app/collections/application/usecases/charge_usecase.py:L1-L7 [import]
+  M CalculateLimitUseCase.__init__   app/billing/application/usecases/calculate_limit_usecase.py:L5-L6 [tipo, corpo]
+  M CalculateLimitUseCase.execute   app/billing/application/usecases/calculate_limit_usecase.py:L8-L13 [corpo]
+  +4 em: app.billing.application.usecases.checkout_usecase ×1 · app.billing.domain.protocols.limit_repository ×1 · app.billing.infra.repositories.limit_repository ×1 · app.collections.application.usecases.charge_usecase ×1
 cobertura: 26 resolvidas, 4 aprox, 0 não resolvidas, 0 arquivos com erro, 2 testes ocultos
