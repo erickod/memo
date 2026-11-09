@@ -454,7 +454,7 @@ fn tagged_symbols(
 ) -> Result<Vec<TaggedSymbol>, CoreError> {
     let mut ids: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
     let extra = [
-        "SELECT owner_id FROM occurrence WHERE word_id = ?1 AND owner_kind = 'symbol' AND source = 'test_doc'",
+        "SELECT owner_id FROM occurrence WHERE word_id = ?1 AND owner_kind = 'symbol' AND source IN ('test_doc', 'body')",
         "SELECT e.dst FROM edge e JOIN symbol t ON t.id = e.src
          JOIN occurrence o ON o.owner_kind = 'symbol' AND o.owner_id = t.id AND o.source IN ('name', 'test_doc')
          WHERE o.word_id = ?1 AND t.is_test = 1 AND e.kind IN ('CHAMA', 'CRIA') AND e.approx = 0 AND e.dst IS NOT NULL",

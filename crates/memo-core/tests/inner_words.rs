@@ -1,8 +1,9 @@
 mod common;
 
 use common::Repo;
+use memo_core::config::Config;
 use memo_core::index::index;
-use memo_core::query::word_pattern;
+use memo_core::query::word_info;
 use memo_core::source::WorkTree;
 use memo_core::store::SqliteStore;
 
@@ -16,7 +17,8 @@ fn store_of(source: &str) -> (Repo, SqliteStore) {
 
 /// Qualified names of the symbols a word search lists; empty when the word does not exist.
 fn found(store: &SqliteStore, word: &str) -> Vec<String> {
-    word_pattern(store, word)
+    let weights = Config::from_toml("").unwrap().bridges;
+    word_info(store, word, &weights)
         .map(|info| info.symbols.into_iter().map(|s| s.addr.qname).collect())
         .unwrap_or_default()
 }

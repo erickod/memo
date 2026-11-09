@@ -117,6 +117,14 @@ pub struct FileFacts {
     pub regions: Vec<RegionFact>,
     /// Funções decoradas: rota HTTP literal e nomes dos decoradores (entrypoints).
     pub entries: Vec<EntryFact>,
+    /// Texto de cada escopo (identificadores, comentários e docstring), sem os escopos aninhados.
+    pub scopes: Vec<ScopeText>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeText {
+    pub src_qname: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,6 +221,7 @@ pub fn extract_python_file(
     });
     collect_imports(&mut ctx, root, module, is_package, false);
     collect_var_names(&mut ctx, root);
+    record_scope(&mut ctx, module, &[root], root);
     visit_block(&mut ctx, root, module, false);
     module_var_effects(&mut ctx, root, module);
     Ok(ctx.facts)
@@ -430,6 +439,13 @@ fn visit_class(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str) {
         },
     );
     if let Some(b) = body {
+        let mut cursor = def.walk();
+        let parts: Vec<Node> = def
+            .named_children(&mut cursor)
+            .filter(|c| c.kind() == "comment")
+            .chain([b])
+            .collect();
+        record_scope(ctx, &qname, &parts, b);
         if is_enum {
             // Antes do corpo: a primeira definição do `qname` vence e só o membro leva o valor.
             enum_members(ctx, b, &qname);
@@ -596,6 +612,13 @@ fn visit_function(ctx: &mut Ctx, def: Node, outer: Node, prefix: &str, in_class:
         if in_class {
             self_attributes(ctx, b, prefix, &param_types);
         }
+        let name = def.child_by_field_name("name");
+        let mut cursor = def.walk();
+        let parts: Vec<Node> = def
+            .named_children(&mut cursor)
+            .filter(|c| Some(*c) != name)
+            .collect();
+        record_scope(ctx, &qname, &parts, b);
         collect_regions(ctx, b, &qname);
         let mut locals = param_types.clone();
         collect_locals(ctx, b, &mut locals);
@@ -1477,5 +1500,37 @@ fn var_effects(
             _ => {}
         }
         var_effects(ctx, child, src, locals, globals, in_function);
+    }
+}
+
+/// Texto do escopo: nomes e comentários das partes dadas (sem entrar em funções e classes
+/// aninhadas, que são escopos próprios) e a docstring do corpo. Literais de string ficam fora.
+fn record_scope(ctx: &mut Ctx, qname: &str, parts: &[Node], body: Node) {
+    fn walk(ctx: &Ctx, node: Node, out: &mut Vec<String>) {
+        match node.kind() {
+            "function_definition" | "class_definition" | "decorated_definition" | "lambda" => {
+                return;
+            }
+            "identifier" => out.push(ctx.text(node).to_string()),
+            "comment" => out.push(ctx.text(node).trim_start_matches('#').to_string()),
+            _ => {}
+        }
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            walk(ctx, child, out);
+        }
+    }
+    let mut out = Vec::new();
+    for part in parts {
+        walk(ctx, *part, &mut out);
+    }
+    if let Some(doc) = docstring_text(ctx, body) {
+        out.push(doc);
+    }
+    if !out.is_empty() {
+        ctx.facts.scopes.push(ScopeText {
+            src_qname: qname.to_string(),
+            text: out.join(" "),
+        });
     }
 }
