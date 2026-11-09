@@ -61,7 +61,7 @@ O que o `memo` não faz, faz mal ou não foi verificado. Cada item diz de onde v
 ## Escopo
 
 - Só Python.
-- Docstrings e comentários de produção ainda não geram palavras (só as de testes).
+- Palavras do corpo existem só em `query word`; o efeito delas no ranking do `brief` não foi medido, e literais de string não geram palavras.
 - O `memo` entrega fatos e não julga código nem classifica o que é domínio.
 
 ## Dívida técnica declarada

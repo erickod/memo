@@ -67,9 +67,9 @@ memo brief "<pedido>"                        # âncoras, símbolos, contorno, pa
 memo query symbol <símbolo>                  # endereço, assinatura, arestas diretas e notas
 memo query callers <símbolo> --depth 2       # quem chama (profundidade até 3)
 memo query callees <símbolo>                 # o que ele chama
-memo query impact <símbolo>                  # chamadores, consumidores do tipo, Protocol, por palavra (~), testes, notas
-memo query writers <Classe.atributo>         # quem escreve o atributo
-memo query readers <Classe.atributo>         # quem lê o atributo
+memo query impact <símbolo>                  # chamadores, consumidores do tipo, Protocol, escritores e leitores (atributo ou variável), por palavra (~), testes, notas
+memo query writers <Classe.atributo>         # quem escreve o atributo ou a variável (`módulo.variável`)
+memo query readers <Classe.atributo>         # quem lê o atributo ou a variável (`módulo.variável`)
 memo query type <Tipo>                       # quem produz e quem consome o tipo
 memo query tests <símbolo>                   # testes que o chamam (exato) ou se sobrepõem por palavras (~)
 memo query word <palavra>                    # a ficha do conceito (ver abaixo)
@@ -99,6 +99,8 @@ O `memo` trata a palavra como o conceito central. Ela nasce de nomes de símbolo
 
 `memo query word <palavra>` devolve a ficha: estatísticas (inclui `coer=`, a coerência da vizinhança), verbos, papéis e camadas, as vizinhas por tipo de ponte com os pesos, e os símbolos com as pontes que os trazem (`[nome, teste, import]`). O `memo brief` usa a mesma vizinhança só para ranquear: cada símbolo mostra por que entrou, a produção vem primeiro e os testes ficam numa seção `testes:` ao final. Também mostra a **representatividade em arquivos**: em quantos arquivos do repositório a palavra aparece, a fração de cada contexto, e as vizinhas mais fortes com `P(palavra|vizinha)` e `P(vizinha|palavra)` (por exemplo, `order|reservation=0.65 reservation|order=0.39`: 65% dos arquivos com `reservation` também têm `order`, mas só 39% dos com `order` têm `reservation`). É informação, não classificação.
 
+**Palavras do corpo.** Cada módulo, classe, função e método também guarda, uma vez por palavra, os identificadores, os comentários `#` e a docstring do próprio escopo (fonte `body`). O escopo exclui as definições aninhadas que são símbolos (as de módulo e de classe) e os imports, que têm fonte própria; decoradores, bases de classe, `lambda` e as definições aninhadas dentro de função entram no escopo que os contém. `self`, `cls`, as palavras de `skeleton` e os literais de string ficam de fora. Em `query word`, esses símbolos vêm depois dos que têm a palavra no nome, no teste ou no import e levam a etiqueta `corpo`; o `brief` e as estatísticas das palavras não usam essa fonte.
+
 Uma palavra só vira `esqueleto` (nunca âncora de `brief` nem de nota) se estiver na lista `skeleton` do `memo.toml`. O `memo` não decide sozinho se uma palavra é de domínio: `order`, `get` e `data` viram âncora, a menos que você as coloque na lista. Especificidade e coerência aparecem em `query word` só como informação.
 
 No `brief`, os símbolos que carregam a palavra do pedido (no nome, na docstring de teste ou num módulo que a importa) vêm primeiro, até 10, e os que só chegam por vizinhança (chamada ou tipo) vêm depois, até 5 de 15; a vizinhança é amortecida pelo número de ligações do vizinho, para um símbolo chamado por todo mundo (como um `get_events` genérico) não encabeçar a lista. Os valores 10 e 5 são iniciais e ainda não configuráveis.
@@ -108,6 +110,8 @@ O pedido também aceita **símbolos e caminhos do índice**: `memo brief "expliq
 A prioridade é símbolo explícito → arquivo explícito → mudanças da feature → correspondências lexicais → vizinhos. Dentro das correspondências diretas, código que carrega a palavra no nome precede módulos e sinais só de importação; a pontuação desempata dentro de cada grupo. Produção e testes mantêm orçamentos separados. Nas relações, evidência exata vem antes de aproximada no mesmo nível de chamada; proximidade de arquivo/pacote desempata, seguida de nome e linha. A ordenação ocorre antes de agrupar ou cortar a saída. O `score` isolado não representa a ordem entre grupos.
 
 `Classe(...).metodo()` conserva o receptor e gera uma chamada exata quando classe e método são resolvidos, inclusive por alias e herança. Factories e receptores externos continuam sem chamada exata ao método. `writers` reconhece atribuições a atributos resolvidos, inicialização por argumentos nomeados e cadeias SQLAlchemy `update(Model)…values(attr=...)` / `insert(Model)…values(attr=...)`, identificadas pelos imports (inclusive aliases). Os motivos `atribuicao`, `inicializacao`, `sql:update` e `sql:insert` distinguem os casos: construir uma instância ou um comando SQL não comprova persistência nem execução. Atributos precisam existir no índice; builders guardados em variáveis, dicionários de valores e SQL textual ainda não são interpretados.
+
+**Variáveis.** Variáveis atribuídas no nível do módulo e no corpo de classe são símbolos (`A`), com ou sem anotação. `X = ...`, `X += ...` e `X = ...` sob `global X` geram `ESCREVE`, e a leitura de um nome simples atribuído no módulo ou importado gera `LE`, com o módulo, a classe ou a função como origem. Parâmetros e atribuições locais ocultam o nome; `nonlocal` nunca escreve variável de módulo; nomes ligados por desempacotamento, `for`, `with ... as` e `except ... as` não contam como leitura; a variável de uma compreensão oculta o nome dentro dela. `x = Foo(); x.attr` e `Foo.attr = ...` resolvem para o mesmo atributo pelo tipo local. Mutação in-place (`X[k] = v`, `.append`) e variáveis locais de função ficam fora (ver [Limitações](docs/limitacoes.md)).
 
 Os trechos `ler:` seguem a prioridade dos símbolos, evitam sobreposição e usam janelas de 20 linhas em símbolos grandes. Quando uma janela corta uma instrução ou bloco curto, ela pode crescer até 40 linhas para completá-lo, sempre dentro do símbolo. Isso não é uma análise de fluxo de dados. Para investigar estados, `readers Enum.VALOR` complementa `readers Classe.atributo`.
 
@@ -252,6 +256,6 @@ A lista completa, com a evidência de cada item, está em [docs/limitacoes.md](d
 - Sem a regra automática, palavras de infraestrutura fora da lista `skeleton` (`is`, `id`, `usecase`) também viram âncora e podem trazer ruído ao `brief`; ajuste a lista no seu repositório.
 - Desempenho em repositório grande: num repositório sintético de 5.000 arquivos, a indexação completa levou cerca de 42 s, a reindexação sem mudança 0,04 s, o `brief` 0,36 s e `query word` de 1 a 2 s (2,3 s em palavra presente em quase todo arquivo).
 - Os formatos de `.mcp.json` e `.codex/config.toml` vieram da documentação por busca resumida; confira com o seu cliente.
-- Docstrings e comentários de produção ainda não geram palavras (só as de testes).
+- Palavras do corpo existem só em `query word`; o efeito delas no ranking do `brief` não foi medido, e literais de string não geram palavras.
 - O relatório de aliases por vizinhança sugere pares sem sentido em repositórios pequenos; use-o como lista para revisar.
 - Em palavras com 10 vizinhas ou menos a coerência é 1,0; ela é só informativa.
