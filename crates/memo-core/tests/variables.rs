@@ -273,3 +273,23 @@ fn test_given_except_as_name_when_resolved_then_no_read_edge() {
     let (_r, store) = store_of(&[("m.py", src)]);
     assert!(who(&store, "m.X", false).iter().all(|(q, _)| q != "m"));
 }
+
+/// GIVEN `[Z for X in range(3) for Z in X]`, where the second iterable uses the first target
+/// WHEN  the file is indexed and resolved
+/// THEN  the module has no LE edge to `m.X`, since only the first iterable is read outside the scope
+#[test]
+fn test_given_second_clause_iterable_using_first_target_when_resolved_then_no_read_edge() {
+    let src = "X = 1\nA = [Z for X in range(3) for Z in X]\n";
+    let (_r, store) = store_of(&[("m.py", src)]);
+    assert!(who(&store, "m.X", false).iter().all(|(q, _)| q != "m"));
+}
+
+/// GIVEN `[Z for i in range(2) for Z in range(W)]`, where the second iterable reads a module variable
+/// WHEN  the file is indexed and resolved
+/// THEN  the module has a LE edge to `m.W`
+#[test]
+fn test_given_second_clause_iterable_reading_module_variable_when_resolved_then_it_is_read() {
+    let src = "W = 1\nA = [Z for i in range(2) for Z in range(W)]\n";
+    let (_r, store) = store_of(&[("m.py", src)]);
+    assert!(who(&store, "m.W", false).contains(&("m".to_string(), false)));
+}
