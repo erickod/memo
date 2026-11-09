@@ -41,6 +41,31 @@ impl Default for BridgeWeights {
     }
 }
 
+/// Peso de cada estratégia de relevância em torno de um alvo explícito; editável em
+/// `[strategies]`. Só ordena a resposta: não muda o índice.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StrategyWeights {
+    /// Chamada exata até 2 saltos (o segundo salto vale metade).
+    pub neighborhood: f64,
+    /// Está num caminho de chamadas exatas de um entrypoint até o alvo.
+    pub path: f64,
+    /// Ligações exatas com a região do alvo, amortecidas pelo grau (0 a 1 vezes o peso).
+    pub connectivity: f64,
+    /// Uso com o nome exato do alvo sem chamada resolvida; só para nome não genérico.
+    pub name: f64,
+}
+
+impl Default for StrategyWeights {
+    fn default() -> Self {
+        Self {
+            neighborhood: 1.0,
+            path: 1.0,
+            connectivity: 0.5,
+            name: 0.25,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub main_branch: Option<String>,
@@ -58,6 +83,7 @@ pub struct Config {
     /// Segmentos de caminho que nomeiam a camada.
     pub layers: Vec<String>,
     pub bridges: BridgeWeights,
+    pub strategies: StrategyWeights,
 }
 
 fn own(list: &[&str]) -> Vec<String> {
@@ -78,6 +104,7 @@ impl Default for Config {
             context_root: "app".to_string(),
             layers: own(&["domain", "application", "infra"]),
             bridges: BridgeWeights::default(),
+            strategies: StrategyWeights::default(),
         }
     }
 }
@@ -97,8 +124,18 @@ struct RawBridges {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RawStrategies {
+    neighborhood: Option<f64>,
+    path: Option<f64>,
+    connectivity: Option<f64>,
+    name: Option<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Raw {
     bridges: Option<RawBridges>,
+    strategies: Option<RawStrategies>,
     main_branch: Option<String>,
     roles: Option<Vec<String>>,
     verbs: Option<Vec<String>>,
@@ -140,6 +177,22 @@ impl Config {
             w.file = b.file.unwrap_or(w.file);
             w.context = b.context.unwrap_or(w.context);
             w.approximate = b.approximate.unwrap_or(w.approximate);
+        }
+        if let Some(st) = raw.strategies {
+            let w = &mut config.strategies;
+            w.neighborhood = st.neighborhood.unwrap_or(w.neighborhood);
+            w.path = st.path.unwrap_or(w.path);
+            w.connectivity = st.connectivity.unwrap_or(w.connectivity);
+            w.name = st.name.unwrap_or(w.name);
+        }
+        let st = &config.strategies;
+        if [st.neighborhood, st.path, st.connectivity, st.name]
+            .iter()
+            .any(|v| !v.is_finite() || *v < 0.0)
+        {
+            return Err(CoreError::Config(
+                "[strategies] weights must be finite and not negative".to_string(),
+            ));
         }
         let w = &config.bridges;
         let all = [
@@ -183,8 +236,8 @@ impl Config {
     ///
     /// Cobre só o que muda o conteúdo do índice: `skeleton`, `context_root`, `layers`, vocabulário
     /// (`verbs`, `roles`), `write_methods` (arestas de escrita) e os pesos de `[bridges]`.
-    /// `min_specificity`, `min_coherence`, `stale_on`, `main_branch` e `entrypoint_decorators`
-    /// não entram: não alteram o que o índice grava. Listas entram ordenadas (são conjuntos).
+    /// `entrypoint_decorators` entra porque marca `is_entrypoint`. `min_specificity`,
+    /// `min_coherence`, `stale_on`, `main_branch` e `[strategies]` não entram: não alteram o que o índice grava. Listas entram ordenadas (são conjuntos).
     pub fn index_hash(&self) -> String {
         let sorted = |values: &[String]| {
             let mut v = values.to_vec();
@@ -194,7 +247,7 @@ impl Config {
         let w = &self.bridges;
         let canonical = format!(
             "skeleton={}\ncontext_root={:?}\nlayers={}\nverbs={}\nroles={}\nwrite_methods={}\n\
-             bridges={:?}",
+             bridges={:?}\nentrypoint_decorators={}",
             sorted(&self.skeleton),
             self.context_root,
             sorted(&self.layers),
@@ -211,6 +264,7 @@ impl Config {
                 w.context,
                 w.approximate
             ],
+            sorted(&self.entrypoint_decorators),
         );
         blake3::hash(canonical.as_bytes()).to_hex().to_string()
     }
@@ -251,6 +305,16 @@ impl Config {
             ("file", w.file),
             ("context", w.context),
             ("approximate", w.approximate),
+        ] {
+            out.push_str(&format!("{key} = {value:?}\n"));
+        }
+        let st = &self.strategies;
+        out.push_str("\n[strategies]\n");
+        for (key, value) in [
+            ("neighborhood", st.neighborhood),
+            ("path", st.path),
+            ("connectivity", st.connectivity),
+            ("name", st.name),
         ] {
             out.push_str(&format!("{key} = {value:?}\n"));
         }
