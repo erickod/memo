@@ -339,3 +339,105 @@ fn test_given_strategies_config_when_parsed_then_validated() {
     assert_eq!(config.strategies.connectivity, 0.0);
     assert_eq!(config.strategies.neighborhood, 1.0);
 }
+
+/// GIVEN a four-function exact call chain a → b → c → d
+/// WHEN relevant runs on d
+/// THEN c, b and a weigh 1, 1/2 and 1/3 for the neighborhood (third hop included).
+#[test]
+fn test_given_call_chain_when_relevant_then_neighborhood_decays_by_depth() {
+    let source = "def d():\n    pass\n\ndef c():\n    d()\n\ndef b():\n    c()\n\ndef a():\n    b()\n\ndef e():\n    a()\n";
+    let (_r, store, conn) = indexed(&[("m.py", source)]);
+    let items = relevant(&store, id_of(&conn, "m.d"), &StrategyWeights::default()).unwrap();
+    let w = |q: &str| weight(find(&items, q).expect(q), "vizinhanca");
+    assert_eq!(w("m.c"), 1.0);
+    assert_eq!(w("m.b"), 0.5);
+    assert!((w("m.a") - 1.0 / 3.0).abs() < 1e-9);
+    assert!(find(&items, "m.e").is_none(), "fourth hop: {items:?}");
+}
+
+fn anchors_for(store: &SqliteStore, conn: &Connection, request: &str) -> Vec<String> {
+    let tokens = memo_core::brief::tokenize(request);
+    memo_core::relevance::intersection_anchors(store, &tokens)
+        .unwrap()
+        .into_iter()
+        .map(|a| {
+            conn.query_row("SELECT qname FROM symbol WHERE id = ?1", [a.id], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        })
+        .collect()
+}
+
+/// GIVEN a repository class whose `run` method carries no request word, and a converter that
+///       carries only two of the three words
+/// WHEN the request "create order taxes" picks anchors
+/// THEN `run` wins through the class words; the class constructor does not inherit them.
+#[test]
+fn test_given_method_of_matching_class_when_anchors_then_inherits_class_words() {
+    let (_r, store, conn) = indexed(&[(
+        "repo.py",
+        "class CreateOrderTaxesRepository:\n    def __init__(self):\n        pass\n\n    def run(self):\n        pass\n\n\
+         def to_order_taxes():\n    pass\n",
+    )]);
+    assert_eq!(
+        anchors_for(&store, &conn, "create order taxes"),
+        ["repo.CreateOrderTaxesRepository.run"]
+    );
+}
+
+/// GIVEN `a.receivable_lock_request` and `b.process_receivable_lock_request`, both without extra
+///       name words for the request (`process` is a skeleton word by default) and the first one
+///       earlier by name
+/// WHEN the request names `process`
+/// THEN the skeleton word breaks the tie in favor of the function that carries it.
+#[test]
+fn test_given_skeleton_word_in_request_when_anchors_then_breaks_tie() {
+    let (_r, store, conn) = indexed(&[
+        ("a.py", "def receivable_lock_request():\n    pass\n"),
+        ("b.py", "def process_receivable_lock_request():\n    pass\n"),
+    ]);
+    let anchors = anchors_for(&store, &conn, "process receivable lock request");
+    assert_eq!(anchors[0], "b.process_receivable_lock_request");
+}
+
+/// GIVEN a function with the request words in its own name and a method that only inherits them
+/// WHEN anchors are picked
+/// THEN only the function is an anchor; one request word alone picks no anchor.
+#[test]
+fn test_given_own_and_inherited_matches_when_anchors_then_own_name_wins() {
+    let (_r, store, conn) = indexed(&[(
+        "m.py",
+        "def process_client_credit_limit():\n    pass\n\n\
+         class ClientCreditLimitMessage:\n    def round_value(self):\n        pass\n",
+    )]);
+    assert_eq!(
+        anchors_for(&store, &conn, "client credit limit"),
+        ["m.process_client_credit_limit"]
+    );
+    assert!(anchors_for(&store, &conn, "credit").is_empty());
+}
+
+/// GIVEN a test function named `lock` and production code about receivable locks
+/// WHEN the brief receives a plain-word request containing `lock`
+/// THEN `lock` stays a word (no explicit symbol) and the intersection anchor comes first.
+#[test]
+fn test_given_plain_word_naming_a_symbol_when_brief_then_word_not_identity() {
+    let (_r, store, _c) = indexed(&[
+        ("tests/test_x.py", "def lock():\n    pass\n"),
+        (
+            "svc.py",
+            "def request_receivable_lock():\n    pass\n\ndef caller():\n    request_receivable_lock()\n",
+        ),
+    ]);
+    let b = memo_core::brief::brief(&store, "receivable lock request").unwrap();
+    assert!(
+        !b.symbols
+            .iter()
+            .any(|s| s.tags.iter().any(|t| t == "simbolo"))
+    );
+    assert_eq!(b.symbols[0].addr.qname, "svc.request_receivable_lock");
+    assert!(b.symbols[0].tags.iter().any(|t| t == "ancora 3/3"));
+    assert_eq!(b.symbols[1].addr.qname, "svc.caller");
+    assert_eq!(b.ler[0].motivo, "ancora do pedido");
+}

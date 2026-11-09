@@ -115,12 +115,14 @@ Os trechos `ler:` seguem a prioridade dos símbolos, evitam sobreposição e usa
 
 | Estratégia | O que conta | Peso padrão |
 | --- | --- | --- |
-| `vizinhanca` | chamada exata até 2 saltos na mesma direção (chamador do chamador, chamado do chamado); o 2º salto vale metade | 1,0 |
+| `vizinhanca` | chamada exata até 3 saltos na mesma direção (chamador do chamador, chamado do chamado); o salto `d` vale peso ÷ `d` (1 · 0,5 · 0,33) | 1,0 |
 | `caminho` | está num caminho de chamadas exatas de um entrypoint até o alvo | 1,0 |
 | `conexao` | fração das ligações exatas do candidato que tocam a região do alvo (um hub fica perto de 0); só pontua, não acrescenta candidatos | 0,5 |
 | `nome` | uso com o nome exato do alvo sem chamada resolvida, e homônimos; só quando o nome não é genérico | 0,25 |
 
 Um nome é **genérico** quando tem pelo menos tantas definições quanto o P99 do repositório (piso 4), ou muitos usos (P99, piso 10) com menos da metade resolvida para ele. A linha `nome:` mostra definições e usos resolvidos; com nome genérico, os itens `só nome` de `por palavra` viram uma contagem (`--all` lista). Os pesos vêm de `[strategies]` no `memo.toml` e só ordenam a resposta.
+
+**Âncoras pela interseção das palavras (`brief` em texto).** Sem símbolo explícito no pedido, o `brief` escolhe até 3 funções ou métodos cujo nome cobre o máximo das palavras do pedido fora do `skeleton` (pelo menos 2) e aplica a elas as estratégias acima. Um método conta também as palavras da classe dona (`CreateOrderTaxesRepository.run` cobre "create order taxes"), salvo métodos especiais como `__init__`; quem tem as palavras no próprio nome tem preferência sobre quem só as herda. No desempate, uma palavra do `skeleton` presente no pedido favorece o símbolo que também a tem (`process` favorece `process_x` sobre `has_x`), depois vence o nome com menos palavras sobrando. As âncoras saem primeiro, com a etiqueta `ancora 3/3` (palavras cobertas), seguidas dos relevantes delas. Só um token com forma de identificador (`a.b`, `snake_case`, `CamelCase`) vira símbolo explícito; uma palavra solta continua palavra, mesmo que algum símbolo tenha exatamente esse nome.
 
 **Entrypoints e testes por HTTP.** Uma função com decorador `x.get/post/put/patch/delete/head/options("/caminho")` e caminho literal vira entrypoint com rota (`GET /items/{}`); decoradores listados em `entrypoint_decorators` (ex.: `shared_task`) também marcam entrypoint, sem rota. Chamadas `cliente.get("/caminho")` com caminho literal (f-string incluída) ligam o chamador ao endpoint cuja rota casa por método e caminho (`{}` casa um segmento; rota casada por mais de um endpoint fica `~`). `query tests` e `impact` mostram `testes via HTTP:` para testes que chegam ao alvo por um endpoint e cadeia de chamadas exatas. No `impact`, os testes ocultos por padrão aparecem como contagem por tipo (`testes ocultos: 0 exatos · 9 via HTTP · 194 ~`).
 

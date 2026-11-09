@@ -21,6 +21,7 @@ O que o `memo` não faz, faz mal ou não foi verificado. Cada item diz de onde v
 
 - **Rotas HTTP:** só decoradores `x.<método>("/caminho")` com caminho literal. Prefixos de `APIRouter(prefix=...)`, `include_router(prefix=...)` e blueprints não são aplicados, então um teste que requisita o caminho com prefixo não casa. Requisições só por `cliente.<método>("/...")` com o caminho literal como 1º argumento; `requests.request("GET", ...)` e URLs montadas a partir de uma base (`f"{BASE}/x"`) ficam fora. Um `.get("/x")` que não é HTTP (dicionário com chave começando em `/`) também vira requisição.
 - **Entrypoints de worker/fila:** só por `entrypoint_decorators`; callbacks registrados por chamada (`subscribe(callback)`) não são reconhecidos.
+- **Âncoras do `brief`:** dependem do nome; um pedido com uma só palavra fora do `skeleton` não escolhe âncora e volta ao ranking por palavras. Em fluxos longos (worker → service → vários repositórios), o `brief` ainda acha pouco do fluxo nas 15 vagas (cerca de 20% das referências em 8 pedidos), e em 3 desses 8 a âncora estava errada.
 - **Relevância:** os pesos de `[strategies]` e os limiares de nome genérico (P99 com pisos 4 e 10) vêm de 8 alvos de um repositório, sem calibração em outros. Um grupo de homônimos exige chamada exata direta entre as candidatas.
 - Num repositório real, a cobertura foi de 4.450 chamadas resolvidas, 1.492 aproximadas e 1.740 **não resolvidas** (cerca de 23% do total). O resultado vazio nunca prova ausência.
 - Escrita em variável de módulo ou `global` ainda não gera a aresta `ESCREVE`.
