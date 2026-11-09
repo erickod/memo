@@ -113,6 +113,31 @@ pub fn apply_impact_delta(
     )?;
     impact.tests.approx = approx;
     omitted += n;
+    let (via_http, n) = filter_new(
+        store,
+        task,
+        "impact",
+        std::mem::take(&mut impact.tests.via_http),
+        |i| format!("{target}|TH|{}|{:?}", rel(i), i.attr),
+        full,
+    )?;
+    impact.tests.via_http = via_http;
+    omitted += n;
+    let (relevantes, n) = filter_new(
+        store,
+        task,
+        "impact",
+        std::mem::take(&mut impact.relevantes),
+        |r| {
+            format!(
+                "{target}|R|{}|{}-{}|{:.4}",
+                r.addr.qname, r.addr.line_start, r.addr.line_end, r.score
+            )
+        },
+        full,
+    )?;
+    impact.relevantes = relevantes;
+    omitted += n;
     impact.unchanged = Some(omitted);
     Ok(())
 }
