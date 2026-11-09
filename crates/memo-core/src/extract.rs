@@ -1527,10 +1527,19 @@ fn record_scope(ctx: &mut Ctx, qname: &str, parts: &[Node], body: Node) {
     if let Some(doc) = docstring_text(ctx, body) {
         out.push(doc);
     }
-    if !out.is_empty() {
-        ctx.facts.scopes.push(ScopeText {
+    if out.is_empty() {
+        return;
+    }
+    let text = out.join(" ");
+    // Uma redefinição (`@x.setter`) soma ao mesmo `qname`, que tem um só símbolo.
+    match ctx.facts.scopes.iter_mut().find(|s| s.src_qname == qname) {
+        Some(existing) => {
+            existing.text.push(' ');
+            existing.text.push_str(&text);
+        }
+        None => ctx.facts.scopes.push(ScopeText {
             src_qname: qname.to_string(),
-            text: out.join(" "),
-        });
+            text,
+        }),
     }
 }
