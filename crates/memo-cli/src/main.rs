@@ -156,6 +156,10 @@ enum NoteCmd {
     Show { id: String },
     /// Confirma uma nota `proposta`.
     Confirm { id: String },
+    /// Troca o texto de uma nota.
+    Edit { id: String, texto: String },
+    /// Apaga uma nota.
+    Delete { id: String },
     /// Atualiza os hashes de uma nota `stale` e volta ao estado anterior.
     Recheck { id: String },
 }
@@ -387,11 +391,11 @@ fn run(cli: &Cli) -> Result<String, Failure> {
                 &config.bridges,
                 &config.strategies,
                 &changed,
+                cli.summary,
             )?;
             if let Some(task) = &delta_task {
                 apply_delta(&store, task, &mut b, cli.full)?;
             }
-                cli.summary,
             if !cli.tests {
                 cov.testes_ocultos = count(hide::brief(&mut b));
             }
@@ -619,6 +623,22 @@ fn run_note(
                 "note recheck",
                 json_value(&note)?,
                 format!("note {} {}\n", note.id, note.estado),
+            )
+        }
+        NoteCmd::Edit { id, texto } => {
+            let note = notes.edit(id, texto)?;
+            (
+                "note edit",
+                json_value(&note)?,
+                format!("note {} {}\n", note.id, note.estado),
+            )
+        }
+        NoteCmd::Delete { id } => {
+            let note = notes.delete(id)?;
+            (
+                "note delete",
+                json_value(&note)?,
+                format!("note {} apagada\n", note.id),
             )
         }
         NoteCmd::Confirm { id } => {

@@ -128,7 +128,7 @@ fn test_given_handshake_when_serve_then_two_responses_and_exit_0() {
     );
     assert_eq!(code, 0);
     assert_eq!(replies.len(), 2);
-    assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 6);
+    assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 13);
 }
 
 fn tool_text(reply: &Value) -> String {

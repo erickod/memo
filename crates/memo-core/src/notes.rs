@@ -598,6 +598,34 @@ impl NoteDir {
         }
     }
 
+    /// Troca o texto da nota, com as mesmas regras do `add`; o resto do frontmatter fica.
+    pub fn edit(&self, id: &str, text: &str) -> Result<Note, CoreError> {
+        let mut note = self.get(id)?;
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(CoreError::Validation {
+                code: "texto_vazio",
+                message: "note text is empty".into(),
+            });
+        }
+        if text.chars().count() > MAX_TEXT {
+            return Err(CoreError::Validation {
+                code: "texto_longo",
+                message: format!("note text exceeds {MAX_TEXT} characters"),
+            });
+        }
+        note.text = text.to_string();
+        self.write(&note)?;
+        Ok(note)
+    }
+
+    /// Apaga uma nota pelo id e devolve o que foi apagado.
+    pub fn delete(&self, id: &str) -> Result<Note, CoreError> {
+        let note = self.get(id)?;
+        std::fs::remove_file(self.path(id))?;
+        Ok(note)
+    }
+
     /// `proposta` vira `confirmada`; `confirmada` segue igual; outros estados não confirmam.
     pub fn confirm(&self, id: &str) -> Result<Note, CoreError> {
         let mut note = self.get(id)?;

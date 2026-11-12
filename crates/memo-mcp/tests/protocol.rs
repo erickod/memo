@@ -129,7 +129,7 @@ fn test_given_batch_array_when_handled_then_error_32600() {
 
 /// GIVEN a tools/list request
 /// WHEN  it is handled
-/// THEN  six tools come back (brief, query, note_add, note_show, note_list, status), each with a
+/// THEN  thirteen tools come back (brief, query, note_add, note_show, note_list, note_confirm, note_edit, note_delete, note_recheck, derive, drop, promote, status), each with a
 ///       description of at most two lines and an object inputSchema
 #[test]
 fn test_given_tools_list_when_handled_then_four_tools_with_short_descriptions_and_schemas() {
@@ -148,6 +148,13 @@ fn test_given_tools_list_when_handled_then_four_tools_with_short_descriptions_an
             "note_add",
             "note_show",
             "note_list",
+            "note_confirm",
+            "note_edit",
+            "note_delete",
+            "note_recheck",
+            "derive",
+            "drop",
+            "promote",
             "status"
         ]
     );

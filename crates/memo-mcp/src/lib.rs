@@ -1,6 +1,6 @@
 //! Servidor MCP por stdio, em JSON-RPC mínimo à mão (D11 da TASK; spec §9.4).
 //!
-//! O protocolo e o contrato das seis ferramentas vivem aqui; quem executa uma ferramenta é um
+//! O protocolo e o contrato das treze ferramentas vivem aqui; quem executa uma ferramenta é um
 //! [`Backend`], que roda o mesmo comando do CLI, então a saída é idêntica à do shell.
 
 use serde_json::{Map, Value, json};
@@ -87,6 +87,9 @@ fn tools() -> Value {
                     "tipo": { "type": "string", "enum": NOTE_TYPES },
                     "ancora": { "type": "string", "description": "sym:<qname>, word:<texto>, edge:<a>-><b> ou file:<caminho>." },
                     "texto": { "type": "string", "description": "Uma afirmação, até 1.200 caracteres." },
+                    "secundarias": { "type": "array", "items": { "type": "string" }, "description": "Âncoras secundárias." },
+                    "substitui": { "type": "string", "description": "Id da nota que esta substitui." },
+                    "aliases": { "type": "array", "items": { "type": "string" }, "description": "Sinônimos (nota glossario)." },
                     "task": { "type": "string" },
                     "confirm": { "type": "boolean", "description": "Só para decisão vinda de rodada humana." }
                 },
@@ -108,6 +111,75 @@ fn tools() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": { "task": { "type": "string" } }
+            }
+        },
+        {
+            "name": "note_confirm",
+            "description": "Confirma uma nota `proposta`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "string", "description": "Id da nota, como n-abc12345." } },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "note_edit",
+            "description": "Troca o texto de uma nota; âncora, estado e o resto ficam.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Id da nota, como n-abc12345." },
+                    "texto": { "type": "string", "description": "Novo texto, até 1.200 caracteres." }
+                },
+                "required": ["id", "texto"]
+            }
+        },
+        {
+            "name": "note_delete",
+            "description": "Apaga uma nota pelo id (só ela).",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "string", "description": "Id da nota, como n-abc12345." } },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "note_recheck",
+            "description": "Atualiza os hashes de uma nota `stale` e volta ao estado anterior.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "string", "description": "Id da nota, como n-abc12345." } },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "derive",
+            "description": "Cria o grafo da feature, copiado da base e reindexado na árvore atual.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task": { "type": "string", "description": "Id da task." },
+                    "from": { "type": "string", "description": "Ref a indexar como base antes de copiar." }
+                },
+                "required": ["task"]
+            }
+        },
+        {
+            "name": "drop",
+            "description": "Apaga o grafo da feature e as notas da task.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "task": { "type": "string", "description": "Id da task." } },
+                "required": ["task"]
+            }
+        },
+        {
+            "name": "promote",
+            "description": "Depois do merge: reindexa a base pela principal e promove as notas da task.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "task": { "type": "string", "description": "Id da task a promover." } },
+                "required": ["task"]
             }
         },
         {
@@ -151,6 +223,9 @@ impl<B: Backend> Server<B> {
         } else if args.get("no_tests").and_then(Value::as_bool) == Some(true) {
             argv.push("--no-tests".to_string());
         }
+        if args.get("summary").and_then(Value::as_bool) == Some(true) {
+            argv.push("--summary".to_string());
+        }
         let push = |argv: &mut Vec<String>, items: &[&str]| {
             argv.extend(items.iter().map(|s| (*s).to_string()));
         };
@@ -179,6 +254,15 @@ impl<B: Backend> Server<B> {
                     &["note", "add", "--tipo", tipo, "--ancora", ancora],
                 );
                 push(&mut argv, &["--origem", "agente"]);
+                if let Some(old) = optional(args, "substitui") {
+                    push(&mut argv, &["--substitui", old]);
+                }
+                for (key, flag) in [("secundarias", "--secundaria"), ("aliases", "--alias")] {
+                    let items = args.get(key).and_then(Value::as_array).into_iter().flatten();
+                    for item in items.filter_map(Value::as_str) {
+                        push(&mut argv, &[flag, item]);
+                    }
+                }
                 if args.get("confirm").and_then(Value::as_bool) == Some(true) {
                     push(&mut argv, &["--confirm"]);
                 }
@@ -186,6 +270,22 @@ impl<B: Backend> Server<B> {
             }
             "note_show" => push(&mut argv, &["note", "show", "--", required(args, "id")?]),
             "note_list" => push(&mut argv, &["note", "list"]),
+            "note_confirm" => push(&mut argv, &["note", "confirm", "--", required(args, "id")?]),
+            "note_edit" => push(
+                &mut argv,
+                &["note", "edit", required(args, "id")?, "--", required(args, "texto")?],
+            ),
+            "note_delete" => push(&mut argv, &["note", "delete", "--", required(args, "id")?]),
+            "note_recheck" => push(&mut argv, &["note", "recheck", "--", required(args, "id")?]),
+            "derive" => {
+                push(&mut argv, &["derive"]);
+                if let Some(from) = optional(args, "from") {
+                    push(&mut argv, &["--from", from]);
+                }
+                push(&mut argv, &["--", required(args, "task")?]);
+            }
+            "drop" => push(&mut argv, &["drop", "--", required(args, "task")?]),
+            "promote" => push(&mut argv, &["promote", "--", required(args, "task")?]),
             "status" => push(&mut argv, &["status"]),
             other => return Err(format!("unknown tool '{other}'")),
         }
@@ -223,9 +323,6 @@ impl<B: Backend> Server<B> {
             return Some(error(&Value::Null, -32600, "Invalid Request"));
         };
         let id = object.get("id")?;
-        if args.get("summary").and_then(Value::as_bool) == Some(true) {
-            argv.push("--summary".to_string());
-        }
         let method = object.get("method").and_then(Value::as_str);
         let params = object.get("params").cloned().unwrap_or(Value::Null);
         Some(match method {
