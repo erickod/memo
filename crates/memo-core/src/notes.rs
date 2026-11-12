@@ -171,6 +171,15 @@ impl Note {
         } else {
             self.text.replace('\n', " ")
         };
+        self.line_with(&text)
+    }
+
+    /// Como `summary`, mas com o texto inteiro (quebras de linha viram espaço).
+    pub fn full_line(&self) -> String {
+        self.line_with(&self.text.replace('\n', " "))
+    }
+
+    fn line_with(&self, text: &str) -> String {
         format!(
             "{} {} {}  {}: {text}",
             self.id,
@@ -587,6 +596,34 @@ impl NoteDir {
             }
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Troca o texto da nota, com as mesmas regras do `add`; o resto do frontmatter fica.
+    pub fn edit(&self, id: &str, text: &str) -> Result<Note, CoreError> {
+        let mut note = self.get(id)?;
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(CoreError::Validation {
+                code: "texto_vazio",
+                message: "note text is empty".into(),
+            });
+        }
+        if text.chars().count() > MAX_TEXT {
+            return Err(CoreError::Validation {
+                code: "texto_longo",
+                message: format!("note text exceeds {MAX_TEXT} characters"),
+            });
+        }
+        note.text = text.to_string();
+        self.write(&note)?;
+        Ok(note)
+    }
+
+    /// Apaga uma nota pelo id e devolve o que foi apagado.
+    pub fn delete(&self, id: &str) -> Result<Note, CoreError> {
+        let note = self.get(id)?;
+        std::fs::remove_file(self.path(id))?;
+        Ok(note)
     }
 
     /// `proposta` vira `confirmada`; `confirmada` segue igual; outros estados não confirmam.

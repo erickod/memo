@@ -64,6 +64,9 @@ struct Cli {
     /// Tudo, ignorando o delta por task.
     #[arg(long, global = true)]
     full: bool,
+    /// Notas resumidas (texto cortado em 120 caracteres); por padrão vão inteiras.
+    #[arg(long, global = true)]
+    summary: bool,
     #[command(subcommand)]
     command: Cmd,
 }
@@ -153,6 +156,10 @@ enum NoteCmd {
     Show { id: String },
     /// Confirma uma nota `proposta`.
     Confirm { id: String },
+    /// Troca o texto de uma nota.
+    Edit { id: String, texto: String },
+    /// Apaga uma nota.
+    Delete { id: String },
     /// Atualiza os hashes de uma nota `stale` e volta ao estado anterior.
     Recheck { id: String },
 }
@@ -384,6 +391,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
                 &config.bridges,
                 &config.strategies,
                 &changed,
+                cli.summary,
             )?;
             if let Some(task) = &delta_task {
                 apply_delta(&store, task, &mut b, cli.full)?;
@@ -406,7 +414,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
                 }
                 Ok((
                     json_value(&info)?,
-                    render::symbol_text(&info, "ok", &cov, max, limit, cli.all),
+                    render::symbol_text(&info, "ok", &cov, max, limit, cli.all, cli.summary),
                 ))
             })?;
             ("query symbol", data, text)
@@ -499,7 +507,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
                 }
                 Ok((
                     json_value(&info)?,
-                    render::impact_text(&info, "ok", &cov, max, limit, cli.all),
+                    render::impact_text(&info, "ok", &cov, max, limit, cli.all, cli.summary),
                 ))
             })?;
             ("query impact", data, text)
@@ -615,6 +623,22 @@ fn run_note(
                 "note recheck",
                 json_value(&note)?,
                 format!("note {} {}\n", note.id, note.estado),
+            )
+        }
+        NoteCmd::Edit { id, texto } => {
+            let note = notes.edit(id, texto)?;
+            (
+                "note edit",
+                json_value(&note)?,
+                format!("note {} {}\n", note.id, note.estado),
+            )
+        }
+        NoteCmd::Delete { id } => {
+            let note = notes.delete(id)?;
+            (
+                "note delete",
+                json_value(&note)?,
+                format!("note {} apagada\n", note.id),
             )
         }
         NoteCmd::Confirm { id } => {
