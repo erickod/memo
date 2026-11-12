@@ -64,6 +64,9 @@ struct Cli {
     /// Tudo, ignorando o delta por task.
     #[arg(long, global = true)]
     full: bool,
+    /// Notas resumidas (texto cortado em 120 caracteres); por padrão vão inteiras.
+    #[arg(long, global = true)]
+    summary: bool,
     #[command(subcommand)]
     command: Cmd,
 }
@@ -388,6 +391,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
             if let Some(task) = &delta_task {
                 apply_delta(&store, task, &mut b, cli.full)?;
             }
+                cli.summary,
             if !cli.tests {
                 cov.testes_ocultos = count(hide::brief(&mut b));
             }
@@ -406,7 +410,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
                 }
                 Ok((
                     json_value(&info)?,
-                    render::symbol_text(&info, "ok", &cov, max, limit, cli.all),
+                    render::symbol_text(&info, "ok", &cov, max, limit, cli.all, cli.summary),
                 ))
             })?;
             ("query symbol", data, text)
@@ -499,7 +503,7 @@ fn run(cli: &Cli) -> Result<String, Failure> {
                 }
                 Ok((
                     json_value(&info)?,
-                    render::impact_text(&info, "ok", &cov, max, limit, cli.all),
+                    render::impact_text(&info, "ok", &cov, max, limit, cli.all, cli.summary),
                 ))
             })?;
             ("query impact", data, text)

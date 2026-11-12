@@ -270,6 +270,7 @@ pub fn symbol_text(
     max_chars: usize,
     limit: Option<usize>,
     all: bool,
+    summary: bool,
 ) -> String {
     let mut head = vec![
         format!("symbol {}  idx={idx}", info.addr.qname),
@@ -305,7 +306,7 @@ pub fn symbol_text(
         .map(|e| (edge_line(e), e.other_module.clone()))
         .collect();
     items.extend(grouped(rest, all));
-    let mut tail = notes_lines(&info.notes);
+    let mut tail = notes_lines(&info.notes, summary);
     tail.extend(read_lines(&info.ler));
     tail.push(coverage_line(cov));
     fit(&head, &items, &tail, max_chars, limit)
@@ -494,6 +495,7 @@ pub fn impact_text(
     max_chars: usize,
     limit: Option<usize>,
     all: bool,
+    summary: bool,
 ) -> String {
     let mut head = vec![format!("impact {}  idx={idx}", info.target.short)];
     let n = &info.nome;
@@ -567,7 +569,7 @@ pub fn impact_text(
     } else {
         tests_sections(&info.tests, &mut items, all);
     }
-    let mut tail = notes_lines(&info.notes);
+    let mut tail = notes_lines(&info.notes, summary);
     tail.extend(unchanged_line(info.unchanged));
     tail.push(coverage_line(cov));
     fit(&head, &items, &tail, max_chars, limit)
@@ -608,12 +610,12 @@ fn read_lines(spots: &[memo_core::query::ReadSpot]) -> Vec<String> {
 }
 
 /// Seção `notas`: `nenhuma`, ou uma linha por nota com o peso implícito na ordem.
-fn notes_lines(notes: &[Note]) -> Vec<String> {
+fn notes_lines(notes: &[Note], summary: bool) -> Vec<String> {
     if notes.is_empty() {
         return vec!["notas: nenhuma".to_string()];
     }
     let mut lines = vec!["notas:".to_string()];
-    lines.extend(notes.iter().map(|n| format!("  {}", n.summary())));
+    lines.extend(notes.iter().map(|n| format!("  {}", if summary { n.summary() } else { n.full_line() })));
     lines
 }
 

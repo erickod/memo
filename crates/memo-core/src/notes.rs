@@ -171,6 +171,15 @@ impl Note {
         } else {
             self.text.replace('\n', " ")
         };
+        self.line_with(&text)
+    }
+
+    /// Como `summary`, mas com o texto inteiro (quebras de linha viram espaço).
+    pub fn full_line(&self) -> String {
+        self.line_with(&self.text.replace('\n', " "))
+    }
+
+    fn line_with(&self, text: &str) -> String {
         format!(
             "{} {} {}  {}: {text}",
             self.id,

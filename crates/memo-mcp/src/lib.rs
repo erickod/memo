@@ -56,7 +56,8 @@ fn tools() -> Value {
                 "properties": {
                     "text": { "type": "string", "description": "O pedido em texto livre." },
                     "task": { "type": "string", "description": "Id da task (deltas e notas da task)." },
-                    "tests": { "type": "boolean", "description": "Mostra os testes (ocultos por padrão)." }
+                    "tests": { "type": "boolean", "description": "Mostra os testes (ocultos por padrão)." },
+                    "summary": { "type": "boolean", "description": "Notas resumidas em 120 caracteres (padrão: texto inteiro)." }
                 },
                 "required": ["text"]
             }
@@ -71,7 +72,8 @@ fn tools() -> Value {
                     "target": { "type": "string", "description": "Símbolo (qname ou sufixo único), atributo, tipo ou palavra." },
                     "depth": { "type": "integer", "minimum": 1, "maximum": 3, "description": "Só para callers e callees." },
                     "task": { "type": "string" },
-                    "tests": { "type": "boolean", "description": "Mostra os testes (ocultos por padrão; kind tests sempre lista)." }
+                    "tests": { "type": "boolean", "description": "Mostra os testes (ocultos por padrão; kind tests sempre lista)." },
+                    "summary": { "type": "boolean", "description": "Notas resumidas em 120 caracteres (padrão: texto inteiro)." }
                 },
                 "required": ["kind", "target"]
             }
@@ -93,7 +95,7 @@ fn tools() -> Value {
         },
         {
             "name": "note_show",
-            "description": "Texto inteiro de uma nota (o brief e o symbol mostram só o resumo e o id).",
+            "description": "Texto inteiro de uma nota (o brief e o query já mostram o texto inteiro; `summary` os resume).",
             "inputSchema": {
                 "type": "object",
                 "properties": { "id": { "type": "string", "description": "Id da nota, como n-abc12345." } },
@@ -221,6 +223,9 @@ impl<B: Backend> Server<B> {
             return Some(error(&Value::Null, -32600, "Invalid Request"));
         };
         let id = object.get("id")?;
+        if args.get("summary").and_then(Value::as_bool) == Some(true) {
+            argv.push("--summary".to_string());
+        }
         let method = object.get("method").and_then(Value::as_str);
         let params = object.get("params").cloned().unwrap_or(Value::Null);
         Some(match method {

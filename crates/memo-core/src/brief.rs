@@ -395,6 +395,7 @@ pub fn brief_with_changes(
         weights,
         &StrategyWeights::default(),
         changed,
+        false,
     )
 }
 
@@ -407,6 +408,7 @@ pub fn brief_full(
     weights: &BridgeWeights,
     strategy_weights: &StrategyWeights,
     changed: &[String],
+    summary: bool,
 ) -> Result<Brief, CoreError> {
     let structural = crate::structural::resolve(store, request)?;
     let tokens = expand_aliases(tokenize(&structural.remaining), notes);
@@ -639,7 +641,7 @@ pub fn brief_full(
             in_tests,
         });
     }
-    let notes_lines = related_notes(notes, &ranked_addrs, &anchors);
+    let notes_lines = related_notes(notes, &ranked_addrs, &anchors, summary);
     let ler = brief_read_spots(store, &tagged, &anchors)?;
     Ok(Brief {
         request: request.to_string(),
@@ -711,14 +713,19 @@ fn brief_read_spots(
     Ok(spots)
 }
 
-/// Notas dos nós listados e das palavras âncora, como linhas curtas.
-fn related_notes(notes: &[Note], symbols: &[SymbolAddr], anchors: &[Anchor]) -> Vec<String> {
+/// Notas dos nós listados e das palavras âncora, uma linha cada; `summary` corta o texto em 120 caracteres.
+fn related_notes(
+    notes: &[Note],
+    symbols: &[SymbolAddr],
+    anchors: &[Anchor],
+    summary: bool,
+) -> Vec<String> {
     let qnames: Vec<String> = symbols.iter().map(|s| s.qname.clone()).collect();
     let files: Vec<String> = symbols.iter().map(|s| s.path.clone()).collect();
     let words: Vec<String> = anchors.iter().map(|a| a.word.clone()).collect();
     notes_for(notes, &qnames, &words, &files)
         .iter()
-        .map(Note::summary)
+        .map(|n| if summary { n.summary() } else { n.full_line() })
         .collect()
 }
 
